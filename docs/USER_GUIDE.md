@@ -44,7 +44,7 @@ skillager status
 skillager setup --fresh
 skillager setup --details
 skillager setup --summary-json
-skillager setup --source collection --yolo
+skillager setup --source collection --trust-all
 skillager review --summary
 skillager review <skill-id> --trust-selected reviewed
 skillager block <skill-id>
@@ -57,11 +57,13 @@ Use `--json` when another program needs stable output. `status --json` and `sear
 
 Skillager does not require git. In a plain directory, it treats the current directory as the project root and stores project state in `./.skillager`.
 
-Use `--yolo` only for fully trusted sources. It marks all selected skills reviewed, including medium and high-risk findings, but still records the current content hashes.
+Use `--trust-all` or `--yolo` only for fully trusted sources. They mark all selected skills reviewed, including medium and high-risk findings, but still record the current content hashes.
 
 `skillager list` shows the effective project inventory and hides global native skills unless you pass `--include-global`. Use `skillager list --no-packages` when you want only local project and attached-tag inventory.
 
-Collection repositories are catalog inventory. `skillager setup --source collection` reviews raw collection skills even before a project attaches tags; default setup/status only include collection skills after a tag is attached to the project.
+Collection repositories are catalog inventory. `skillager setup --source collection` reviews collection skills attached to the current project. Registered collections that have not been enabled or attached stay as catalog inventory.
+
+`skillager status` checks PyPI for Skillager updates at most once per day and prints `uv tool upgrade skillager` when a newer release is available. Network failures are silent. Set `SKILLAGER_NO_UPDATE_CHECK=1` to disable this check.
 
 Use `skillager materialize` directly when you already know a reviewed skill or tag should be exposed to the agent. Project materialization also refreshes the `skillager-working` bootstrap skill.
 
@@ -88,13 +90,11 @@ You do not need to remember to run lookback before exiting. The next `skillager 
 
 Skillager also records compact local search/materialization events so lookback can spot behavior-based overlap, such as two skills repeatedly appearing in the same searches or sessions. These events do not include skill bodies, chat transcripts, command output, or full search text; search queries are stored as a hash plus a short preview.
 
-Session storage is pruned automatically whenever Skillager writes a new event:
+Session storage is pruned automatically at session start/end, and can be pruned manually:
 
 - 30 days by default
 - 5 MB total session event storage by default
 - 200 events per session by default
-
-You can prune manually:
 
 ```bash
 skillager session prune

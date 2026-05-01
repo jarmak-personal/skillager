@@ -169,8 +169,9 @@ This skill is a protocol for using Skillager safely. It does not approve third-p
 
 1. Run `skillager status` once.
 2. If status reports new or changed unreviewed skills, ask the user to run `skillager setup` from the project directory. Do not activate or rely on unreviewed skills.
-3. If status reports `lookback_pending`, ask whether the user wants to review `skillager lookback` before starting. Do not apply recommendations without user approval.
-4. If status is clean, ask what the user plans to do in this repo before materializing additional skills.
+3. If status reports unattached registered collections, ask the user whether to enable one with `skillager collection enable <name>` before setup. Do not assume collection skills are available until the collection is enabled, reviewed, and materialized/router-exposed.
+4. If status reports `lookback_pending`, ask whether the user wants to review `skillager lookback` before starting. Do not apply recommendations without user approval.
+5. If status is clean, ask what the user plans to do in this repo before materializing additional skills.
 
 ## Query Cadence
 
@@ -277,16 +278,16 @@ def render_router_skill(tag: str, skills: list[dict[str, Any]], *, agent: str | 
     lines = [
         f"# Skillager {tag} Router",
         "",
-        f"Use when the task is related to the `{tag}` skill tag or one of the reviewed skills listed below.",
+        f"Use when the task is related to the `{tag}` skill tag or one of the reviewed skills exposed by this router.",
         "",
         "This router exposes compact reviewed metadata only. It does not approve new skills.",
         "",
-        "When a listed skill is relevant:",
+        "When a reviewed skill exposed by this router is relevant:",
         "",
         f"1. Run `skillager activate <skill-id> --from-router skillager-{slugify(tag)}`.",
-        "2. Never activate a skill not listed here.",
+        f"2. Activate only skills listed below or returned by `skillager search --tag {tag} \"<query>\" --approved-only`.",
         "3. Never use `--force`.",
-        "4. If no listed skill fits, continue without activating another skill.",
+        "4. If no exposed skill fits, continue without activating another skill.",
         "",
         "Available reviewed skills:",
         "",
@@ -294,7 +295,16 @@ def render_router_skill(tag: str, skills: list[dict[str, Any]], *, agent: str | 
     if not skills:
         lines.extend(["No reviewed skills are currently available for this tag.", ""])
         return "\n".join(lines)
-    for skill in skills[:20]:
+    if len(skills) > 20:
+        lines.extend(
+            [
+                f"This tag contains {len(skills)} reviewed skills.",
+                f"Use `skillager search --tag {tag} \"<query>\" --approved-only` to find the right skill, then activate it through this router.",
+                "",
+            ]
+        )
+        return "\n".join(lines)
+    for skill in skills:
         lines.append(f"- `{skill['id']}`")
         lines.append(f"  - Use when: {skill.get('summary', '').strip()}")
         lines.append(f"  - Risk: {skill.get('scan', {}).get('risk', 'unknown')}")
@@ -302,14 +312,6 @@ def render_router_skill(tag: str, skills: list[dict[str, Any]], *, agent: str | 
         for warning in compatibility_warnings(skill, agent):
             lines.append(f"  - Compatibility note: {warning}")
         lines.append("")
-    if len(skills) > 20:
-        lines.extend(
-            [
-                f"{len(skills) - 20} more reviewed skills are available in this tag.",
-                f"Use `skillager search --tag {tag} \"<query>\" --approved-only` for metadata-only search.",
-                "",
-            ]
-        )
     return "\n".join(lines)
 
 
@@ -486,13 +488,20 @@ def content_hashes(skills: list[dict[str, Any]]) -> str:
 
 def agent_note_paths(project_dir: Path | None = None, *, agents: list[str] | None = None) -> list[Path]:
     project = (project_dir or Path.cwd()).resolve()
-    existing = [path for path in [project / "AGENTS.md", project / "agents.md", project / "CLAUDE.md"] if path.exists()]
-    if existing:
-        return existing
     targets = set(agents or ["codex"])
-    if targets == {"claude"}:
-        return [project / "CLAUDE.md"]
-    return [project / "AGENTS.md"]
+    paths: list[Path] = []
+    if "codex" in targets or not targets:
+        codex_existing = [path for path in [project / "AGENTS.md", project / "agents.md"] if path.exists()]
+        paths.append(codex_existing[0] if codex_existing else project / "AGENTS.md")
+    if "claude" in targets:
+        paths.append(project / "CLAUDE.md")
+    if not paths:
+        paths.append(project / "AGENTS.md")
+    deduped: list[Path] = []
+    for path in paths:
+        if path not in deduped:
+            deduped.append(path)
+    return deduped
 
 
 def ensure_agent_notes(project_dir: Path | None = None, *, agents: list[str] | None = None) -> list[Path]:

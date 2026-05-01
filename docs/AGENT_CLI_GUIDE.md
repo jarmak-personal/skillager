@@ -118,7 +118,7 @@ These commands change approval state, write skill files, or expose full instruct
 
 ```bash
 skillager setup
-skillager setup --source collection --yolo
+skillager setup --source collection --trust-all
 skillager review <skill-id> --trust-selected reviewed
 skillager trust <skill-id>
 skillager block <skill-id>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -31,6 +32,7 @@ from .collections import (
     remove_collection,
     remove_tag_skill,
     search_collection,
+    set_tag_skills,
     tag_skills,
 )
 from .index import build_index, find_skill, load_index
@@ -38,7 +40,7 @@ from .lookback import build_lookback, record_feedback, render_lookback
 from .materialize import TRUSTED_STATES, agent_note_paths, materialize_skills, materialize_working_skill
 from .materialize import materialize_router
 from .onboard import onboard_path
-from .paths import catalog_state_root, state_root
+from .paths import cache_root, catalog_state_root, state_root
 from .render import render_skill
 from .review import apply_review_action, review_summary, selected_skills, setup_environment
 from .scan import scan_path
@@ -56,6 +58,7 @@ from .session import (
 )
 from .simple_yaml import load_mapping
 from .trust import set_trust
+from .update_check import check_for_update
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -402,6 +405,7 @@ def add_collection_parser(sub: argparse._SubParsersAction[argparse.ArgumentParse
             """\
             Examples:
               skillager collection add ~/skills/community --name community
+              skillager collection enable community
               skillager collection list
               skillager collection refresh community
               skillager collection search community gis
@@ -423,6 +427,12 @@ def add_collection_parser(sub: argparse._SubParsersAction[argparse.ArgumentParse
     refresh.add_argument("name")
     refresh.add_argument("--json", action="store_true")
     refresh.set_defaults(func=cmd_collection_refresh)
+    enable = collection_sub.add_parser("enable")
+    enable.add_argument("name")
+    enable.add_argument("--tag", help="Project tag to create/update. Defaults to the collection name.")
+    enable.add_argument("--sync", action="store_true", help="Replace the tag contents with the collection's current skills instead of merging.")
+    enable.add_argument("--json", action="store_true")
+    enable.set_defaults(func=cmd_collection_enable)
     search = collection_sub.add_parser("search")
     search.add_argument("name")
     search.add_argument("query")
@@ -449,6 +459,8 @@ def add_tag_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
             Examples:
               skillager tag create gis
               skillager tag add gis community/gis-domain community/topology
+              skillager tag add community --from-collection community
+              skillager tag add community --from-collection community --sync
               skillager tag show gis
               skillager tag remove gis community/gis-domain
             """
@@ -460,7 +472,10 @@ def add_tag_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
     create.set_defaults(func=cmd_tag_create)
     add = tag_sub.add_parser("add")
     add.add_argument("tag")
-    add.add_argument("skill_ids", nargs="+")
+    add.add_argument("skill_ids", nargs="*")
+    add.add_argument("--from-collection", help="Add every skill from a registered collection.")
+    add.add_argument("--all", action="store_true", help="Add every registered collection skill.")
+    add.add_argument("--sync", action="store_true", help="Replace the tag contents with the selected skills.")
     add.set_defaults(func=cmd_tag_add)
     remove = tag_sub.add_parser("remove")
     remove.add_argument("tag")
@@ -520,7 +535,7 @@ def add_review_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
               skillager review --source project
               skillager review --include-global --summary
               skillager review pandas/data-cleaning --trust-selected reviewed
-              skillager review --source collection --yolo
+              skillager review --source collection --trust-all
               skillager review --block-high
               skillager review --json
             """
@@ -592,7 +607,8 @@ def add_review_filters(parser: argparse.ArgumentParser) -> None:
 
 def add_review_actions(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--accept-low", action="store_true", help="Mark selected low-risk skills as reviewed.")
-    parser.add_argument("--yolo", action="store_true", help="Mark all selected skills reviewed, including high-risk findings. Use only for fully trusted sources.")
+    parser.add_argument("--yolo", action="store_true", help="Mark all selected skills reviewed, including high-risk findings. Same behavior as --trust-all; use only for fully trusted sources.")
+    parser.add_argument("--trust-all", action="store_true", help="Mark all selected skills reviewed, including high-risk findings. Use only for fully trusted sources.")
     parser.add_argument("--trust-selected", choices=["reviewed", "trusted", "pinned"], help="Trust selected skills after review.")
     parser.add_argument("--block-high", action="store_true", help="Block selected high-risk skills.")
 
@@ -643,6 +659,29 @@ def cmd_collection_refresh(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_collection_enable(args: argparse.Namespace) -> int:
+    data = refresh_collection(catalog_root(args), args.name)
+    tag = args.tag or data["name"]
+    skill_ids = [skill["id"] for skill in data.get("skills", [])]
+    tag_data = set_tag_skills(catalog_root(args), tag, skill_ids, sync=args.sync, source_collection=data["name"])
+    project = attach_project_tag(root(args), tag, catalog_root=catalog_root(args))
+    result = {
+        "collection": data["name"],
+        "tag": tag_data["tag"],
+        "skills": len(tag_data["skills"]),
+        "attached_tags": project.get("attached_tags", []),
+        "errors": data.get("errors", []),
+    }
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"{data['name']}: enabled {len(tag_data['skills'])} skill(s) as catalog tag {tag_data['tag']} and attached it to this project")
+        if data.get("errors"):
+            print(f"errors: {len(data['errors'])}")
+        print("Next: run `skillager setup --source collection` to review and trust collection skills.")
+    return 0
+
+
 def cmd_collection_search(args: argparse.Namespace) -> int:
     results = search_collection(catalog_root(args), args.name, args.query, include_blocked=args.include_blocked)
     if args.json:
@@ -684,8 +723,19 @@ def cmd_tag_create(args: argparse.Namespace) -> int:
 
 
 def cmd_tag_add(args: argparse.Namespace) -> int:
+    skill_ids = list(args.skill_ids)
+    source_collection = None
+    if args.from_collection:
+        source_collection = args.from_collection
+        skill_ids.extend(skill["id"] for skill in collection_skills(catalog_root(args), args.from_collection, trust_root=root(args)))
+    if args.all:
+        skill_ids.extend(skill["id"] for skill in collection_skills(catalog_root(args), trust_root=root(args)))
+    if args.sync or args.from_collection or args.all:
+        tag = set_tag_skills(catalog_root(args), args.tag, skill_ids, sync=args.sync, source_collection=source_collection)
+        print(f"{tag['tag']}: {len(tag['skills'])} skill(s)")
+        return 0
     tag = None
-    for skill_id in args.skill_ids:
+    for skill_id in skill_ids:
         tag = add_tag_skill(catalog_root(args), args.tag, skill_id)
     if tag is None:
         raise ValueError("provide at least one skill id")
@@ -748,6 +798,7 @@ def cmd_project_tags(args: argparse.Namespace) -> int:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
+    args.yolo = bool(args.yolo or args.trust_all)
     if args.json and args.summary_json:
         raise ValueError("--json and --summary-json cannot be combined")
     audience = args.audience
@@ -786,6 +837,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if report.get("errors"):
             print(f"Errors: {len(report['errors'])}")
         _print_review_report(report["selected"], report["summary"], report["action"], compact=not args.details)
+        _print_out_of_scope_collections(root(args), catalog_root(args), action_requested=bool(args.yolo or args.accept_low or args.trust_selected or args.block_high))
         action_requested = any((args.accept_low, args.yolo, args.trust_selected, args.block_high))
         if not action_requested and not args.non_interactive:
             _interactive_setup(root(args), report["selected"], audience=audience, include_global=args.include_global, catalog_root=catalog_root(args))
@@ -839,6 +891,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     high_risk_user_installed_ids = [skill["id"] for skill in high_risk_user_installed]
     blocked = [skill for skill in data.get("skills", []) if skill.get("trust") == "blocked"]
     lookback_summary = _status_lookback_summary(root(args))
+    collection_summary = _status_collection_summary(root(args), catalog_root(args))
+    update = check_for_update(cache_root(), current_version=__version__)
     status = {
         "indexed": len(data.get("skills", [])),
         "selected": len(skills),
@@ -856,8 +910,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         "needs_setup": bool(review_needed),
         "lookback_pending": lookback_summary["pending"],
         "lookback_summary": lookback_summary,
+        "collections": collection_summary,
+        "update": update,
         "scope": saved_scope or None,
-        "message": _status_message(review_needed, lookback_summary=lookback_summary),
+        "message": _status_message(review_needed, lookback_summary=lookback_summary, collection_summary=collection_summary),
     }
     if args.json:
         payload = status if args.full_json else _compact_status(status)
@@ -904,13 +960,73 @@ def _status_lookback_summary(state_root: Path) -> dict[str, Any]:
     }
 
 
-def _status_message(review_needed: list[dict[str, Any]], *, lookback_summary: dict[str, Any] | None = None) -> str:
+def _status_collection_summary(state_root: Path, catalog_root: Path) -> dict[str, Any]:
+    collections = load_collections(catalog_root).get("collections", {})
+    tag_data = load_tags(catalog_root)
+    tags = tag_data.get("tags", {})
+    tag_metadata = tag_data.get("tag_metadata", {})
+    attached = set(load_project_tags(state_root).get("attached_tags", []))
+    items = []
+    total_skills = 0
+    attached_count = 0
+    for name, item in sorted(collections.items()):
+        try:
+            collection_ids = {skill["id"] for skill in collection_skills(catalog_root, name, trust_root=state_root)}
+            count = len(collection_ids)
+        except Exception:
+            collection_ids = set()
+            count = 0
+        matching_tags = [
+            tag
+            for tag, skill_ids in tags.items()
+            if name in set((tag_metadata.get(tag) or {}).get("source_collections") or [])
+            or (tag == name and tag in attached and collection_ids.intersection(skill_ids))
+        ]
+        tag_attached = any(tag in attached for tag in matching_tags)
+        tag_exists = bool(matching_tags)
+        total_skills += count
+        if tag_attached:
+            attached_count += 1
+        items.append(
+            {
+                "name": name,
+                "path": item.get("path"),
+                "skills": count,
+                "tag_exists": tag_exists,
+                "attached": tag_attached,
+                "tags": matching_tags,
+                "attached_tags": [tag for tag in matching_tags if tag in attached],
+            }
+        )
+    return {
+        "count": len(items),
+        "skill_count": total_skills,
+        "attached_count": attached_count,
+        "unattached_count": len(items) - attached_count,
+        "items": items,
+    }
+
+
+def _print_out_of_scope_collections(state_root: Path, catalog_root: Path, *, action_requested: bool) -> None:
+    summary = _status_collection_summary(state_root, catalog_root)
+    if not summary.get("unattached_count"):
+        return
+    names = ", ".join(f"{item['name']}={item['skills']}" for item in summary.get("items", []) if not item.get("attached"))
+    prefix = "Not in setup scope" if action_requested else "Available collections"
+    print()
+    print(f"{prefix}: {summary['unattached_count']} unattached collection(s) ({names})")
+    print("  run `skillager collection enable <name>` to include one in project setup")
+
+
+def _status_message(review_needed: list[dict[str, Any]], *, lookback_summary: dict[str, Any] | None = None, collection_summary: dict[str, Any] | None = None) -> str:
     if review_needed:
         return f"Skillager: {len(review_needed)} new or changed unreviewed skill(s) available. Ask the user to run `skillager setup`."
+    if collection_summary and collection_summary.get("unattached_count"):
+        return "Skillager: registered collections are not attached to this project. Run `skillager collection enable <name>` before setup."
     if lookback_summary and lookback_summary.get("pending"):
         recs = lookback_summary.get("recommendations", 0)
         overlaps = lookback_summary.get("observed_overlaps", 0)
-        return f"Skillager: no new unreviewed skills found. Lookback available: {recs} recommendation(s), {overlaps} overlap hint(s). Run `skillager lookback`."
+        return f"Skillager: no new unreviewed skills found. Lookback available: {recs} recommendation(s), {overlaps} overlap hint(s) (behavioral signals, not decisions). Run `skillager lookback`."
     return "Skillager: no new unreviewed skills found. Use only approved materialized skills."
 
 
@@ -928,6 +1044,18 @@ def _print_status(status: dict[str, Any]) -> None:
     print(f"  - blocked: {status['blocked']}")
     if status["skipped_global"]:
         print(f"  - skipped global: {status['skipped_global']} (use --include-global to include)")
+    collections = status.get("collections") or {}
+    if collections.get("count"):
+        names = ", ".join(f"{item['name']}={item['skills']}" for item in collections.get("items", [])[:5])
+        if collections.get("count", 0) > 5:
+            names += f", ... {collections['count'] - 5} more"
+        print(
+            "  - registered collections: "
+            f"{collections['count']} ({names}) - "
+            f"{collections.get('attached_count', 0)} attached"
+        )
+        if collections.get("unattached_count"):
+            print("    run `skillager collection enable <name>` to onboard a collection")
     scope = status.get("scope")
     if scope:
         scope_bits = []
@@ -948,8 +1076,11 @@ def _print_status(status: dict[str, Any]) -> None:
         print(
             "  - lookback pending: "
             f"{lookback.get('recommendations', 0)} recommendation(s), "
-            f"{lookback.get('observed_overlaps', 0)} overlap hint(s)"
+            f"{lookback.get('observed_overlaps', 0)} overlap hint(s) (behavioral signals, not decisions)"
         )
+    update = status.get("update") or {}
+    if update.get("available"):
+        print(f"  - update available: skillager {update.get('latest_version')} (run `{update.get('command')}`)")
     by_risk = status.get("summary", {}).get("by_risk", {})
     if by_risk:
         risk_bits = ", ".join(_risk_count(risk, count) for risk, count in sorted(by_risk.items()))
@@ -1508,6 +1639,7 @@ def cmd_block(args: argparse.Namespace) -> int:
 
 
 def cmd_review(args: argparse.Namespace) -> int:
+    args.yolo = bool(args.yolo or args.trust_all)
     data = load_index(root(args))
     extra_skills = _review_extra_skills(args)
     if extra_skills:
@@ -1556,8 +1688,6 @@ def cmd_review(args: argparse.Namespace) -> int:
 
 
 def _review_extra_skills(args: argparse.Namespace) -> list[dict[str, Any]]:
-    if getattr(args, "source", None) == "collection":
-        return collection_skills(catalog_root(args), trust_root=root(args))
     return attached_tag_skills(root(args), catalog_root=catalog_root(args))
 
 
@@ -1567,6 +1697,8 @@ def cmd_materialize(args: argparse.Namespace) -> int:
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
     agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
+    agent_notes_ready_before = _agent_notes_ready(Path.cwd(), agents=agents) if args.scope == "project" else False
+    materialized_targets_before = _materialized_target_paths(Path.cwd(), agents=agents) if args.scope == "project" else set()
     if args.tag and args.mode == "index":
         _require_attached_tag(root(args), args.tag)
         skills = tag_skills(catalog_root(args), args.tag, trust_root=root(args))
@@ -1622,18 +1754,78 @@ def cmd_materialize(args: argparse.Namespace) -> int:
                     include_global=False,
                     agents=_materialized_agents(results),
                 )
-            _print_agent_next_steps(results)
+            if _should_print_agent_next_steps(
+                results,
+                agent_notes_ready_before=agent_notes_ready_before,
+                materialized_targets_before=materialized_targets_before,
+            ):
+                _print_agent_next_steps(results)
     return 0
 
 
 def _print_materialize_results(results: list[dict[str, Any]]) -> None:
     for item in results:
+        if item.get("skill_id") == "skillager/working" and item.get("status") == "materialized":
+            continue
         line = f"{item['skill_id']}: {item['status']}"
         if item.get("target"):
             line += f" {item['target']}"
         if item.get("reason"):
             line += f" ({item['reason']})"
         print(line)
+
+
+def _agent_notes_ready(project_dir: Path, *, agents: list[str]) -> bool:
+    notes = agent_note_paths(project_dir, agents=agents)
+    if not notes:
+        return False
+    for note in notes:
+        if not note.exists():
+            return False
+        try:
+            text = note.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        if "## Skillager" not in text:
+            return False
+    return True
+
+
+def _materialized_target_paths(project_dir: Path, *, agents: list[str]) -> set[Path]:
+    roots = _project_skill_roots(project_dir)
+    paths: set[Path] = set()
+    for agent in agents:
+        for root_path in roots.get(agent, []):
+            if not root_path.is_dir():
+                continue
+            for sidecar in root_path.glob("*/skillager.materialized.yaml"):
+                with contextlib.suppress(OSError):
+                    paths.add(sidecar.parent.resolve())
+    return paths
+
+
+def _should_print_agent_next_steps(
+    results: list[dict[str, Any]],
+    *,
+    agent_notes_ready_before: bool = False,
+    materialized_targets_before: set[Path] | None = None,
+) -> bool:
+    changed = [item for item in results if item.get("status") == "materialized" and item.get("skill_id") != "skillager/working"]
+    if not changed:
+        return False
+    if not agent_notes_ready_before:
+        return True
+    materialized_targets_before = materialized_targets_before or set()
+    for item in changed:
+        target = item.get("target")
+        if not target:
+            return True
+        try:
+            if Path(target).resolve() not in materialized_targets_before:
+                return True
+        except OSError:
+            return True
+    return False
 
 
 def cmd_onboard(args: argparse.Namespace) -> int:
@@ -2402,7 +2594,7 @@ def _print_agent_next_steps(results: list[dict[str, Any]]) -> None:
             print(f"    - {target_base}")
     if project_dir:
         print(f"  - Restart {_agent_label(agents)} in this directory: {project_dir}")
-        notes = agent_note_paths(project_dir)
+        notes = agent_note_paths(project_dir, agents=agents)
         if len(notes) == 1:
             print(f"  - Project handoff note: {notes[0]}")
         else:

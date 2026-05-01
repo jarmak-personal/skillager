@@ -141,6 +141,37 @@ def add_tag_skill(state_root: Path, tag: str, skill_id: str) -> dict[str, Any]:
     return {"tag": tag, "skills": skills}
 
 
+def set_tag_skills(
+    state_root: Path,
+    tag: str,
+    skill_ids: list[str],
+    *,
+    sync: bool = False,
+    source_collection: str | None = None,
+) -> dict[str, Any]:
+    tag = _slug(tag)
+    valid_ids = {skill["id"] for skill in collection_skills(state_root)}
+    missing = sorted(skill_id for skill_id in skill_ids if skill_id not in valid_ids)
+    if missing:
+        hint = f" for collection {source_collection}" if source_collection else ""
+        raise KeyError(f"collection skill not found{hint}: {missing[0]}")
+    data = load_tags(state_root)
+    if sync:
+        skills = sorted(dict.fromkeys(skill_ids))
+    else:
+        current = data.setdefault("tags", {}).setdefault(tag, [])
+        skills = sorted(set(current) | set(skill_ids))
+    data.setdefault("tags", {})[tag] = skills
+    if source_collection:
+        metadata = data.setdefault("tag_metadata", {}).setdefault(tag, {})
+        source_collections = set() if sync else set(metadata.get("source_collections") or [])
+        source_collections.add(_slug(source_collection))
+        metadata["source_collections"] = sorted(source_collections)
+        metadata["managed_by"] = "collection"
+    save_tags(state_root, data)
+    return {"tag": tag, "skills": skills}
+
+
 def remove_tag_skill(state_root: Path, tag: str, skill_id: str) -> dict[str, Any]:
     tag = _slug(tag)
     data = load_tags(state_root)

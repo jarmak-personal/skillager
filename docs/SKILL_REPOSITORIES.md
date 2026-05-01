@@ -11,17 +11,30 @@ git clone <repo-url> ~/skills/community
 skillager collection add ~/skills/community --name community
 skillager collection search community gis
 skillager collection show community/gis-domain
-skillager setup --source collection --yolo
 ```
 
-Adding a collection does not expose skills to agents.
-`setup --source collection` reviews raw collection inventory from the reusable catalog, even before a project attaches any tags. For untrusted repositories, skip `--yolo` and use the normal review flow.
+Adding a collection does not expose skills to agents. It registers inventory only.
+
+To make a collection available to the current project, enable it:
+
+```bash
+skillager collection enable community
+skillager setup --source collection
+```
+
+`collection enable` creates or updates a reusable catalog tag with the collection's skills and attaches that tag to the current project. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path. For untrusted repositories, use the normal review flow.
+
+`setup --source collection` reviews collection skills attached to the current project. Registered collections that have not been enabled or attached stay as catalog inventory.
 
 ## Curate With Tags
+
+`collection enable` is the common case. Manual tags are useful when a large collection should be split into smaller project-relevant groups:
 
 ```bash
 skillager tag create gis
 skillager tag add gis community/gis-domain community/topology community/projections
+skillager tag add all-community --from-collection community
+skillager tag add all-community --from-collection community --sync
 skillager tag show gis
 ```
 
