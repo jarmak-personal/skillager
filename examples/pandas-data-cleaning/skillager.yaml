@@ -1,0 +1,22 @@
+schema: skillager.skill.v1
+id: pandas/data-cleaning
+name: Pandas Data Cleaning
+summary: Use pandas idioms for cleaning and transforming tabular data.
+source:
+  type: project
+audience:
+  - user
+activation:
+  default: suggested
+triggers:
+  keywords:
+    - dataframe
+    - groupby
+    - missing values
+    - csv
+context:
+  budget: medium
+entrypoint: SKILL.md
+safety:
+  min_trust: reviewed
+  allow_tools: false

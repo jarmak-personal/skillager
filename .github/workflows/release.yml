@@ -1,0 +1,188 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump type. current only tags; patch/minor/major push a version commit to main.
+        required: true
+        type: choice
+        options:
+          - current
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.next }}
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        run: |
+          CURRENT=$(python3 - <<'PY'
+          import pathlib
+          text = pathlib.Path("src/skillager/__init__.py").read_text(encoding="utf-8")
+          for line in text.splitlines():
+              if line.startswith("__version__"):
+                  print(line.split("=", 1)[1].strip().strip('"'))
+                  break
+          else:
+              raise SystemExit("could not find __version__")
+          PY
+          )
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+
+          NEXT=$(python3 - <<PY
+          major, minor, patch = [int(part) for part in "$CURRENT".split(".")]
+          bump = "${{ inputs.bump }}"
+          if bump == "current":
+              pass
+          elif bump == "major":
+              major += 1
+              minor = 0
+              patch = 0
+          elif bump == "minor":
+              minor += 1
+              patch = 0
+          else:
+              patch += 1
+          print(f"{major}.{minor}.{patch}")
+          PY
+          )
+          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "### Version bump: $CURRENT -> $NEXT (${{ inputs.bump }})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update version files
+        env:
+          CURRENT: ${{ steps.version.outputs.current }}
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+
+          current = os.environ["CURRENT"]
+          next_version = os.environ["NEXT"]
+          replacements = {
+              "pyproject.toml": [(f'version = "{current}"', f'version = "{next_version}"')],
+              "src/skillager/__init__.py": [(f'__version__ = "{current}"', f'__version__ = "{next_version}"')],
+              "build_backend/_skillager_build.py": [(f'VERSION = "{current}"', f'VERSION = "{next_version}"')],
+          }
+          for filename, pairs in replacements.items():
+              path = pathlib.Path(filename)
+              text = path.read_text(encoding="utf-8")
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f"missing expected version string in {filename}: {old}")
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+          PY
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate release build
+        run: |
+          uv run python -m unittest discover -s tests
+          uv run python -m skillager --version
+          uv build
+          ls -lh dist/
+
+      - name: Commit version bump and tag
+        env:
+          CURRENT: ${{ steps.version.outputs.current }}
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml src/skillager/__init__.py build_backend/_skillager_build.py
+          if git diff --cached --quiet; then
+            echo "No version bump commit needed for $NEXT"
+          else
+            git commit -m "Bump version to $NEXT"
+          fi
+          git tag "v$NEXT"
+          if [ "$NEXT" = "$CURRENT" ]; then
+            git push origin "v$NEXT"
+          else
+            git push origin HEAD:main
+            git push origin "v$NEXT"
+          fi
+
+      - name: Build release notes from commit subjects
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          NOTES=$(git log --pretty=format:'- %s' "$RANGE" | grep -v '^- Bump version to' || true)
+          if [ -z "$NOTES" ]; then
+            NOTES="- Initial release"
+          fi
+          printf '%s\n' "$NOTES" > RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          gh release create "v$NEXT" \
+            --title "v$NEXT" \
+            --notes-file RELEASE_NOTES.md \
+            --latest
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  release-assets:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: Upload assets to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "v${{ needs.release.outputs.version }}" dist/* --repo "$GITHUB_REPOSITORY"
+
+  publish-pypi:
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/skillager
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.14.0
