@@ -10,7 +10,7 @@ from email.message import Message
 from pathlib import Path
 
 NAME = "skillager"
-VERSION = "0.1.2"
+VERSION = "0.2.0"
 DIST = f"{NAME}-{VERSION}"
 DIST_INFO = f"{NAME}-{VERSION}.dist-info"
 ROOT = Path(__file__).resolve().parents[1]
