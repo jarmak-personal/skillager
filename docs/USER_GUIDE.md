@@ -5,7 +5,7 @@ Skillager is a CLI gate between discovered skills and agent-native skill directo
 The normal loop is:
 
 ```text
-status -> setup -> restart agent -> describe goal -> agent chooses narrow exposure -> lookback
+status -> setup -> restart agent -> handoff -> describe goal -> agent chooses narrow exposure -> lookback
 ```
 
 ## First Run In A Project
@@ -21,7 +21,7 @@ skillager setup
 
 `setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything.
 
-At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent can use approved metadata to decide whether to expose more narrow native skills, a compact router skill for a tag, or nothing.
+At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent starts with `skillager handoff` and can use approved metadata to decide whether to expose more narrow native skills, stubs, a compact router skill for a tag, or nothing.
 
 Setup does not materialize every approved skill by default. Approval means a skill is safe to consider; native exposure is still a separate decision based on what you are doing.
 
@@ -86,7 +86,7 @@ Lookback recommendations use three actions:
 
 By default, lookback computes recommendations from the most recent 10 sessions plus active sessions. This keeps parallel sessions from fighting over shared project-native skills and makes promotion/demotion depend on repeated evidence instead of one isolated task.
 
-You do not need to remember to run lookback before exiting. The next `skillager status` reports a compact pending lookback summary when recent sessions contain recommendations or overlap hints. Agents should ask before running the full `skillager lookback` report.
+You do not need to remember to run lookback before exiting. The next `skillager handoff` reports a compact pending lookback summary when recent sessions contain recommendations or overlap hints. Agents should ask before running the full `skillager lookback` report.
 
 Skillager also records compact local search/materialization events so lookback can spot behavior-based overlap, such as two skills repeatedly appearing in the same searches or sessions. These events do not include skill bodies, chat transcripts, command output, or full search text; search queries are stored as a hash plus a short preview.
 

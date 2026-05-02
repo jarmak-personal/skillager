@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,11 +17,13 @@ TRUSTED_STATES = {"reviewed", "trusted", "pinned"}
 ROUTER_SCHEMA = "skillager.router.v1"
 WORKING_SKILL_ID = "skillager/working"
 AGENT_NOTE = (
-    "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
-    "ask the user to run `skillager setup` if review is needed."
+    "Run `skillager handoff` at session start. Follow its Next item, use only reviewed/materialized "
+    "Skillager-managed skills, and ask the user before setup, approval, or exposure changes."
 )
 AGENT_NOTE_SECTION = f"## Skillager\n{AGENT_NOTE}\n"
 LEGACY_AGENT_NOTES = (
+    "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
+    "ask the user to run `skillager setup` if review is needed.",
     "Skillager-managed skills are installed for this project; run `skillager --help` "
     "for review/materialization commands, and only use approved materialized skills.",
     "Skillager-managed skills are installed for this project; at session start run `skillager status`, "
@@ -160,7 +163,7 @@ def materialize_working_skill_one(
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
-def render_working_skill(agent: str = "agent") -> str:
+def render_working_skill(agent: str = "codex") -> str:
     return f"""# Skillager Working
 
 Use when starting work in a project that has Skillager-managed skills, when `skillager status` reports available approved skills, or when the user asks you to set up, expose, route, activate, or review skills.
@@ -169,11 +172,12 @@ This skill is a protocol for using Skillager safely. It does not approve third-p
 
 ## Session Start
 
-1. Run `skillager status` once.
-2. If status reports new or changed unreviewed skills, ask the user to run `skillager setup` from the project directory. Do not activate or rely on unreviewed skills.
-3. If status reports unattached registered collections, ask the user whether to enable one with `skillager collection enable <name>` before setup. Do not assume collection skills are available until the collection is enabled, reviewed, and materialized/router-exposed.
-4. If status reports `lookback_pending`, ask whether the user wants to review `skillager lookback` before starting. Do not apply recommendations without user approval.
-5. If status is clean, ask what the user plans to do in this repo before materializing additional skills.
+1. Run `skillager handoff --agent {agent}` once.
+2. Follow the `Next:` item. If handoff reports setup or migration review is needed, ask the user to run the suggested command from the project directory before using Skillager-managed skills.
+3. If handoff reports stale or missing project artifacts, ask the user before refreshing them. Do not overwrite unmanaged artifacts unless the user explicitly approves the exact repair.
+4. If handoff reports lookback pending, ask whether the user wants to review `skillager lookback` before starting. Do not apply recommendations without user approval.
+5. If Skillager state may have changed mid-session, re-run `skillager handoff` before making approval-dependent decisions.
+6. If handoff is ready, ask what the user plans to do in this repo before materializing additional skills.
 
 ## Query Cadence
 
@@ -192,6 +196,7 @@ Once you choose a native skill or router path for a task, keep using that choice
 These commands are safe because they do not reveal full skill bodies:
 
 ```bash
+skillager handoff --agent {agent} --json
 skillager status --json
 skillager list --json
 skillager search "<user goal>" --trusted-only --json
@@ -204,12 +209,38 @@ Use these to decide which approved skills are relevant.
 
 ## Exposure Policy
 
-- Prefer router exposure for broad attached collections:
+- Every approved skill can be activated through Skillager. Not every approved skill should be materialized.
+- Use search for the long tail.
+- Use routers for broad recurring tags:
   `skillager materialize --tag <tag> --mode router --agent {agent} --scope project`
-- Prefer native exposure for narrow, high-signal project skills:
+- Use stubs for specific skills the user is likely to ask for by name:
+  `skillager materialize <skill-id> --mode stub --agent {agent} --scope project`
+- Use native exposure for tiny always-relevant project skills:
   `skillager materialize <skill-id> --agent {agent} --scope project`
+- Prefer no new exposure for one-off tasks.
 - Ask before running materialization commands unless the user has clearly asked you to handle Skillager setup/exposure.
 - Never use `--include-unreviewed` or `--force` unless the user explicitly asks for that exact override.
+
+## Exposure Signals
+
+User naming or explicit request decides exposure. If the user asks for a skill or workflow by name, use the narrowest reviewed path that satisfies that request.
+
+Lookback signal is strong evidence when available. Repeated search, activation, or materialization across sessions can justify a router, stub, native exposure, or no change.
+
+Static metadata hints are weak evidence and only apply when no runtime signal is available. Concordant static hints raise confidence; isolated static hints do not decide exposure alone.
+
+Static hints include:
+
+- `user-invokable` metadata.
+- Native agent provenance.
+- Clear workflow name.
+- Focused summary.
+
+Runtime signals include:
+
+- The user asks for the skill or workflow by name.
+- Repeated search or activation in lookback.
+- The current task clearly matches a specific approved skill.
 
 ## Activation Policy
 
@@ -520,12 +551,23 @@ def _ensure_agent_note(path: Path) -> None:
             return
         for legacy in LEGACY_AGENT_NOTES:
             if legacy in content:
-                path.write_text(content.replace(legacy, AGENT_NOTE_SECTION.rstrip()), encoding="utf-8")
+                path.write_text(_replace_legacy_agent_note(content, legacy), encoding="utf-8")
                 return
         prefix = "" if content.endswith("\n") or not content else "\n"
         path.write_text(f"{content}{prefix}{AGENT_NOTE_SECTION}", encoding="utf-8")
         return
     path.write_text(AGENT_NOTE_SECTION, encoding="utf-8")
+
+
+def _replace_legacy_agent_note(content: str, legacy: str) -> str:
+    legacy_start = content.index(legacy)
+    line_start = content.rfind("\n", 0, legacy_start) + 1
+    before_legacy = content[:line_start]
+    heading_matches = list(re.finditer(r"(?m)^#{2,}\s+Skillager\s*$", before_legacy))
+    if heading_matches:
+        heading_line_start = heading_matches[-1].start()
+        return f"{content[:heading_line_start]}{AGENT_NOTE_SECTION.rstrip()}{content[legacy_start + len(legacy):]}"
+    return content.replace(legacy, AGENT_NOTE_SECTION.rstrip(), 1)
 
 
 def slugify(skill_id: str) -> str:

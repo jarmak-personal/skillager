@@ -62,11 +62,34 @@ class SkillagerTests(unittest.TestCase):
 
     def test_working_skill_has_session_query_cadence(self) -> None:
         text = render_working_skill("codex")
-        self.assertIn("Run `skillager status` once", text)
+        self.assertIn("Run `skillager handoff --agent codex` once", text)
+        self.assertIn("re-run `skillager handoff` before making approval-dependent decisions", text)
         self.assertIn("Do not search Skillager on every user message", text)
         self.assertIn("You are unsure how to approach the task", text)
         self.assertIn("until the task changes", text)
-        self.assertIn("unattached registered collections", text)
+        self.assertIn("handoff reports lookback pending", text)
+
+    def test_working_skill_has_exposure_signal_hierarchy(self) -> None:
+        text = render_working_skill("codex")
+        self.assertIn("Every approved skill can be activated through Skillager", text)
+        self.assertIn("Not every approved skill should be materialized", text)
+        self.assertIn("Use search for the long tail", text)
+        self.assertIn("Use routers for broad recurring tags", text)
+        self.assertIn("Use stubs for specific skills the user is likely to ask for by name", text)
+        self.assertIn("Use native exposure for tiny always-relevant project skills", text)
+        self.assertIn("Prefer no new exposure for one-off tasks", text)
+        self.assertIn("User naming or explicit request decides exposure", text)
+        self.assertIn("Lookback signal is strong evidence when available", text)
+        self.assertIn("Static metadata hints are weak evidence", text)
+        self.assertIn("Concordant static hints raise confidence", text)
+        self.assertIn("`user-invokable` metadata", text)
+        self.assertIn("Native agent provenance", text)
+        self.assertIn("The current task clearly matches a specific approved skill", text)
+
+    def test_working_skill_preview_defaults_to_codex(self) -> None:
+        text = render_working_skill()
+        self.assertIn("skillager handoff --agent codex", text)
+        self.assertNotIn("--agent agent", text)
 
     def test_markerless_directory_is_project_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1285,10 +1308,81 @@ class SkillagerTests(unittest.TestCase):
             note = root / "AGENTS.md"
             text = note.read_text(encoding="utf-8")
             self.assertIn("## Skillager", text)
-            self.assertIn("skillager status", text)
+            self.assertIn("skillager handoff", text)
             self.assertEqual(text.count("## Skillager"), 1)
             self.assertIn("project/demo: materialized", repeat.getvalue())
             self.assertNotIn("Next step", repeat.getvalue())
+
+    def test_materialize_refreshes_legacy_status_project_agent_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (root / "AGENTS.md").write_text(
+                "Existing project notes.\n"
+                "## Skillager\n"
+                "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
+                "ask the user to run `skillager setup` if review is needed.\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state)}):
+                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                    self.assertEqual(main(["materialize", "project/demo", "--agent", "codex"]), 0)
+            text = (root / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertEqual(text.count("## Skillager"), 1)
+            self.assertIn("skillager handoff", text)
+            self.assertNotIn("skillager status", text)
+
+    def test_materialize_refreshes_drifted_legacy_status_project_agent_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            legacy = (
+                "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
+                "ask the user to run `skillager setup` if review is needed."
+            )
+            (root / "AGENTS.md").write_text(
+                f"Existing project notes.\n## Skillager \n\n{legacy}\nOther notes stay.\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state)}):
+                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                    self.assertEqual(main(["materialize", "project/demo", "--agent", "codex"]), 0)
+            text = (root / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertEqual(text.count("## Skillager"), 1)
+            self.assertIn("skillager handoff", text)
+            self.assertNotIn("skillager status", text)
+            self.assertIn("Other notes stay.", text)
+
+    def test_materialize_refreshes_headerless_legacy_status_project_agent_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (root / "AGENTS.md").write_text(
+                "Existing project notes.\n"
+                "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
+                "ask the user to run `skillager setup` if review is needed.\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state)}):
+                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                    self.assertEqual(main(["materialize", "project/demo", "--agent", "codex"]), 0)
+            text = (root / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertEqual(text.count("## Skillager"), 1)
+            self.assertIn("Existing project notes.", text)
+            self.assertIn("skillager handoff", text)
+            self.assertNotIn("skillager status", text)
 
     def test_materialize_prints_next_steps_for_new_skill_in_existing_skillager_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

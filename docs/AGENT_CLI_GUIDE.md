@@ -2,18 +2,19 @@
 
 This document is for coding agents reading a project that uses Skillager.
 
-Projects may expose a first-party `skillager-working` skill. Treat it as the bootstrap workflow for Skillager-managed projects: check status, respect the user approval gate, ask what the user plans to do, then expose only the narrow router or native skills that fit the session.
+Projects may expose a first-party `skillager-working` skill. Treat it as the bootstrap workflow for Skillager-managed projects: run handoff, respect the user approval gate, ask what the user plans to do, then expose only the narrow router, stub, or native skills that fit the session.
 
 ## Rules
 
-- Start with `skillager status` once per session.
-- If status reports `lookback_pending`, ask the user whether to review `skillager lookback` before starting. Do not apply recommendations without user approval.
+- Start with `skillager handoff` once per session.
+- If handoff reports lookback pending, ask the user whether to review `skillager lookback` before starting. Do not apply recommendations without user approval.
+- If Skillager state may have changed mid-session, re-run `skillager handoff` before making approval-dependent decisions.
 - Do not run `skillager setup`, `review`, `trust`, or `block` unless the user asked for setup or approval changes.
-- Do not run `skillager materialize` until you have asked what the user plans to do and can justify the narrow router/native exposure.
+- Do not run `skillager materialize` until you have asked what the user plans to do and can justify the narrow router, stub, or native exposure.
 - Do not run `skillager activate` or `skillager show --content` for a skill that is not already reviewed, trusted, or pinned.
 - Do not use `--force` unless the user explicitly instructs you to override Skillager's gate.
 - Prefer `--json` when parsing output.
-- Do not search Skillager on every user message. Search only when the task/domain changes, specialized help is likely useful, you are unsure how to proceed and an approved skill may contain the right workflow, status changed, or the user asks about skills.
+- Do not search Skillager on every user message. Search only when the task/domain changes, specialized help is likely useful, you are unsure how to proceed and an approved skill may contain the right workflow, handoff state changed, or the user asks about skills.
 - Once you choose a native skill or router path for a task, keep using it until the task changes.
 
 ## Safe Metadata Commands
@@ -21,6 +22,7 @@ Projects may expose a first-party `skillager-working` skill. Treat it as the boo
 These commands do not expose full skill bodies. In a project, normal `list`, `search`, and `show` use effective project inventory: project skills, package/environment skills, and attached collection-tag skills with project-local trust state. `list` hides global native skills by default; pass `--include-global` only when the user is asking about global inventory.
 
 ```bash
+skillager handoff --json
 skillager status --json
 skillager list --json
 skillager list --no-packages --json
@@ -32,8 +34,8 @@ skillager tag show <tag> --json
 ```
 
 Use `collection search/show` only for catalog management or debugging. For project work, prefer the normal project-aware commands above.
-`status --json` and `search --json` are intentionally compact for agent use. Use `--full-json` only when debugging Skillager metadata itself.
-`status --json` includes `lookback_pending` and `lookback_summary`; these are next-session hints only. Ask the user before running the full lookback or changing exposure.
+`handoff --json`, `status --json`, and `search --json` are intentionally compact for agent use. Use `--full-json` only when debugging Skillager metadata itself.
+`handoff --json` includes pending lookback state. These are next-session hints only. Ask the user before running the full lookback or changing exposure.
 
 Project-aware JSON includes:
 
@@ -73,7 +75,7 @@ skillager materialize <skill-id> --agent codex --allow-incompatible
 
 ## Agentic Setup Flow
 
-After the user approves skills, setup installs or refreshes the `skillager-working` bootstrap skill for the chosen agent. The user may also have materialized a small always-relevant native set during setup. In the next agent session, ask what the user plans to do in the repo. Then use approved metadata to decide whether to expose:
+After the user approves skills, setup installs or refreshes the `skillager-working` bootstrap skill for the chosen agent. The user may also have materialized a small always-relevant native set during setup. In the next agent session, run handoff, ask what the user plans to do in the repo, then use approved metadata and the user's goal to decide whether to expose:
 
 - a narrow native skill for a specific recurring workflow
 - a stub for an approved command the user wants easy access to by name
@@ -104,7 +106,7 @@ When a stub tells you to activate a skill, use the exact guarded command from th
 skillager activate <skill-id> --from-stub <stub-slug>
 ```
 
-Do not materialize every approved skill just because it is approved. Approval means a skill is allowed to be considered; exposure should still be scoped to the user's stated work.
+Do not materialize every approved skill just because it is approved. Approval means a skill is allowed to be considered; exposure should still be scoped to the user's stated work. User naming or explicit request decides exposure. Lookback signal is strong evidence when available. Static metadata hints such as `user-invokable`, native agent provenance, clear workflow names, and focused summaries are weak evidence unless they agree with each other.
 
 At lookback time, prefer aggregate recommendations over single-session instinct. `skillager lookback` considers the recent session window plus active sessions and reports the sessions behind each recommendation. Do not promote or demote shared project-native exposure based on one isolated session unless the user explicitly asks.
 

@@ -28,7 +28,7 @@ python -m skillager setup
 
 `setup` is the approval gate. It discovers skills in the current project and environment, scans them, asks what audience you care about, and never trusts a skill unless you approve it.
 
-After setup, restart Codex or Claude in the same directory and tell it what you are doing. Skillager installs a tiny project handoff so the agent knows to run `skillager status` once, use approved metadata, and avoid loading unapproved skill bodies.
+After setup, restart Codex or Claude in the same directory and tell it what you are doing. Skillager installs a tiny project handoff so the agent knows to run `skillager handoff` once, use approved metadata, and avoid loading unapproved skill bodies.
 
 ## The Problem
 
@@ -122,7 +122,7 @@ skillager materialize --tag workflows --mode router --agent codex --scope projec
 
 Skillager learns from usage as a local feedback loop. It records compact events such as search result IDs, activations, materialization status, and explicit feedback. It does not store chat transcripts or skill bodies.
 
-The next `skillager status` can tell the agent that lookback is pending. Then the user can decide whether to promote a repeatedly useful skill, keep a broad skill route-only, block an unwanted one, or resolve overlapping skills.
+The next `skillager handoff` can tell the agent that lookback is pending. Then the user can decide whether to promote a repeatedly useful skill, keep a broad skill route-only, block an unwanted one, or resolve overlapping skills.
 
 ## More Docs
 
