@@ -1053,7 +1053,7 @@ class SkillagerTests(unittest.TestCase):
                 self.assertEqual(project_tags["catalog_state_dir"], str(catalog_state.resolve()))
 
                 with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "index", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
                 activated = StringIO()
                 with redirect_stdout(activated):
                     self.assertEqual(main(["activate", "community/gis-domain", "--from-router", "skillager-gis"]), 0)
@@ -1089,7 +1089,7 @@ class SkillagerTests(unittest.TestCase):
 
                 router_output = StringIO()
                 with redirect_stdout(router_output):
-                    self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "index", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
                 saved_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved_scope["selected_count"], 49)
                 router = root / ".agents" / "skills" / "skillager-gis" / "SKILL.md"
@@ -1147,12 +1147,36 @@ class SkillagerTests(unittest.TestCase):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
                     self.assertEqual(main(["collection", "enable", "community", "--tag", "all"]), 0)
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
-                    self.assertEqual(main(["materialize", "--tag", "all", "--mode", "index", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["materialize", "--tag", "all", "--mode", "router", "--agent", "codex"]), 0)
             router = root / ".agents" / "skills" / "skillager-all" / "SKILL.md"
             router_text = router.read_text(encoding="utf-8")
             self.assertIn("This tag contains 21 reviewed skills.", router_text)
             self.assertIn('skillager search --tag all "<query>" --approved-only', router_text)
             self.assertNotIn("community/skill-00", router_text)
+
+    def test_materialize_index_mode_is_deprecated_router_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            skill = collection / "gis"
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text("# GIS\n\nUse GIS guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
+                stderr = StringIO()
+                with redirect_stdout(StringIO()), redirect_stderr(stderr):
+                    self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "index", "--agent", "codex"]), 0)
+            self.assertIn("--mode index is deprecated", stderr.getvalue())
+            self.assertTrue((root / ".agents" / "skills" / "skillager-gis" / "SKILL.md").exists())
 
     def test_materialize_writes_project_agent_note(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1985,7 +2009,7 @@ class SkillagerTests(unittest.TestCase):
             text = stdout.getvalue()
             self.assertIn("No narrow native project skill candidates found", text)
             self.assertIn("Router suggestions", text)
-            self.assertIn("skillager materialize --tag mapping --mode index --agent codex --scope project", text)
+            self.assertIn("skillager materialize --tag mapping --mode router --agent codex --scope project", text)
 
     def test_interactive_setup_splits_low_risk_approval_by_audience(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

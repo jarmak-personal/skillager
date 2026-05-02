@@ -83,7 +83,7 @@ After the user approves skills, setup installs or refreshes the `skillager-worki
 Prefer router materialization for broad skill repositories:
 
 ```bash
-skillager materialize --tag workflows --mode index --agent codex --scope project
+skillager materialize --tag workflows --mode router --agent codex --scope project
 ```
 
 Prefer native materialization for narrow, high-signal project skills:

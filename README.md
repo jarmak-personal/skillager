@@ -113,7 +113,7 @@ Skill repositories are collections. Collections are inventory; tags are curation
 skillager collection add ~/skills/workflows --name workflows
 skillager collection enable workflows
 skillager setup
-skillager materialize --tag workflows --mode index --agent codex --scope project
+skillager materialize --tag workflows --mode router --agent codex --scope project
 ```
 
 `collection enable` creates or updates a catalog tag for the collection and attaches that tag to the current project. The agent sees one router skill, not the whole repo. It activates a specific reviewed skill only when the task calls for it.

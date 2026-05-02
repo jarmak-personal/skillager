@@ -205,7 +205,7 @@ Use these to decide which approved skills are relevant.
 ## Exposure Policy
 
 - Prefer router exposure for broad attached collections:
-  `skillager materialize --tag <tag> --mode index --agent {agent} --scope project`
+  `skillager materialize --tag <tag> --mode router --agent {agent} --scope project`
 - Prefer native exposure for narrow, high-signal project skills:
   `skillager materialize <skill-id> --agent {agent} --scope project`
 - Ask before running materialization commands unless the user has clearly asked you to handle Skillager setup/exposure.
@@ -367,9 +367,9 @@ def render_stub_skill(skill: dict[str, Any]) -> str:
         [
             "Before following the skill instructions, activate the full reviewed skill body:",
             "",
-            f"```bash",
+            "```bash",
             f"skillager activate {skill_id} --from-stub {slugify(skill_id)}",
-            f"```",
+            "```",
             "",
             "Never use `--force`. If activation is refused, continue without this skill or ask the user to run `skillager setup`.",
             "",

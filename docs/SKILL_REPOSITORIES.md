@@ -69,7 +69,7 @@ skillager list --json
 For large tags, prefer router mode:
 
 ```bash
-skillager materialize --tag gis --mode index --agent codex --scope project
+skillager materialize --tag gis --mode router --agent codex --scope project
 ```
 
 This writes one compact native router skill. The router includes approved skill IDs and author summaries, then tells the agent to activate a specific skill through Skillager when needed.

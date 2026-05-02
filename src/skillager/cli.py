@@ -580,7 +580,7 @@ def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentPars
               skillager materialize --agent claude --scope project
               skillager materialize --all-agents --scope project
               skillager materialize pandas/data-cleaning --agent codex
-              skillager materialize --tag gis --mode index --agent codex
+              skillager materialize --tag gis --mode router --agent codex
               skillager materialize pandas/data-cleaning --mode stub --agent codex
               skillager materialize --dry-run --json
             """
@@ -588,7 +588,12 @@ def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentPars
     )
     p.add_argument("skill_ids", nargs="*")
     p.add_argument("--tag", help="Materialize skills from a curated tag.")
-    p.add_argument("--mode", choices=["native", "index", "stub"], default="native", help="native copies each skill; stub writes tiny activation handles; index creates one router skill for --tag.")
+    p.add_argument(
+        "--mode",
+        choices=["native", "router", "index", "stub"],
+        default="native",
+        help="native copies each skill; stub writes tiny activation handles; router creates one router skill for --tag. index is a deprecated router alias.",
+    )
     p.add_argument("--agent", action="append", choices=["codex", "claude"], help="Agent target. Repeat to target multiple agents. Defaults to codex.")
     p.add_argument("--all-agents", action="store_true", help="Target both codex and claude.")
     p.add_argument("--scope", choices=["project", "global"], default="project", help="Materialize into project .agents or global agent skill directory.")
@@ -1755,6 +1760,7 @@ def _review_extra_skills(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 
 def cmd_materialize(args: argparse.Namespace) -> int:
+    mode = _materialize_mode(args.mode)
     data = load_index(root(args))
     extra_skills = attached_tag_skills(root(args), catalog_root=catalog_root(args))
     if extra_skills:
@@ -1762,7 +1768,7 @@ def cmd_materialize(args: argparse.Namespace) -> int:
     agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
     agent_notes_ready_before = _agent_notes_ready(Path.cwd(), agents=agents) if args.scope == "project" else False
     materialized_targets_before = _materialized_target_paths(Path.cwd(), agents=agents) if args.scope == "project" else set()
-    if args.tag and args.mode == "index":
+    if args.tag and mode == "router":
         _require_attached_tag(root(args), args.tag)
         skills = tag_skills(catalog_root(args), args.tag, trust_root=root(args))
         results = materialize_router(
@@ -1775,8 +1781,8 @@ def cmd_materialize(args: argparse.Namespace) -> int:
             project_dir=Path.cwd(),
         )
     else:
-        if args.mode == "index":
-            raise ValueError("--mode index requires --tag")
+        if mode == "router":
+            raise ValueError("--mode router requires --tag")
         if args.tag:
             _require_attached_tag(root(args), args.tag)
         tag_skill_ids = {skill["id"] for skill in tag_skills(catalog_root(args), args.tag, trust_root=root(args))} if args.tag else None
@@ -1795,7 +1801,7 @@ def cmd_materialize(args: argparse.Namespace) -> int:
             skills,
             agents=agents,
             scope=args.scope,
-            mode=args.mode,
+            mode=mode,
             dry_run=args.dry_run,
             force=args.force,
             reviewed_only=not args.include_unreviewed,
@@ -1824,6 +1830,13 @@ def cmd_materialize(args: argparse.Namespace) -> int:
             ):
                 _print_agent_next_steps(results)
     return 0
+
+
+def _materialize_mode(mode: str) -> str:
+    if mode == "index":
+        print("warning: --mode index is deprecated; use --mode router. index will be removed in 0.3.", file=sys.stderr)
+        return "router"
+    return mode
 
 
 def _print_materialize_results(results: list[dict[str, Any]]) -> None:
@@ -2482,7 +2495,7 @@ def _print_router_suggestions(state_root: Path, *, catalog_root: Path | None, ag
     print("  Broad attached tags are best exposed as router skills when relevant to the task:")
     for tag, count in suggestions:
         print(f"  - {tag}: {count} approved skill(s)")
-        print(f"    skillager materialize --tag {tag} --mode index --agent {agent} --scope project")
+        print(f"    skillager materialize --tag {tag} --mode router --agent {agent} --scope project")
 
 
 def _print_setup_completion_summary(
