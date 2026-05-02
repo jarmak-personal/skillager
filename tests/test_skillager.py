@@ -22,7 +22,7 @@ from skillager.scan import scan_path, scan_text
 from skillager.schema import SchemaError, load_skill_from_dir
 from skillager.session import append_event, prune_sessions, read_events, redact_session, start_session
 from skillager.simple_yaml import loads
-from skillager.trust import set_trust, trust_state
+from skillager.trust import content_hash, set_trust, trust_state
 from skillager.update_check import check_for_update, is_newer_version
 
 
@@ -549,6 +549,392 @@ class SkillagerTests(unittest.TestCase):
             self.assertEqual([skill["id"] for skill in data["skills"]], ["community/first"])
             tags = json.loads((state / "tags.json").read_text(encoding="utf-8"))
             self.assertEqual(tags["tag_metadata"]["mixed"]["source_collections"], ["community"])
+
+    def test_collection_add_recursively_indexes_repo_tree_with_path_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            repos = root / "repos"
+            legacy = repos / "legacy-root"
+            review = repos / "project-a" / ".skills" / "review-pr"
+            deploy = repos / "project-b" / "skills" / "deploy-preview"
+            materialized = repos / "project-c" / ".agents" / "skills" / "old"
+            legacy.mkdir(parents=True)
+            review.mkdir(parents=True)
+            deploy.mkdir(parents=True)
+            materialized.mkdir(parents=True)
+            (legacy / "SKILL.md").write_text("# Legacy\n\nUse legacy guidance.\n", encoding="utf-8")
+            (legacy / "skillager.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: skillager.skill.v1",
+                        "id: upstream/legacy",
+                        "name: Legacy",
+                        "summary: Use legacy guidance.",
+                        "source:",
+                        "  type: collection",
+                        "audience:",
+                        "  - user",
+                        "activation:",
+                        "  default: manual",
+                        "entrypoint: SKILL.md",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (review / "SKILL.md").write_text("# Review PR\n\nReview pull requests.\n", encoding="utf-8")
+            (deploy / "SKILL.md").write_text("# Deploy Preview\n\nDeploy previews.\n", encoding="utf-8")
+            (materialized / "SKILL.md").write_text("# Old\n\nOld materialized skill.\n", encoding="utf-8")
+            (materialized / "skillager.materialized.yaml").write_text("schema: skillager.materialized.v1\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["collection", "add", str(repos), "--name", "personal"]), 0)
+                self.assertIn("personal: indexed 3 skill(s)", output.getvalue())
+                index = json.loads((state / "collections" / "personal.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                [skill["id"] for skill in index["skills"]],
+                ["personal/legacy", "personal/project-a/review-pr", "personal/project-b/deploy-preview"],
+            )
+
+    def test_collection_refresh_migrates_flattened_trust_and_tag_by_old_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "skills"
+            skill_dir = collection / "python" / "foo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Foo\n\nUse foo guidance.\n", encoding="utf-8")
+            digest = content_hash(skill_dir)
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
+                (state / "collections" / "personal.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.collection-index.v1",
+                            "name": "personal",
+                            "path": str(collection),
+                            "skills": [{"id": "personal/foo", "root": str(skill_dir), "content_hash": digest}],
+                            "errors": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                set_trust(state, "personal/foo", "reviewed", digest, {"type": "collection", "collection": "personal"})
+                (state / "tags.json").write_text(json.dumps({"tags": {"python": ["personal/foo"]}}, indent=2) + "\n", encoding="utf-8")
+
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "refresh", "personal"]), 0)
+
+                new_index = json.loads((state / "collections" / "personal.json").read_text(encoding="utf-8"))
+                self.assertEqual([skill["id"] for skill in new_index["skills"]], ["personal/python/foo"])
+                new_hash = new_index["skills"][0]["content_hash"]
+                self.assertEqual(trust_state(state, "personal/python/foo", new_hash), "reviewed")
+                tags = json.loads((state / "tags.json").read_text(encoding="utf-8"))
+                self.assertEqual(tags["tags"]["python"], ["personal/python/foo"])
+
+                status = StringIO()
+                with redirect_stdout(status):
+                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
+                status_data = json.loads(status.getvalue())
+                self.assertTrue(status_data["collection_migrations"]["pending"])
+                self.assertEqual(status_data["collection_migrations"]["totals"]["trust_migrated"], 1)
+                self.assertEqual(status_data["collection_migrations"]["totals"]["tag_migrated"], 1)
+
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["status", "--no-packages", "--ack-migration", "--json"]), 0)
+                acked = StringIO()
+                with redirect_stdout(acked):
+                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
+                self.assertFalse(json.loads(acked.getvalue())["collection_migrations"]["pending"])
+                trust = json.loads((state / "trust.json").read_text(encoding="utf-8"))
+                self.assertIn("personal/foo", trust["skills"])
+                self.assertIn("personal/python/foo", trust["skills"])
+
+    def test_status_ack_migration_without_pending_is_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["status", "--no-packages", "--ack-migration", "--json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertFalse(data["collection_migrations"]["pending"])
+
+    def test_collection_migration_ack_hash_changes_for_later_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            first = root / "first"
+            second = root / "second"
+            first_skill = first / "python" / "foo"
+            second_skill = second / "writing" / "bar"
+            first_skill.mkdir(parents=True)
+            second_skill.mkdir(parents=True)
+            (first_skill / "SKILL.md").write_text("# Foo\n\nUse foo.\n", encoding="utf-8")
+            (second_skill / "SKILL.md").write_text("# Bar\n\nUse bar.\n", encoding="utf-8")
+            first_hash = content_hash(first_skill)
+            second_hash = content_hash(second_skill)
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(first), "--name", "first"]), 0)
+                    self.assertEqual(main(["collection", "add", str(second), "--name", "second"]), 0)
+                (state / "collections" / "first.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.collection-index.v1",
+                            "name": "first",
+                            "path": str(first),
+                            "skills": [{"id": "first/foo", "root": str(first_skill), "content_hash": first_hash}],
+                            "errors": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                (state / "collections" / "second.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.collection-index.v1",
+                            "name": "second",
+                            "path": str(second),
+                            "skills": [{"id": "second/bar", "root": str(second_skill), "content_hash": second_hash}],
+                            "errors": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "refresh", "first"]), 0)
+                first_status = StringIO()
+                with redirect_stdout(first_status):
+                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
+                first_data = json.loads(first_status.getvalue())
+                self.assertTrue(first_data["collection_migrations"]["pending"])
+                first_digest = first_data["collection_migrations"]["hash"]
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["status", "--no-packages", "--ack-migration", "--json"]), 0)
+                    self.assertEqual(main(["collection", "refresh", "second"]), 0)
+                second_status = StringIO()
+                with redirect_stdout(second_status):
+                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
+                second_data = json.loads(second_status.getvalue())
+            self.assertTrue(second_data["collection_migrations"]["pending"])
+            self.assertNotEqual(second_data["collection_migrations"]["hash"], first_digest)
+
+    def test_collection_migration_preserves_project_local_trust_for_external_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog_state = root / "catalog-state"
+            project = root / "project"
+            project.mkdir()
+            project_state = project / ".skillager"
+            collection = root / "skills"
+            skill_dir = collection / "python" / "foo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Foo\n\nUse foo guidance.\n", encoding="utf-8")
+            digest = content_hash(skill_dir)
+            with patch.dict(os.environ, {"NO_COLOR": "1"}, clear=True), patch("pathlib.Path.home", return_value=root), chdir(project):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "collection", "add", str(collection), "--name", "personal"]), 0)
+                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "tag", "create", "python"]), 0)
+                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "project", "attach-tag", "python"]), 0)
+                (catalog_state / "collections" / "personal.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.collection-index.v1",
+                            "name": "personal",
+                            "path": str(collection),
+                            "skills": [{"id": "personal/foo", "root": str(skill_dir), "content_hash": digest}],
+                            "errors": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                (catalog_state / "tags.json").write_text(
+                    json.dumps({"tags": {"python": ["personal/foo"]}, "tag_metadata": {"python": {"source_collections": ["personal"]}}}, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                set_trust(project_state, "personal/foo", "reviewed", digest, {"type": "collection", "collection": "personal"})
+
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "collection", "refresh", "personal"]), 0)
+                status = StringIO()
+                with redirect_stdout(status):
+                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "status", "--no-packages", "--json"]), 0)
+                status_data = json.loads(status.getvalue())
+                self.assertFalse(status_data["needs_setup"])
+                self.assertEqual(status_data["approved"], 1)
+                new_hash = json.loads((catalog_state / "collections" / "personal.json").read_text(encoding="utf-8"))["skills"][0]["content_hash"]
+            self.assertEqual(trust_state(project_state, "personal/python/foo", new_hash), "reviewed")
+
+    def test_collection_refresh_reports_changed_content_as_needing_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "skills"
+            skill_dir = collection / "python" / "foo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Foo\n\nUse foo guidance.\n", encoding="utf-8")
+            old_digest = content_hash(skill_dir)
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
+                (state / "collections" / "personal.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.collection-index.v1",
+                            "name": "personal",
+                            "path": str(collection),
+                            "skills": [{"id": "personal/foo", "root": str(skill_dir), "content_hash": old_digest}],
+                            "errors": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                set_trust(state, "personal/foo", "reviewed", old_digest, {"type": "collection", "collection": "personal"})
+                (skill_dir / "SKILL.md").write_text("# Foo\n\nUse changed foo guidance.\n", encoding="utf-8")
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "refresh", "personal"]), 0)
+
+                new_index = json.loads((state / "collections" / "personal.json").read_text(encoding="utf-8"))
+                new_hash = new_index["skills"][0]["content_hash"]
+                self.assertEqual(trust_state(state, "personal/python/foo", new_hash), "discovered")
+                migrations = json.loads((state / "collection_migrations.json").read_text(encoding="utf-8"))
+                outcome = migrations["collections"]["personal"]
+            self.assertEqual(outcome["needs_review"][0]["reason"], "content changed since last collection refresh")
+
+    def test_collection_refresh_reports_ambiguous_flattened_trust_with_same_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "skills"
+            python = collection / "python" / "foo"
+            writing = collection / "writing" / "foo"
+            python.mkdir(parents=True)
+            writing.mkdir(parents=True)
+            text = "# Foo\n\nUse shared foo.\n"
+            (python / "SKILL.md").write_text(text, encoding="utf-8")
+            (writing / "SKILL.md").write_text(text, encoding="utf-8")
+            digest = content_hash(python)
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
+                (state / "collections" / "personal.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.collection-index.v1",
+                            "name": "personal",
+                            "path": str(collection),
+                            "skills": [
+                                {"id": "personal/foo", "root": str(python), "content_hash": digest},
+                                {"id": "personal/foo", "root": str(writing), "content_hash": digest},
+                            ],
+                            "errors": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                set_trust(state, "personal/foo", "reviewed", digest, {"type": "collection", "collection": "personal"})
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "refresh", "personal"]), 0)
+                migrations = json.loads((state / "collection_migrations.json").read_text(encoding="utf-8"))
+                details = StringIO()
+                with redirect_stdout(details):
+                    self.assertEqual(main(["status", "--no-packages", "--migration-details"]), 0)
+            self.assertEqual(migrations["collections"]["personal"]["needs_review"][0]["reason"], "ambiguous old ID/content hash")
+            self.assertIn("needs review: personal/foo (ambiguous old ID/content hash)", details.getvalue())
+
+    def test_collection_refresh_reports_ambiguous_flattened_tag_membership(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "skills"
+            python = collection / "python" / "foo"
+            writing = collection / "writing" / "foo"
+            python.mkdir(parents=True)
+            writing.mkdir(parents=True)
+            (python / "SKILL.md").write_text("# Python Foo\n\nUse python foo.\n", encoding="utf-8")
+            (writing / "SKILL.md").write_text("# Writing Foo\n\nUse writing foo.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
+                (state / "collections" / "personal.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.collection-index.v1",
+                            "name": "personal",
+                            "path": str(collection),
+                            "skills": [
+                                {"id": "personal/foo", "root": str(python), "content_hash": content_hash(python)},
+                                {"id": "personal/foo", "root": str(writing), "content_hash": content_hash(writing)},
+                            ],
+                            "errors": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                (state / "tags.json").write_text(json.dumps({"tags": {"foo": ["personal/foo"]}}, indent=2) + "\n", encoding="utf-8")
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "refresh", "personal"]), 0)
+                tags = json.loads((state / "tags.json").read_text(encoding="utf-8"))
+                migrations = json.loads((state / "collection_migrations.json").read_text(encoding="utf-8"))
+            self.assertEqual(tags["tags"]["foo"], ["personal/foo"])
+            self.assertEqual(
+                migrations["collections"]["personal"]["tag_needs_repair"][0]["candidate_ids"],
+                ["personal/python/foo", "personal/writing/foo"],
+            )
 
     def test_setup_source_collection_only_reviews_enabled_project_collections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

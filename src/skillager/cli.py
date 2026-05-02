@@ -18,10 +18,12 @@ from rich.table import Table
 from . import __version__
 from .compatibility import compatibility_problem, compatibility_warnings
 from .collections import (
+    ack_collection_migrations,
     add_collection,
     add_tag_skill,
     attach_project_tag,
     attached_tag_skills,
+    collection_migration_summary,
     collection_skills,
     create_tag,
     detach_project_tag,
@@ -390,6 +392,8 @@ def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--all", action="store_true", help="Ignore the saved setup scope and report all selected skills.")
     p.add_argument("--quiet", action="store_true", help="Print one concise line.")
     p.add_argument("--exit-code", action="store_true", help="Exit 10 when review is needed. Default exit code is 0.")
+    p.add_argument("--ack-migration", action="store_true", help="Acknowledge the current collection ID migration report.")
+    p.add_argument("--migration-details", action="store_true", help="Print collection ID migration details for review before acking.")
     p.add_argument("--json", action="store_true", help="Emit status as JSON.")
     p.add_argument("--full-json", action="store_true", help="Include verbose scope baseline details in JSON output.")
     p.set_defaults(func=cmd_status)
@@ -870,6 +874,8 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    if args.ack_migration:
+        ack_collection_migrations(catalog_root(args))
     data = build_index(root(args), args.paths or None, include_packages=not args.no_packages)
     extra_skills = attached_tag_skills(root(args), catalog_root=catalog_root(args))
     if extra_skills:
@@ -892,6 +898,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     blocked = [skill for skill in data.get("skills", []) if skill.get("trust") == "blocked"]
     lookback_summary = _status_lookback_summary(root(args))
     collection_summary = _status_collection_summary(root(args), catalog_root(args))
+    migration_summary = collection_migration_summary(catalog_root(args))
     update = check_for_update(cache_root(), current_version=__version__)
     status = {
         "indexed": len(data.get("skills", [])),
@@ -911,9 +918,16 @@ def cmd_status(args: argparse.Namespace) -> int:
         "lookback_pending": lookback_summary["pending"],
         "lookback_summary": lookback_summary,
         "collections": collection_summary,
+        "collection_migrations": migration_summary,
+        "migration_details": args.migration_details,
         "update": update,
         "scope": saved_scope or None,
-        "message": _status_message(review_needed, lookback_summary=lookback_summary, collection_summary=collection_summary),
+        "message": _status_message(
+            review_needed,
+            lookback_summary=lookback_summary,
+            collection_summary=collection_summary,
+            migration_summary=migration_summary,
+        ),
     }
     if args.json:
         payload = status if args.full_json else _compact_status(status)
@@ -1018,7 +1032,22 @@ def _print_out_of_scope_collections(state_root: Path, catalog_root: Path, *, act
     print("  run `skillager collection enable <name>` to include one in project setup")
 
 
-def _status_message(review_needed: list[dict[str, Any]], *, lookback_summary: dict[str, Any] | None = None, collection_summary: dict[str, Any] | None = None) -> str:
+def _status_message(
+    review_needed: list[dict[str, Any]],
+    *,
+    lookback_summary: dict[str, Any] | None = None,
+    collection_summary: dict[str, Any] | None = None,
+    migration_summary: dict[str, Any] | None = None,
+) -> str:
+    if migration_summary and migration_summary.get("pending"):
+        totals = migration_summary.get("totals", {})
+        return (
+            "Skillager: collection skill ID migration pending. "
+            f"{totals.get('id_migrations', 0)} ID(s) migrated, "
+            f"{totals.get('needs_review', 0)} skill(s) need re-review, "
+            f"{totals.get('tag_needs_repair', 0)} tag entries need repair. "
+            "Run `skillager status --ack-migration` after reviewing."
+        )
     if review_needed:
         return f"Skillager: {len(review_needed)} new or changed unreviewed skill(s) available. Ask the user to run `skillager setup`."
     if collection_summary and collection_summary.get("unattached_count"):
@@ -1056,6 +1085,22 @@ def _print_status(status: dict[str, Any]) -> None:
         )
         if collections.get("unattached_count"):
             print("    run `skillager collection enable <name>` to onboard a collection")
+    migrations = status.get("collection_migrations") or {}
+    if migrations.get("pending"):
+        totals = migrations.get("totals", {})
+        print(
+            "  - collection ID migration: "
+            f"{totals.get('id_migrations', 0)} ID(s), "
+            f"{totals.get('trust_migrated', 0)} trust entries migrated, "
+            f"{totals.get('needs_review', 0)} skill(s) need re-review, "
+            f"{totals.get('tag_migrated', 0)} tag entries migrated, "
+            f"{totals.get('tag_needs_repair', 0)} tag entries need repair"
+        )
+        if totals.get("needs_review"):
+            print("    skills modified since the last collection refresh are listed as needs-review")
+        print("    run `skillager status --ack-migration` after reviewing")
+    if status.get("migration_details"):
+        _print_migration_details(migrations)
     scope = status.get("scope")
     if scope:
         scope_bits = []
@@ -1087,6 +1132,24 @@ def _print_status(status: dict[str, Any]) -> None:
         print(f"  - risk: {risk_bits}")
     print()
     print(status["message"])
+
+
+def _print_migration_details(migrations: dict[str, Any]) -> None:
+    collections = migrations.get("collections") or []
+    if not collections:
+        print("  - collection ID migration details: none")
+        return
+    print("  - collection ID migration details:")
+    for outcome in collections:
+        print(f"    {outcome.get('collection')}:")
+        for item in outcome.get("id_migrations", []):
+            print(f"      id: {item.get('old_id')} -> {item.get('new_id')}")
+        for item in outcome.get("needs_review", []):
+            new_id = item.get("new_id") or item.get("old_id")
+            print(f"      needs review: {new_id} ({item.get('reason')})")
+        for item in outcome.get("tag_needs_repair", []):
+            candidates = ", ".join(item.get("candidate_ids") or [])
+            print(f"      tag repair: {item.get('tag')} has {item.get('old_id')} candidates: {candidates}")
 
 
 def _status_review_needed(skills: list[dict[str, Any]], *, saved_scope: dict[str, Any] | None) -> list[dict[str, Any]]:
