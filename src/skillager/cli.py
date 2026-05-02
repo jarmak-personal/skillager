@@ -1765,7 +1765,7 @@ def cmd_materialize(args: argparse.Namespace) -> int:
 
 def _print_materialize_results(results: list[dict[str, Any]]) -> None:
     for item in results:
-        if item.get("skill_id") == "skillager/working" and item.get("status") == "materialized":
+        if _suppress_materialize_result(item):
             continue
         line = f"{item['skill_id']}: {item['status']}"
         if item.get("target"):
@@ -1773,6 +1773,14 @@ def _print_materialize_results(results: list[dict[str, Any]]) -> None:
         if item.get("reason"):
             line += f" ({item['reason']})"
         print(line)
+
+
+def _suppress_materialize_result(item: dict[str, Any]) -> bool:
+    if item.get("skill_id") != "skillager/working":
+        return False
+    if item.get("status") == "materialized":
+        return True
+    return item.get("status") == "skipped" and item.get("reason") == "already up to date"
 
 
 def _agent_notes_ready(project_dir: Path, *, agents: list[str]) -> bool:

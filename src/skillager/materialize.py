@@ -117,9 +117,9 @@ def materialize_working_skill(
     dry_run: bool = False,
     force: bool = False,
 ) -> list[dict[str, Any]]:
-    skill = _working_skill()
     results: list[dict[str, Any]] = []
     for agent in agents:
+        skill = _working_skill(agent)
         target = target_dir(agent=agent, scope=scope, skill=skill, project_dir=project_dir)
         try:
             results.append(materialize_working_skill_one(target=target, agent=agent, scope=scope, dry_run=dry_run, force=force))
@@ -138,7 +138,7 @@ def materialize_working_skill_one(
     dry_run: bool = False,
     force: bool = False,
 ) -> dict[str, Any]:
-    skill = _working_skill()
+    skill = _working_skill(agent)
     with _target_lock(target):
         sidecar = target / "skillager.materialized.yaml"
         if target.exists():
@@ -146,6 +146,8 @@ def materialize_working_skill_one(
                 return _result(skill, target, "skipped", "target has local customizations", agent=agent, scope=scope)
             if not force and (target / "SKILL.md").exists() and not sidecar.exists():
                 return _result(skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
+            if not force and _source_hash_matches(sidecar, skill.get("content_hash")):
+                return _result(skill, target, "skipped", "already up to date", agent=agent, scope=scope)
         if dry_run:
             return _result(skill, target, "would_write", None, agent=agent, scope=scope)
         if target.exists():
@@ -619,15 +621,20 @@ def _stub_manifest(skill: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _working_skill() -> dict[str, Any]:
+def _working_skill(agent: str) -> dict[str, Any]:
+    source_hash = _working_source_hash(agent)
     return {
         "id": WORKING_SKILL_ID,
         "name": "Skillager Working",
         "summary": "Use Skillager safely from an agent: status first, approved metadata only, narrow router/native materialization, guarded activation, and lookback.",
         "source": {"type": "skillager-working"},
-        "content_hash": "skillager-working-v1",
+        "content_hash": source_hash,
         "trust": "reviewed",
     }
+
+
+def _working_source_hash(agent: str) -> str:
+    return hashlib.sha256(render_working_skill(agent).encode("utf-8")).hexdigest()[:16]
 
 
 def _working_manifest() -> dict[str, Any]:
@@ -652,7 +659,7 @@ def _working_sidecar(*, agent: str, scope: str, materialized_hash: str) -> dict[
         "source_type": "skillager-working",
         "source_package": "skillager",
         "source_entrypoint": "generated",
-        "source_hash": "skillager-working-v1",
+        "source_hash": _working_source_hash(agent),
         "materialized_hash": materialized_hash,
         "source_trust": "reviewed",
         "materialized_at": datetime.now(timezone.utc).isoformat(),
@@ -754,6 +761,16 @@ def _is_customized(sidecar: Path, target: Path) -> bool:
     if not isinstance(materialized_hash, str):
         return True
     return content_hash(target) != materialized_hash
+
+
+def _source_hash_matches(sidecar: Path, source_hash: object) -> bool:
+    if not source_hash or not sidecar.exists():
+        return False
+    try:
+        data = load_mapping(sidecar)
+    except Exception:
+        return False
+    return data.get("source_hash") == source_hash
 
 
 def _result(

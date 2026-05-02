@@ -12,10 +12,10 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from skillager.cli import build_parser, main
+from skillager.cli import _print_materialize_results, build_parser, main
 from skillager.index import build_index, load_index
 from skillager.lookback import build_lookback
-from skillager.materialize import render_working_skill
+from skillager.materialize import _working_source_hash, materialize_working_skill, render_working_skill
 from skillager.onboard import onboard_path
 from skillager.paths import find_project_root, state_root
 from skillager.scan import scan_path, scan_text
@@ -809,6 +809,40 @@ class SkillagerTests(unittest.TestCase):
                         self.assertEqual(main(["materialize", "project/second", "--agent", "codex"]), 0)
             self.assertIn("project/second: materialized", output.getvalue())
             self.assertIn("Next step", output.getvalue())
+
+    def test_working_skill_refreshes_when_rendered_template_hash_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / ".agents" / "skills" / "skillager-working"
+            with patch("pathlib.Path.home", return_value=root), chdir(root):
+                first = materialize_working_skill(agents=["codex"], project_dir=root)
+            self.assertEqual(first[0]["status"], "materialized")
+            sidecar = loads((target / "skillager.materialized.yaml").read_text(encoding="utf-8"))
+            self.assertEqual(sidecar["source_hash"], _working_source_hash("codex"))
+            original = (target / "SKILL.md").read_text(encoding="utf-8")
+            with patch("skillager.materialize.render_working_skill", return_value="# Skillager Working\n\nChanged protocol.\n"):
+                second = materialize_working_skill(agents=["codex"], project_dir=root)
+            self.assertEqual(second[0]["status"], "materialized")
+            self.assertNotEqual((target / "SKILL.md").read_text(encoding="utf-8"), original)
+            with patch("skillager.materialize.render_working_skill", return_value="# Skillager Working\n\nChanged protocol.\n"):
+                third = materialize_working_skill(agents=["codex"], project_dir=root)
+            self.assertEqual(third[0]["status"], "skipped")
+            self.assertEqual(third[0]["reason"], "already up to date")
+
+    def test_materialize_output_only_hides_routine_working_skill_results(self) -> None:
+        results = [
+            {"skill_id": "skillager/working", "status": "materialized", "target": "/tmp/working", "reason": None},
+            {"skill_id": "skillager/working", "status": "skipped", "target": "/tmp/working", "reason": "already up to date"},
+            {"skill_id": "skillager/working", "status": "skipped", "target": "/tmp/working", "reason": "permission denied"},
+            {"skill_id": "project/demo", "status": "materialized", "target": "/tmp/demo", "reason": None},
+        ]
+        output = StringIO()
+        with redirect_stdout(output):
+            _print_materialize_results(results)
+        text = output.getvalue()
+        self.assertIn("skillager/working: skipped /tmp/working (permission denied)", text)
+        self.assertIn("project/demo: materialized /tmp/demo", text)
+        self.assertNotIn("already up to date", text)
 
     def test_materialize_uses_existing_agent_instruction_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
