@@ -39,10 +39,11 @@ from .collections import (
 )
 from .index import build_index, find_skill, load_index
 from .lookback import build_lookback, record_feedback, render_lookback
-from .materialize import TRUSTED_STATES, agent_note_paths, materialize_skills, materialize_working_skill
+from .materialize import AGENT_NOTE, TRUSTED_STATES, WORKING_SKILL_ID, agent_note_paths, materialize_skills, materialize_working_skill
 from .materialize import materialize_router
+from .materialize import target_dir, working_source_hash
 from .onboard import onboard_path
-from .paths import cache_root, catalog_state_root, state_root
+from .paths import cache_root, catalog_state_root, find_project_root, state_root
 from .render import render_skill
 from .review import apply_review_action, review_summary, selected_skills, setup_environment
 from .scan import scan_path
@@ -58,8 +59,8 @@ from .session import (
     redact_session,
     start_session,
 )
-from .simple_yaml import load_mapping
-from .trust import set_trust
+from .simple_yaml import YamlError, load_mapping
+from .trust import content_hash, set_trust
 from .update_check import check_for_update
 
 
@@ -113,6 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_setup_parser(sub)
     add_status_parser(sub)
+    add_handoff_parser(sub)
     add_collection_parser(sub)
     add_tag_parser(sub)
     add_project_parser(sub)
@@ -397,6 +399,34 @@ def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--json", action="store_true", help="Emit status as JSON.")
     p.add_argument("--full-json", action="store_true", help="Include verbose scope baseline details in JSON output.")
     p.set_defaults(func=cmd_status)
+
+
+def add_handoff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "handoff",
+        help="Read current Skillager state and print an agent handoff brief.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent(
+            """\
+            Report the current Skillager state for an agent without approving skills,
+            activating skills, or fixing materialized files. Handoff lists all relevant
+            conditions and chooses one highest-priority next action. It is read-only
+            except for completing pending collection trust migrations from earlier
+            collection refreshes.
+            """
+        ),
+        epilog=textwrap.dedent(
+            """\
+            Examples:
+              skillager handoff
+              skillager handoff --agent codex
+              skillager handoff --json
+            """
+        ),
+    )
+    p.add_argument("--agent", choices=["codex", "claude"], help="Agent target. Defaults to the detected agent or codex.")
+    p.add_argument("--json", action="store_true", help="Emit handoff data as JSON.")
+    p.set_defaults(func=cmd_handoff)
 
 
 def add_collection_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -942,6 +972,219 @@ def cmd_status(args: argparse.Namespace) -> int:
     else:
         _print_status(status)
     return 10 if args.exit_code and review_needed else 0
+
+
+def cmd_handoff(args: argparse.Namespace) -> int:
+    agent = args.agent or _detect_agent()
+    project_dir = find_project_root() or Path.cwd()
+    handoff = _build_handoff(root(args), catalog_root=catalog_root(args), project_dir=project_dir, agent=agent)
+    if args.json:
+        print(json.dumps(handoff, indent=2, sort_keys=True))
+    else:
+        _print_handoff(handoff)
+    return 0
+
+
+def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, agent: str) -> dict[str, Any]:
+    data = build_index(state_root, include_packages=True)
+    extra_skills = attached_tag_skills(state_root, catalog_root=catalog_root)
+    if extra_skills:
+        data["skills"] = [*data.get("skills", []), *extra_skills]
+    saved_scope = _load_status_scope(state_root)
+    scope_audience = saved_scope.get("audience") if saved_scope else None
+    include_global = bool(saved_scope.get("include_global")) if saved_scope else False
+    skills = selected_skills(data.get("skills", []), audience=scope_audience, include_global=include_global)
+    review_needed = _status_review_needed(skills, saved_scope=saved_scope)
+    attached_tags = load_project_tags(state_root).get("attached_tags", [])
+    materialized_router_tags = _materialized_router_tags(project_dir, agent=agent)
+    migration = collection_migration_summary(catalog_root)
+    lookback = _status_lookback_summary(state_root)
+    artifacts = _handoff_artifacts(project_dir, agent=agent)
+    state = {
+        "setup": {"needed": bool(review_needed), "unreviewed": len(review_needed)},
+        "migration": migration,
+        "artifacts": artifacts,
+        "lookback": lookback,
+        "attached_tags": attached_tags,
+        "unmaterialized_attached_tags": sorted(tag for tag in attached_tags if tag not in materialized_router_tags),
+        "unmaterialized_attached_tags_policy": "diagnostic only; materialize a router only after the user's goal makes that tag relevant",
+    }
+    next_step = _handoff_next(state, agent=agent)
+    return {
+        "schema": "skillager.handoff.v1",
+        "agent": agent,
+        "state": state,
+        "status": next_step["status"],
+        "next": next_step,
+    }
+
+
+def _detect_agent() -> str:
+    if os.environ.get("CLAUDE_SESSION_ID"):
+        return "claude"
+    if os.environ.get("CODEX_SESSION_ID"):
+        return "codex"
+    return "codex"
+
+
+def _handoff_artifacts(project_dir: Path, *, agent: str) -> dict[str, Any]:
+    notes = [_handoff_note_status(path) for path in agent_note_paths(project_dir, agents=[agent])]
+    working = _working_artifact_status(project_dir, agent=agent)
+    return {"project_notes": notes, "working_skill": working}
+
+
+def _handoff_note_status(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"path": str(path), "status": "missing"}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if "## Skillager" not in text:
+        return {"path": str(path), "status": "missing"}
+    if AGENT_NOTE not in text:
+        return {"path": str(path), "status": "stale"}
+    return {"path": str(path), "status": "present"}
+
+
+def _working_artifact_status(project_dir: Path, *, agent: str) -> dict[str, Any]:
+    target = target_dir(agent=agent, scope="project", skill={"id": WORKING_SKILL_ID}, project_dir=project_dir)
+    sidecar = target / "skillager.materialized.yaml"
+    skill_file = target / "SKILL.md"
+    result: dict[str, Any] = {"path": str(target)}
+    if not target.exists() or not skill_file.exists():
+        result["status"] = "missing"
+        return result
+    if not sidecar.exists():
+        result["status"] = "unmanaged"
+        return result
+    try:
+        data = load_mapping(sidecar)
+    except Exception:
+        result["status"] = "drift"
+        result["reason"] = "unreadable sidecar"
+        return result
+    if data.get("source_type") != "skillager-working":
+        result["status"] = "drift"
+        result["reason"] = "target is not Skillager Working"
+        return result
+    expected_hash = working_source_hash(agent)
+    if data.get("source_hash") != expected_hash:
+        result["status"] = "stale"
+        return result
+    materialized_hash = data.get("materialized_hash")
+    if not isinstance(materialized_hash, str) or content_hash(target) != materialized_hash:
+        result["status"] = "drift"
+        result["reason"] = "local customization"
+        return result
+    result["status"] = "present"
+    return result
+
+
+def _materialized_router_tags(project_dir: Path, *, agent: str) -> set[str]:
+    tags: set[str] = set()
+    for root_path in _project_skill_roots(project_dir).get(agent, []):
+        if not root_path.is_dir():
+            continue
+        for sidecar in root_path.glob("*/skillager.materialized.yaml"):
+            try:
+                data = load_mapping(sidecar)
+            except (OSError, UnicodeError, YamlError):
+                continue
+            if data.get("source_type") == "skillager-router" and data.get("tag"):
+                tags.add(str(data["tag"]))
+    return tags
+
+
+def _handoff_next(state: dict[str, Any], *, agent: str) -> dict[str, Any]:
+    migration = state.get("migration") or {}
+    migration_totals = migration.get("totals") or {}
+    if migration.get("pending") and (migration_totals.get("needs_review") or migration_totals.get("tag_needs_repair")):
+        return {
+            "status": "migration-review-needed",
+            "message": "Review collection ID migration details before using migrated collection skills.",
+            "command": "skillager status --migration-details",
+        }
+    if migration.get("pending"):
+        return {
+            "status": "migration-ack-needed",
+            "message": "Acknowledge the collection ID migration report after reviewing it.",
+            "command": "skillager status --ack-migration",
+        }
+    artifacts = state.get("artifacts") or {}
+    working = artifacts.get("working_skill") or {}
+    if working.get("status") == "unmanaged":
+        return {
+            "status": "manual-artifact-repair-needed",
+            "message": f"Move or remove unmanaged Skillager Working target before refreshing: {working.get('path')}",
+            "command": None,
+        }
+    setup = state.get("setup") or {}
+    if setup.get("needed"):
+        return {
+            "status": "setup-needed",
+            "message": "Ask the user to run `skillager setup` from this project directory before using Skillager-managed skills.",
+            "command": "skillager setup",
+        }
+    if _artifacts_need_attention(artifacts):
+        return {
+            "status": "artifact-attention-needed",
+            "message": f"Refresh Skillager's project handoff artifacts for {agent}.",
+            "command": "skillager setup",
+        }
+    lookback = state.get("lookback") or {}
+    if lookback.get("pending"):
+        return {
+            "status": "lookback-pending",
+            "message": "Ask the user whether to review Skillager lookback before starting.",
+            "command": "skillager lookback",
+        }
+    return {
+        "status": "ready",
+        "message": "Ask the user what they plan to do, then search approved metadata when a specialized skill may help.",
+        "command": None,
+    }
+
+
+def _artifacts_need_attention(artifacts: dict[str, Any]) -> bool:
+    notes = artifacts.get("project_notes") or []
+    if any(note.get("status") != "present" for note in notes):
+        return True
+    working = artifacts.get("working_skill") or {}
+    return working.get("status") != "present"
+
+
+def _print_handoff(handoff: dict[str, Any]) -> None:
+    state = handoff["state"]
+    print(_style("Skillager handoff complete", "bold"))
+    print()
+    print("State:")
+    setup = state["setup"]
+    setup_text = f"needed, {setup['unreviewed']} unreviewed skill(s)" if setup["needed"] else "clean"
+    print(f"  Setup: {setup_text}")
+    migration = state["migration"]
+    migration_text = "pending" if migration.get("pending") else "clean"
+    if migration.get("pending"):
+        totals = migration.get("totals", {})
+        migration_text += (
+            f", {totals.get('id_migrations', 0)} ID(s), "
+            f"{totals.get('needs_review', 0)} review, "
+            f"{totals.get('tag_needs_repair', 0)} tag repair"
+        )
+    print(f"  Migration: {migration_text}")
+    artifacts = state["artifacts"]
+    print(f"  Working skill: {artifacts['working_skill'].get('status')}")
+    note_statuses = ", ".join(f"{Path(note['path']).name}={note['status']}" for note in artifacts.get("project_notes", []))
+    print(f"  Project note: {note_statuses or 'missing'}")
+    lookback = state["lookback"]
+    print(f"  Lookback: {'pending' if lookback.get('pending') else 'none pending'}")
+    print(f"  Attached tags: {', '.join(state['attached_tags']) if state['attached_tags'] else 'none'}")
+    print(
+        "  Unmaterialized attached tags: "
+        f"{', '.join(state['unmaterialized_attached_tags']) if state['unmaterialized_attached_tags'] else 'none'}"
+    )
+    print()
+    print("Next:")
+    print(handoff["next"]["message"])
+    if handoff["next"].get("command"):
+        print(f"  {handoff['next']['command']}")
 
 
 def _compact_status(status: dict[str, Any]) -> dict[str, Any]:

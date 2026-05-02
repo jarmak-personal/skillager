@@ -634,6 +634,10 @@ def _working_skill(agent: str) -> dict[str, Any]:
 
 
 def _working_source_hash(agent: str) -> str:
+    return working_source_hash(agent)
+
+
+def working_source_hash(agent: str) -> str:
     return hashlib.sha256(render_working_skill(agent).encode("utf-8")).hexdigest()[:16]
 
 

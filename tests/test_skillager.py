@@ -15,7 +15,7 @@ from unittest.mock import patch
 from skillager.cli import _print_materialize_results, build_parser, main
 from skillager.index import build_index, load_index
 from skillager.lookback import build_lookback
-from skillager.materialize import _working_source_hash, materialize_working_skill, render_working_skill
+from skillager.materialize import materialize_working_skill, render_working_skill, working_source_hash
 from skillager.onboard import onboard_path
 from skillager.paths import find_project_root, state_root
 from skillager.scan import scan_path, scan_text
@@ -936,6 +936,96 @@ class SkillagerTests(unittest.TestCase):
                 ["personal/python/foo", "personal/writing/foo"],
             )
 
+    def test_handoff_prioritizes_migration_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "skills"
+            python = collection / "python" / "foo"
+            writing = collection / "writing" / "foo"
+            python.mkdir(parents=True)
+            writing.mkdir(parents=True)
+            (python / "SKILL.md").write_text("# Python Foo\n\nUse python foo.\n", encoding="utf-8")
+            (writing / "SKILL.md").write_text("# Writing Foo\n\nUse writing foo.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
+                (state / "collections" / "personal.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.collection-index.v1",
+                            "name": "personal",
+                            "path": str(collection),
+                            "skills": [
+                                {"id": "personal/foo", "root": str(python), "content_hash": content_hash(python)},
+                                {"id": "personal/foo", "root": str(writing), "content_hash": content_hash(writing)},
+                            ],
+                            "errors": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                (state / "tags.json").write_text(json.dumps({"tags": {"foo": ["personal/foo"]}}, indent=2) + "\n", encoding="utf-8")
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "refresh", "personal"]), 0)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["status"], "migration-review-needed")
+            self.assertEqual(data["next"]["command"], "skillager status --migration-details")
+
+    def test_handoff_routes_clean_migration_to_ack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "skills"
+            python = collection / "python" / "foo"
+            python.mkdir(parents=True)
+            (python / "SKILL.md").write_text("# Python Foo\n\nUse python foo.\n", encoding="utf-8")
+            digest = content_hash(python)
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
+                (state / "collections" / "personal.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.collection-index.v1",
+                            "name": "personal",
+                            "path": str(collection),
+                            "skills": [{"id": "personal/foo", "root": str(python), "content_hash": digest}],
+                            "errors": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                set_trust(state, "personal/foo", "reviewed", digest, {"type": "collection", "collection": "personal"})
+                (state / "tags.json").write_text(json.dumps({"tags": {"foo": ["personal/foo"]}}, indent=2) + "\n", encoding="utf-8")
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "refresh", "personal"]), 0)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["status"], "migration-ack-needed")
+            self.assertEqual(data["next"]["command"], "skillager status --ack-migration")
+            self.assertEqual(data["state"]["migration"]["totals"]["needs_review"], 0)
+            self.assertEqual(data["state"]["migration"]["totals"]["tag_needs_repair"], 0)
+
     def test_setup_source_collection_only_reviews_enabled_project_collections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1220,6 +1310,175 @@ class SkillagerTests(unittest.TestCase):
             self.assertIn("project/second: materialized", output.getvalue())
             self.assertIn("Next step", output.getvalue())
 
+    def test_handoff_reports_setup_needed_before_artifact_repairs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex"]), 0)
+            text = output.getvalue()
+            self.assertIn("Setup: needed, 1 unreviewed skill(s)", text)
+            self.assertIn("Working skill: missing", text)
+            self.assertIn("skillager setup", text)
+
+    def test_handoff_ready_when_working_skill_and_note_are_current(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                materialize_working_skill(agents=["codex"], project_dir=root)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["status"], "ready")
+            self.assertEqual(data["state"]["artifacts"]["working_skill"]["status"], "present")
+            self.assertEqual(data["next"]["command"], None)
+
+    def test_handoff_reports_stale_working_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                materialize_working_skill(agents=["codex"], project_dir=root)
+                sidecar = root / ".agents" / "skills" / "skillager-working" / "skillager.materialized.yaml"
+                data = loads(sidecar.read_text(encoding="utf-8"))
+                data["source_hash"] = "old-protocol"
+                sidecar.write_text("\n".join(f"{key}: {value}" for key, value in data.items()) + "\n", encoding="utf-8")
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            handoff = json.loads(output.getvalue())
+            self.assertEqual(handoff["status"], "artifact-attention-needed")
+            self.assertEqual(handoff["state"]["artifacts"]["working_skill"]["status"], "stale")
+            self.assertEqual(handoff["next"]["command"], "skillager setup")
+
+    def test_handoff_reports_missing_project_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                materialize_working_skill(agents=["codex"], project_dir=root)
+                (root / "AGENTS.md").unlink()
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            handoff = json.loads(output.getvalue())
+            self.assertEqual(handoff["status"], "artifact-attention-needed")
+            self.assertEqual(handoff["state"]["artifacts"]["project_notes"][0]["status"], "missing")
+            self.assertEqual(handoff["next"]["command"], "skillager setup")
+
+    def test_handoff_reports_unmanaged_working_skill_as_manual_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                materialize_working_skill(agents=["codex"], project_dir=root)
+                (root / ".agents" / "skills" / "skillager-working" / "skillager.materialized.yaml").unlink()
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            handoff = json.loads(output.getvalue())
+            self.assertEqual(handoff["status"], "manual-artifact-repair-needed")
+            self.assertEqual(handoff["state"]["artifacts"]["working_skill"]["status"], "unmanaged")
+            self.assertTrue(handoff["state"]["setup"]["needed"])
+            self.assertIsNone(handoff["next"]["command"])
+            self.assertIn("Move or remove unmanaged Skillager Working target", handoff["next"]["message"])
+
+    def test_handoff_reports_unmaterialized_attached_tags_without_blocking_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            skill_dir = collection / "gis"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# GIS\n\nUse GIS guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
+                materialize_working_skill(agents=["codex"], project_dir=root)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["status"], "ready")
+            self.assertEqual(data["state"]["attached_tags"], ["gis"])
+            self.assertEqual(data["state"]["unmaterialized_attached_tags"], ["gis"])
+            self.assertIn("diagnostic only", data["state"]["unmaterialized_attached_tags_policy"])
+
+    def test_handoff_prioritizes_lookback_over_unmaterialized_attached_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            skill_dir = collection / "gis"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# GIS\n\nUse GIS guidance.\n", encoding="utf-8")
+            lookback_report = {
+                "recommendations": [{"action": "materialize", "skill_id": "community/gis"}],
+                "observed_overlaps": [],
+                "candidate_session_count": 1,
+                "active_candidate_sessions": 0,
+            }
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
+                materialize_working_skill(agents=["codex"], project_dir=root)
+                output = StringIO()
+                with patch("skillager.cli.build_lookback", return_value=lookback_report), redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["status"], "lookback-pending")
+            self.assertEqual(data["next"]["command"], "skillager lookback")
+            self.assertEqual(data["state"]["unmaterialized_attached_tags"], ["gis"])
+
     def test_working_skill_refreshes_when_rendered_template_hash_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1228,7 +1487,7 @@ class SkillagerTests(unittest.TestCase):
                 first = materialize_working_skill(agents=["codex"], project_dir=root)
             self.assertEqual(first[0]["status"], "materialized")
             sidecar = loads((target / "skillager.materialized.yaml").read_text(encoding="utf-8"))
-            self.assertEqual(sidecar["source_hash"], _working_source_hash("codex"))
+            self.assertEqual(sidecar["source_hash"], working_source_hash("codex"))
             original = (target / "SKILL.md").read_text(encoding="utf-8")
             with patch("skillager.materialize.render_working_skill", return_value="# Skillager Working\n\nChanged protocol.\n"):
                 second = materialize_working_skill(agents=["codex"], project_dir=root)
