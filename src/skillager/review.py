@@ -5,50 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from .index import build_index, load_index
-from .trust import clear_trust, set_trust, trust_state
-
-
-def selected_skills(
-    skills: list[dict[str, Any]],
-    *,
-    skill_ids: list[str] | None = None,
-    source: str | None = None,
-    audience: str | None = None,
-    package: str | None = None,
-    activation: str | None = None,
-    include_blocked: bool = False,
-    include_global: bool = True,
-) -> list[dict[str, Any]]:
-    requested = set(skill_ids or [])
-    result = []
-    for skill in skills:
-        source_type = skill.get("source", {}).get("type")
-        if requested and skill["id"] not in requested:
-            continue
-        if skill.get("trust") == "blocked" and not include_blocked:
-            continue
-        if source and source_type != source:
-            continue
-        if not include_global and source is None and source_type == "global":
-            continue
-        if audience and not _matches_audience(skill, audience):
-            continue
-        if package and skill.get("package") != package and skill.get("source", {}).get("package") != package:
-            continue
-        if activation and skill.get("activation") != activation:
-            continue
-        result.append(skill)
-    return result
-
-
-def _matches_audience(skill: dict[str, Any], audience: str) -> bool:
-    requested = "dev" if audience in {"developer", "maintainer", "maintainers"} else audience
-    guess = skill.get("audience_guess", {}).get("audience")
-    if guess == requested:
-        return True
-    if guess and guess != "unknown":
-        return False
-    return requested in skill.get("audience", [])
+from .selection import select_visible_skills
+from .trust import clear_trust, make_lint_override, set_trust, trust_state
 
 
 def review_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
@@ -95,7 +53,11 @@ def apply_review_action(
     trust_state: str | None = None,
     block_high: bool = False,
     preserve_user_installed: bool = True,
+    override_lint: bool = False,
+    reason: str | None = None,
 ) -> dict[str, Any]:
+    if override_lint and not (reason or "").strip():
+        raise ValueError("--reason is required with --override-lint")
     changed: list[dict[str, str]] = []
     skipped: list[dict[str, str]] = []
     for skill in skills:
@@ -103,24 +65,31 @@ def apply_review_action(
         if preserve_user_installed and skill.get("trust_reason") == "user-installed":
             skipped.append({"skill_id": skill["id"], "reason": "already trusted as user-installed native skill"})
             continue
+        lint_override = None
+        if skill.get("trust") == "lint_blocked":
+            if override_lint:
+                lint_override = make_lint_override(reason or "", skill.get("lint") or {})
+            elif not block_high:
+                skipped.append({"skill_id": skill["id"], "reason": "lint-blocked; fix source or use --override-lint --reason"})
+                continue
         if block_high and risk == "high":
-            record = set_trust(state_root, skill["id"], "blocked", skill["content_hash"], skill["source"])
+            record = set_trust(state_root, skill["id"], "blocked", skill["content_hash"], skill["source"], lint=skill.get("lint"))
             changed.append({"skill_id": skill["id"], "state": record["state"]})
             continue
         if yolo:
-            record = set_trust(state_root, skill["id"], "reviewed", skill["content_hash"], skill["source"])
+            record = set_trust(state_root, skill["id"], "reviewed", skill["content_hash"], skill["source"], lint=skill.get("lint"), lint_override=lint_override)
             changed.append({"skill_id": skill["id"], "state": record["state"]})
             continue
         if trust_state:
             if risk == "high" and trust_state in {"trusted", "pinned"}:
                 skipped.append({"skill_id": skill["id"], "reason": "high-risk skills require individual review"})
                 continue
-            record = set_trust(state_root, skill["id"], trust_state, skill["content_hash"], skill["source"])
+            record = set_trust(state_root, skill["id"], trust_state, skill["content_hash"], skill["source"], lint=skill.get("lint"), lint_override=lint_override)
             changed.append({"skill_id": skill["id"], "state": record["state"]})
             continue
         if accept_low:
             if risk == "low":
-                record = set_trust(state_root, skill["id"], "reviewed", skill["content_hash"], skill["source"])
+                record = set_trust(state_root, skill["id"], "reviewed", skill["content_hash"], skill["source"], lint=skill.get("lint"), lint_override=lint_override)
                 changed.append({"skill_id": skill["id"], "state": record["state"]})
             else:
                 skipped.append({"skill_id": skill["id"], "reason": f"risk is {risk}"})
@@ -138,6 +107,7 @@ def setup_environment(
     activation: str | None = None,
     skill_ids: list[str] | None = None,
     include_blocked: bool = False,
+    include_lint_blocked: bool = False,
     include_global: bool = False,
     extra_skills: list[dict[str, Any]] | None = None,
     fresh: bool = False,
@@ -145,6 +115,8 @@ def setup_environment(
     trust_state: str | None = None,
     block_high: bool = False,
     yolo: bool = False,
+    override_lint: bool = False,
+    reason: str | None = None,
 ) -> dict[str, Any]:
     data = build_index(state_root, paths, include_packages=include_packages)
     if extra_skills:
@@ -152,7 +124,7 @@ def setup_environment(
     skipped_global = 0
     if not include_global and source is None:
         skipped_global = sum(1 for skill in data.get("skills", []) if skill.get("source", {}).get("type") == "global")
-    skills = selected_skills(
+    skills = select_visible_skills(
         data.get("skills", []),
         skill_ids=skill_ids,
         source=source,
@@ -160,6 +132,7 @@ def setup_environment(
         package=package,
         activation=activation,
         include_blocked=include_blocked,
+        include_lint_blocked=include_lint_blocked,
         include_global=include_global,
     )
     fresh_reset = 0
@@ -168,7 +141,7 @@ def setup_environment(
         data = load_index(state_root)
         if extra_skills:
             data["skills"] = [*data.get("skills", []), *extra_skills]
-        skills = selected_skills(
+        skills = select_visible_skills(
             data.get("skills", []),
             skill_ids=skill_ids,
             source=source,
@@ -176,6 +149,7 @@ def setup_environment(
             package=package,
             activation=activation,
             include_blocked=include_blocked,
+            include_lint_blocked=include_lint_blocked,
             include_global=include_global,
         )
     action = apply_review_action(
@@ -186,12 +160,14 @@ def setup_environment(
         trust_state=trust_state,
         block_high=block_high,
         preserve_user_installed=True,
+        override_lint=override_lint,
+        reason=reason,
     )
     refreshed = load_index(state_root)
     if extra_skills:
         extra_skills = _refresh_extra_skill_trust(state_root, extra_skills)
         refreshed["skills"] = [*refreshed.get("skills", []), *extra_skills]
-    selected = selected_skills(
+    selected = select_visible_skills(
         refreshed.get("skills", []),
         skill_ids=skill_ids,
         source=source,
@@ -199,6 +175,7 @@ def setup_environment(
         package=package,
         activation=activation,
         include_blocked=include_blocked or block_high,
+        include_lint_blocked=include_lint_blocked or override_lint,
         include_global=include_global,
     )
     return {
@@ -217,6 +194,6 @@ def _refresh_extra_skill_trust(state_root: Path, skills: list[dict[str, Any]]) -
     for skill in skills:
         item = dict(skill)
         if item.get("id") and item.get("content_hash"):
-            item["trust"] = trust_state(state_root, item["id"], item["content_hash"])
+            item["trust"] = trust_state(state_root, item["id"], item["content_hash"], lint=item.get("lint"))
         refreshed.append(item)
     return refreshed

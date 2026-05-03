@@ -21,22 +21,19 @@ your_package/
 
 ```yaml
 schema: skillager.skill.v1
-id: your-package/data-cleaning
-name: Data Cleaning
-summary: Use your-package APIs to clean tabular data.
-source:
-  type: python-package
 audience:
   - user
 activation:
   default: suggested
-entrypoint: SKILL.md
-safety:
-  min_trust: reviewed
-  allow_tools: false
+targets:
+  python_packages:
+    - name: your-package
+      versions: ">=1,<2"
 ```
 
-`skillager.yaml` is parsed with PyYAML `safe_load`. Keep metadata short and plain; put long agent-facing prose in `SKILL.md`.
+The manifest is intentionally structured-only. It cannot declare `id`, `name`, `summary`, `source`, `entrypoint`, `safety`, `triggers`, `domains`, `tools`, or `references`. Skillager derives identity from the package/path and from the reviewed `SKILL.md` body: simple `name`/`description` frontmatter when present, then heading/first sentence fallbacks.
+
+`skillager.yaml` uses a strict loader: one document, string keys, no duplicate keys, no anchors, no aliases, no merge keys, no custom tags, and a small file-size cap. Unknown keys lint-block the skill.
 
 ## Compatibility Metadata
 
@@ -55,8 +52,8 @@ or:
 compatibility:
   incompatible_with:
     - codex
-  warning:
-    codex: This workflow assumes a Claude-only command surface.
+  warnings:
+    codex: claude_only_paths
 ```
 
 For softer assumptions, prefer advisory metadata:
@@ -70,8 +67,8 @@ compatibility:
     writes_files: true
     env:
       - CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
-  warning:
-    codex: Use fewer parallel workers and adapt Claude-specific paths if needed.
+  warnings:
+    codex: parallel_subagents_unsupported
 ```
 
 Skillager may also infer compatibility warnings from inert text, such as Claude skill paths, Codex skill paths, agent-team language, file-writing workflows, shell command language, or agent-specific environment variables. Inferred warnings do not block approval, search, router materialization, or stub materialization.
@@ -89,8 +86,9 @@ This distinction matters because setup asks the user what audience they want bef
 - Do not request hidden prompts, developer messages, or system instructions.
 - Do not ask agents to read or reveal secrets.
 - Avoid shell execution unless the skill explicitly needs it.
-- If shell commands are expected, set `safety.allow_tools: true` and keep commands concrete.
-- Keep summaries accurate; router skills reuse author summaries instead of rewriting intent.
+- Shell-command guidance is always scanned. Authors cannot suppress scanner findings from `skillager.yaml`.
+- Keep the `SKILL.md` heading and first paragraph accurate; Skillager uses them for reviewed metadata.
+- Validate manifests with `skillager lint` before publishing.
 
 ## Test Locally
 

@@ -77,6 +77,8 @@ your_package/
 
 When a user installs your package, Skillager can discover those skills without importing your library. The user still reviews and approves them before any agent can activate them.
 
+`skillager.yaml` is optional and structured-only. Put prose in `SKILL.md`; manifests can declare audience, activation, compatibility constraints, and typed package targets, but not free-text identity, source, safety policy, or body paths.
+
 This lets a library ship:
 
 - user-facing skills for using the API well
@@ -90,6 +92,7 @@ See the [library author guide](docs/LIBRARY_AUTHORS.md) for metadata and packagi
 
 - Discovers skills from projects, `.venv`, installed packages, global agent dirs, and skill repos.
 - Scans full skill directories before approval.
+- Lint-blocks invalid manifests and requires an audited override before approval.
 - Tracks trust by skill ID and content hash.
 - Keeps search/list/show metadata safe and compact for agents.
 - Materializes only reviewed skills into Codex or Claude native skill directories.

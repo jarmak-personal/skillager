@@ -12,7 +12,9 @@ Projects may expose a first-party `skillager-working` skill. Treat it as the boo
 - Do not run `skillager setup`, `review`, `trust`, or `block` unless the user asked for setup or approval changes.
 - Do not run `skillager materialize` until you have asked what the user plans to do and can justify the narrow router, stub, or native exposure.
 - Do not run `skillager activate` or `skillager show --content` for a skill that is not already reviewed, trusted, or pinned.
+- Do not activate, show content for, or materialize `lint_blocked` skills. Ask the user to fix the source or run an audited override.
 - Do not use `--force` unless the user explicitly instructs you to override Skillager's gate.
+- Do not treat `--include-lint-blocked` as approval. It is a read-only diagnostic visibility flag.
 - Prefer `--json` when parsing output.
 - Do not search Skillager on every user message. Search only when the task/domain changes, specialized help is likely useful, you are unsure how to proceed and an approved skill may contain the right workflow, handoff state changed, or the user asks about skills.
 - Once you choose a native skill or router path for a task, keep using it until the task changes.
@@ -24,6 +26,7 @@ These commands do not expose full skill bodies. In a project, normal `list`, `se
 ```bash
 skillager handoff --json
 skillager status --json
+skillager lint --json
 skillager list --json
 skillager list --no-packages --json
 skillager search "<query>" --json
@@ -47,6 +50,8 @@ Project-aware JSON includes:
 - `compatibility`: negative-only compatibility metadata. Missing metadata means "assume usable." `problem` is set only when the skill explicitly excludes the requested `--agent`.
 
 Do not treat `trust_reason=user-installed` as suspicious by itself. The user installed that native skill. Still respect scanner findings and high-risk warnings.
+
+`lint_blocked` means Skillager rejected manifest or structure metadata before approval. Default metadata commands hide lint-blocked skills; `status`, `handoff`, and `lint` surface safe finding summaries so the user can repair or override them. Lint output is safe to inspect because it does not include skill bodies or raw manifest contents.
 
 ## Compatibility
 
@@ -123,6 +128,7 @@ skillager setup
 skillager setup --source collection --trust-all
 skillager review <skill-id> --trust-selected reviewed
 skillager trust <skill-id>
+skillager trust <skill-id> --override-lint --reason "<why this is acceptable>"
 skillager block <skill-id>
 skillager materialize --agent codex --scope project
 skillager activate <skill-id>
@@ -147,4 +153,12 @@ Tell the user exactly what happened and ask them to run setup:
 
 ```text
 Skillager reports new or changed skills. Please run `skillager setup` from this project directory before I use Skillager-managed skills.
+```
+
+## If Handoff Reports Lint-Blocked Skills
+
+Tell the user that Skillager found blocking manifest lint findings and do not use those skills:
+
+```text
+Skillager reports lint-blocked skills. Please run `skillager lint` and fix the source, or approve a specific skill with `--override-lint --reason` after review.
 ```

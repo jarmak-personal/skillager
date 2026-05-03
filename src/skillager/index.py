@@ -6,6 +6,7 @@ from typing import Any
 
 from .audience import classify_audience
 from .discovery import discover
+from .lint import lint_skill
 from .scan import scan_path
 from .trust import content_hash, trust_state
 
@@ -19,10 +20,13 @@ def build_index(state_root: Path, paths: list[Path] | None = None, *, include_pa
     entries = []
     for skill in skills:
         digest = content_hash(skill.root)
-        scan = scan_path(skill.root, allow_tools=bool(skill.safety.get("allow_tools", False)))
-        trust = trust_state(state_root, skill.id, digest)
+        scan = scan_path(skill.root, allow_tools=False)
+        lint = skill.lint if getattr(skill, "lint", None) else lint_skill(skill)
+        trust = trust_state(state_root, skill.id, digest, lint=lint)
         entry = skill.to_index(digest, scan, trust)
-        entry["audience_guess"] = classify_audience(skill)
+        entry["lint"] = lint
+        if not entry.get("quarantined"):
+            entry["audience_guess"] = classify_audience(skill)
         native = _native_info(entry)
         if native:
             entry["native"] = native
@@ -42,7 +46,7 @@ def load_index(state_root: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     for skill in data.get("skills", []):
         if skill.get("id") and skill.get("content_hash"):
-            skill["trust"] = trust_state(state_root, skill["id"], skill["content_hash"])
+            skill["trust"] = trust_state(state_root, skill["id"], skill["content_hash"], lint=skill.get("lint"))
             _apply_user_installed_trust(skill)
     return data
 
@@ -86,6 +90,8 @@ def _apply_user_installed_trust(skill: dict[str, Any]) -> None:
     if native.get("managed"):
         return
     if skill.get("trust") != "discovered":
+        return
+    if skill.get("lint", {}).get("status") == "blocked":
         return
     skill["trust"] = "trusted"
     skill["trust_reason"] = "user-installed"

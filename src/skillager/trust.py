@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import fnmatch
 import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .lint import blocking_findings, valid_lint_override
 from .schema import TRUST_STATES
 
 DEFAULT_HASH_EXCLUDES = {
@@ -74,29 +76,57 @@ def save_trust(state_root: Path, data: dict[str, Any]) -> None:
     trust_path(state_root).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def trust_state(state_root: Path, skill_id: str, current_hash: str) -> str:
+def trust_state(state_root: Path, skill_id: str, current_hash: str, *, lint: dict[str, Any] | None = None) -> str:
     record = load_trust(state_root).get("skills", {}).get(skill_id)
+    lint_blocked = bool(blocking_findings(lint))
     if not record:
-        return "discovered"
+        return "lint_blocked" if lint_blocked else "discovered"
     state = record.get("state", "discovered")
+    if record.get("content_hash") and record.get("content_hash") != current_hash:
+        return "lint_blocked" if lint_blocked else "discovered"
+    if lint_blocked and not valid_lint_override(record, lint):
+        return "lint_blocked"
     if state == "blocked":
         return "blocked"
-    if record.get("content_hash") and record.get("content_hash") != current_hash:
-        return "discovered"
     return state if state in TRUST_STATES else "discovered"
 
 
-def set_trust(state_root: Path, skill_id: str, state: str, current_hash: str, source: dict[str, Any]) -> dict[str, Any]:
-    if state not in TRUST_STATES - {"discovered"}:
+def set_trust(
+    state_root: Path,
+    skill_id: str,
+    state: str,
+    current_hash: str,
+    source: dict[str, Any],
+    *,
+    lint: dict[str, Any] | None = None,
+    lint_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if state not in TRUST_STATES - {"discovered", "lint_blocked"}:
         raise ValueError(f"invalid trust state: {state}")
+    if state in {"reviewed", "trusted", "pinned"} and blocking_findings(lint) and not lint_override:
+        raise ValueError("lint-blocked skills require --override-lint --reason")
     data = load_trust(state_root)
-    data.setdefault("skills", {})[skill_id] = {
+    record: dict[str, Any] = {
         "state": state,
         "content_hash": current_hash,
         "source": source,
     }
+    if lint_override:
+        record["lint_override"] = lint_override
+    data.setdefault("skills", {})[skill_id] = record
     save_trust(state_root, data)
     return data["skills"][skill_id]
+
+
+def make_lint_override(reason: str, lint: dict[str, Any]) -> dict[str, Any]:
+    reason = reason.strip()
+    if not reason:
+        raise ValueError("--reason is required with --override-lint")
+    return {
+        "reason": reason,
+        "at": datetime.now(timezone.utc).isoformat(),
+        "findings": blocking_findings(lint),
+    }
 
 
 def clear_trust(state_root: Path, skill_ids: list[str]) -> int:

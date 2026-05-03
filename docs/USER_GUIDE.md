@@ -32,10 +32,32 @@ Setup does not materialize every approved skill by default. Approval means a ski
 - `trusted`: stronger user trust for recurring use.
 - `pinned`: approved for an exact content hash.
 - `blocked`: hidden from normal search, activation, and materialization.
+- `lint_blocked`: manifest or structure failed a blocking lint rule; hidden from normal list/search/show/materialize flows until fixed or explicitly overridden.
 
 Agents must not activate or use `discovered` skills unless the user explicitly overrides the gate.
+Agents must not activate or use `lint_blocked` skills. `--force` does not bypass this state.
 
-Manually installed native skills are treated as user-installed. If you place a skill directly in a project or global agent skill directory, Skillager marks it effectively trusted with `trust_reason=user-installed`, scans it, and reports high-risk findings as warnings rather than disabling it automatically.
+Manually installed native skills are treated as user-installed only when manifest lint passes. If you place a skill directly in a project or global agent skill directory, Skillager marks it effectively trusted with `trust_reason=user-installed`, scans it, and reports high-risk findings as warnings rather than disabling it automatically.
+
+## Manifest Lint
+
+`skillager.yaml` is structured metadata only. Skill identity and searchable prose come from `SKILL.md`, not from manifest free text.
+
+Use `skillager lint` to inspect safe lint findings:
+
+```bash
+skillager lint
+skillager lint <skill-id>
+skillager lint --json
+```
+
+Lint output reports finding codes, fields, and safe details. It does not print skill bodies or raw manifest contents. Fix lint-blocked manifests when possible. To approve one anyway, use an explicit audited override:
+
+```bash
+skillager trust <skill-id> --override-lint --reason "Reviewed manifest and accepted the finding"
+```
+
+The override is tied to the current content hash and finding identities. Content changes or new blocking lint findings require a new review.
 
 ## Useful Commands
 
@@ -47,6 +69,7 @@ skillager setup --summary-json
 skillager setup --source collection --trust-all
 skillager review --summary
 skillager review <skill-id> --trust-selected reviewed
+skillager lint
 skillager block <skill-id>
 skillager materialize --agent codex --scope project
 skillager materialize --agent claude --scope project
@@ -68,6 +91,8 @@ Collection repositories are catalog inventory. `skillager setup --source collect
 Use `skillager materialize` directly when you already know a reviewed skill or tag should be exposed to the agent. Project materialization also refreshes the `skillager-working` bootstrap skill.
 
 Use `--mode stub` for skills you want visible by name without loading the full skill body into every session. A stub contains only the skill summary and an activation command; the full body still comes through Skillager's approval gate. After setup, Skillager prints numbered approved-but-hidden stub candidates so you can say “please stub 1, 5, 8.”
+
+`skillager onboard <path>` can add a minimal structured `skillager.yaml` to existing skill directories. It records audience and activation metadata only; identity and searchable prose remain derived from `SKILL.md` and path/source provenance.
 
 ## Lookback
 

@@ -9,7 +9,7 @@ from typing import Iterable
 from urllib.parse import unquote, urlparse
 
 from .paths import environment_roots, find_project_root, venv_site_packages
-from .schema import SchemaError, Skill, load_skill_from_dir
+from .schema import QuarantinedSkill, SchemaError, Skill, load_skill_from_dir, quarantine_skill_from_dir
 
 
 def project_skill_roots(root: Path, source: dict[str, str]) -> list[tuple[Path, dict[str, str]]]:
@@ -41,8 +41,11 @@ def default_source_roots(project_root: Path | None = None) -> list[tuple[Path, d
     return roots
 
 
-def discover(paths: Iterable[Path] | None = None, *, include_packages: bool = True) -> tuple[list[Skill], list[dict[str, str]]]:
-    skills: list[Skill] = []
+IndexableSkill = Skill | QuarantinedSkill
+
+
+def discover(paths: Iterable[Path] | None = None, *, include_packages: bool = True) -> tuple[list[IndexableSkill], list[dict[str, str]]]:
+    skills: list[IndexableSkill] = []
     errors: list[dict[str, str]] = []
     if paths is None:
         roots = default_source_roots()
@@ -53,6 +56,9 @@ def discover(paths: Iterable[Path] | None = None, *, include_packages: bool = Tr
             try:
                 skills.append(load_skill_from_dir(skill_dir, source))
             except (SchemaError, OSError, ValueError) as exc:
+                quarantined = quarantine_skill_from_dir(skill_dir, source, exc)
+                if quarantined:
+                    skills.append(quarantined)
                 errors.append({"path": str(skill_dir), "error": str(exc)})
     if include_packages:
         package_skills, package_errors = discover_package_skills()
@@ -61,8 +67,8 @@ def discover(paths: Iterable[Path] | None = None, *, include_packages: bool = Tr
     return _dedupe(skills), errors
 
 
-def discover_package_skills() -> tuple[list[Skill], list[dict[str, str]]]:
-    skills: list[Skill] = []
+def discover_package_skills() -> tuple[list[IndexableSkill], list[dict[str, str]]]:
+    skills: list[IndexableSkill] = []
     errors: list[dict[str, str]] = []
     seen_dirs: set[Path] = set()
     project_root = find_project_root()
@@ -77,6 +83,9 @@ def discover_package_skills() -> tuple[list[Skill], list[dict[str, str]]]:
             try:
                 skills.append(load_skill_from_dir(skill_dir, {"type": "python-package", "package": name, "version": version, "environment": environment}))
             except (SchemaError, OSError, ValueError) as exc:
+                quarantined = quarantine_skill_from_dir(skill_dir, {"type": "python-package", "package": name, "version": version, "environment": environment}, exc)
+                if quarantined:
+                    skills.append(quarantined)
                 errors.append({"path": str(skill_dir), "error": str(exc)})
         editable_root = _editable_source_root(dist)
         if editable_root:
@@ -96,6 +105,9 @@ def discover_package_skills() -> tuple[list[Skill], list[dict[str, str]]]:
                     try:
                         skills.append(load_skill_from_dir(skill_dir, root_source))
                     except (SchemaError, OSError, ValueError) as exc:
+                        quarantined = quarantine_skill_from_dir(skill_dir, root_source, exc)
+                        if quarantined:
+                            skills.append(quarantined)
                         errors.append({"path": str(skill_dir), "error": str(exc)})
     for site_packages in _site_package_paths(project_root):
         for skill_dir in _package_skill_dirs(site_packages):
@@ -105,6 +117,10 @@ def discover_package_skills() -> tuple[list[Skill], list[dict[str, str]]]:
             try:
                 skills.append(load_skill_from_dir(skill_dir, {"type": "python-package", "package": package, "version": None, "environment": str(site_packages)}))
             except (SchemaError, OSError, ValueError) as exc:
+                source = {"type": "python-package", "package": package, "version": None, "environment": str(site_packages)}
+                quarantined = quarantine_skill_from_dir(skill_dir, source, exc)
+                if quarantined:
+                    skills.append(quarantined)
                 errors.append({"path": str(skill_dir), "error": str(exc)})
     return skills, errors
 
@@ -186,14 +202,15 @@ def _is_materialized_skill(root: Path) -> bool:
     return (root / "skillager.materialized.yaml").exists()
 
 
-def _dedupe(skills: list[Skill]) -> list[Skill]:
+def _dedupe(skills: list[IndexableSkill]) -> list[IndexableSkill]:
     seen_paths: set[Path] = set()
     seen_ids: set[str] = set()
-    result: list[Skill] = []
+    result: list[IndexableSkill] = []
     for skill in skills:
-        if skill.entrypoint in seen_paths:
+        unique_path = skill.entrypoint or skill.root
+        if unique_path in seen_paths:
             continue
-        seen_paths.add(skill.entrypoint)
+        seen_paths.add(unique_path)
         skill_id = skill.id
         if skill_id in seen_ids:
             base_id = _with_source_suffix(skill.id, _source_suffix(skill))

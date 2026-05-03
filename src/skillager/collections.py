@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from .audience import classify_audience
+from .lint import lint_skill
 from .scan import scan_path
-from .schema import SchemaError, Skill, load_skill_from_dir
+from .schema import QuarantinedSkill, SchemaError, Skill, load_skill_from_dir, quarantine_skill_from_dir
 from .search import search as search_skills
+from .selection import select_visible_skills
 from .trust import content_hash, load_trust, save_trust, trust_state
 
 COLLECTION_MIGRATIONS_SCHEMA = "skillager.collection-migrations.v1"
@@ -102,7 +104,22 @@ def refresh_collection(state_root: Path, name: str) -> dict[str, Any]:
     return data
 
 
-def collection_skills(state_root: Path, name: str | None = None, *, trust_root: Path | None = None) -> list[dict[str, Any]]:
+def select_collection_skills(
+    state_root: Path,
+    name: str | None = None,
+    *,
+    trust_root: Path | None = None,
+    include_blocked: bool = False,
+    include_lint_blocked: bool = False,
+) -> list[dict[str, Any]]:
+    return select_visible_skills(
+        _collection_skills(state_root, name, trust_root=trust_root),
+        include_blocked=include_blocked,
+        include_lint_blocked=include_lint_blocked,
+    )
+
+
+def _collection_skills(state_root: Path, name: str | None = None, *, trust_root: Path | None = None) -> list[dict[str, Any]]:
     names = [_slug(name)] if name else sorted(load_collections(state_root).get("collections", {}))
     trust_root = trust_root or state_root
     skills: list[dict[str, Any]] = []
@@ -111,7 +128,7 @@ def collection_skills(state_root: Path, name: str | None = None, *, trust_root: 
         for skill in data.get("skills", []):
             skill = dict(skill)
             if skill.get("id") and skill.get("content_hash"):
-                skill["trust"] = trust_state(trust_root, skill["id"], skill["content_hash"])
+                skill["trust"] = trust_state(trust_root, skill["id"], skill["content_hash"], lint=skill.get("lint"))
             skills.append(skill)
     return skills
 
@@ -122,13 +139,25 @@ def search_collection(
     query: str,
     *,
     include_blocked: bool = False,
+    include_lint_blocked: bool = False,
     trust_root: Path | None = None,
 ) -> list[dict[str, Any]]:
-    return search_skills(collection_skills(state_root, name, trust_root=trust_root), query, include_blocked=include_blocked)
+    return search_skills(
+        select_collection_skills(
+            state_root,
+            name,
+            trust_root=trust_root,
+            include_blocked=include_blocked,
+            include_lint_blocked=include_lint_blocked,
+        ),
+        query,
+        include_blocked=include_blocked,
+        include_lint_blocked=include_lint_blocked,
+    )
 
 
-def find_collection_skill(state_root: Path, skill_id: str, *, trust_root: Path | None = None) -> dict[str, Any]:
-    for skill in collection_skills(state_root, trust_root=trust_root):
+def _find_collection_skill(state_root: Path, skill_id: str, *, trust_root: Path | None = None) -> dict[str, Any]:
+    for skill in _collection_skills(state_root, trust_root=trust_root):
         if skill.get("id") == skill_id:
             return skill
     raise KeyError(f"collection skill not found: {skill_id}")
@@ -156,7 +185,7 @@ def create_tag(state_root: Path, tag: str) -> dict[str, Any]:
 
 def add_tag_skill(state_root: Path, tag: str, skill_id: str) -> dict[str, Any]:
     tag = _slug(tag)
-    find_collection_skill(state_root, skill_id)
+    _find_collection_skill(state_root, skill_id)
     data = load_tags(state_root)
     skills = data.setdefault("tags", {}).setdefault(tag, [])
     if skill_id not in skills:
@@ -175,7 +204,7 @@ def set_tag_skills(
     source_collection: str | None = None,
 ) -> dict[str, Any]:
     tag = _slug(tag)
-    valid_ids = {skill["id"] for skill in collection_skills(state_root)}
+    valid_ids = {skill["id"] for skill in _collection_skills(state_root)}
     missing = sorted(skill_id for skill_id in skill_ids if skill_id not in valid_ids)
     if missing:
         hint = f" for collection {source_collection}" if source_collection else ""
@@ -207,12 +236,27 @@ def remove_tag_skill(state_root: Path, tag: str, skill_id: str) -> dict[str, Any
     return {"tag": tag, "skills": skills}
 
 
-def tag_skills(state_root: Path, tag: str, *, trust_root: Path | None = None) -> list[dict[str, Any]]:
+def select_tag_skills(
+    state_root: Path,
+    tag: str,
+    *,
+    trust_root: Path | None = None,
+    include_blocked: bool = False,
+    include_lint_blocked: bool = False,
+) -> list[dict[str, Any]]:
+    return select_visible_skills(
+        _tag_skills(state_root, tag, trust_root=trust_root),
+        include_blocked=include_blocked,
+        include_lint_blocked=include_lint_blocked,
+    )
+
+
+def _tag_skills(state_root: Path, tag: str, *, trust_root: Path | None = None) -> list[dict[str, Any]]:
     tag = _slug(tag)
     if trust_root:
         apply_collection_trust_migrations(trust_root, state_root)
     ids = set(load_tags(state_root).get("tags", {}).get(tag, []))
-    return [skill for skill in collection_skills(state_root, trust_root=trust_root) if skill.get("id") in ids]
+    return [skill for skill in _collection_skills(state_root, trust_root=trust_root) if skill.get("id") in ids]
 
 
 def load_project_tags(state_root: Path) -> dict[str, Any]:
@@ -332,13 +376,27 @@ def detach_project_tag(state_root: Path, tag: str) -> dict[str, Any]:
     return data
 
 
-def attached_tag_skills(state_root: Path, *, catalog_root: Path | None = None) -> list[dict[str, Any]]:
+def select_attached_tag_skills(
+    state_root: Path,
+    *,
+    catalog_root: Path | None = None,
+    include_blocked: bool = False,
+    include_lint_blocked: bool = False,
+) -> list[dict[str, Any]]:
+    return select_visible_skills(
+        _attached_tag_skills(state_root, catalog_root=catalog_root),
+        include_blocked=include_blocked,
+        include_lint_blocked=include_lint_blocked,
+    )
+
+
+def _attached_tag_skills(state_root: Path, *, catalog_root: Path | None = None) -> list[dict[str, Any]]:
     catalog_root = catalog_root or state_root
     apply_collection_trust_migrations(state_root, catalog_root)
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for tag in load_project_tags(state_root).get("attached_tags", []):
-        for skill in tag_skills(catalog_root, tag, trust_root=state_root):
+        for skill in _tag_skills(catalog_root, tag, trust_root=state_root):
             if skill["id"] in seen:
                 continue
             item = dict(skill)
@@ -356,12 +414,25 @@ def _index_collection_skills(state_root: Path, name: str, root: Path) -> tuple[l
             source = {"type": "collection", "collection": name, "path": str(root)}
             skill = _collection_skill(load_skill_from_dir(skill_dir, source), collection=name, collection_root=root)
             digest = content_hash(skill.root)
-            scan = scan_path(skill.root, allow_tools=bool(skill.safety.get("allow_tools", False)))
-            trust = trust_state(state_root, skill.id, digest)
+            scan = scan_path(skill.root, allow_tools=False)
+            lint = lint_skill(skill)
+            trust = trust_state(state_root, skill.id, digest, lint=lint)
             entry = skill.to_index(digest, scan, trust)
+            entry["lint"] = lint
             entry["audience_guess"] = classify_audience(skill)
             skills.append(entry)
         except (SchemaError, OSError, ValueError) as exc:
+            source = {"type": "collection", "collection": name, "path": str(root)}
+            quarantined = quarantine_skill_from_dir(skill_dir, source, exc)
+            if quarantined:
+                try:
+                    skill = _collection_quarantined(quarantined, collection=name, collection_root=root)
+                except ValueError:
+                    skill = quarantined
+                digest = content_hash(skill.root)
+                scan = scan_path(skill.root, allow_tools=False)
+                trust = trust_state(state_root, skill.id, digest, lint=skill.lint)
+                skills.append(skill.to_index(digest, scan, trust))
             errors.append({"path": str(skill_dir), "error": str(exc)})
     skills.sort(key=lambda item: item["id"])
     return skills, errors
@@ -372,6 +443,13 @@ def _collection_skill(skill: Skill, *, collection: str, collection_root: Path) -
     source = dict(skill.source)
     source["collection"] = collection
     return replace(skill, id=f"{collection}/{relative_id}", source=source, package=collection)
+
+
+def _collection_quarantined(skill: QuarantinedSkill, *, collection: str, collection_root: Path) -> QuarantinedSkill:
+    relative_id = _collection_relative_id(skill.root, collection_root, root_leaf=skill.id.rsplit("/", 1)[-1])
+    source = dict(skill.source)
+    source["collection"] = collection
+    return replace(skill, id=f"{collection}/{relative_id}", source=source)
 
 
 def _load_or_refresh_collection_index(state_root: Path, name: str) -> dict[str, Any]:
@@ -429,7 +507,11 @@ def _collection_relative_id(skill_root: Path, collection_root: Path, *, root_lea
 
 
 def _id_part(value: str) -> str:
-    return value.strip().replace(" ", "-").lower()
+    slug = "".join(char if char.isalnum() else "-" for char in value.lower()).strip("-")
+    slug = "-".join(part for part in slug.split("-") if part)
+    if not slug or len(slug) > 64:
+        raise ValueError("collection path component cannot form a bounded slug")
+    return slug
 
 
 def _migrate_collection_references(

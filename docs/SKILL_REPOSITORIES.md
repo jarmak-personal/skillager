@@ -22,9 +22,11 @@ skillager collection enable community
 skillager setup --source collection
 ```
 
-`collection enable` creates or updates a reusable catalog tag with the collection's skills and attaches that tag to the current project. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path. For untrusted repositories, use the normal review flow.
+`collection enable` creates or updates a reusable catalog tag with the collection's visible skills and attaches that tag to the current project. Blocked and lint-blocked skills are not added by the default enable flow. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path. For untrusted repositories, use the normal review flow.
 
 `setup --source collection` reviews collection skills attached to the current project. Registered collections that have not been enabled or attached stay as catalog inventory.
+
+Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager lint` or `skillager collection show <skill-id> --include-lint-blocked` to inspect them without printing hostile manifest contents.
 
 ## Curate With Tags
 
@@ -39,6 +41,7 @@ skillager tag show gis
 ```
 
 Tags live in the reusable user catalog by default.
+Tag show/search commands hide lint-blocked skills unless you pass `--include-lint-blocked` for diagnostics. That flag only changes read-only visibility; it never approves or exposes a skill.
 
 ## Attach Tags To A Project
 
@@ -62,7 +65,7 @@ skillager show community/gis-domain --json
 skillager list --json
 ```
 
-`skillager collection search/show` remains useful for catalog management and debugging.
+`skillager collection search/show` remains useful for catalog management and debugging. Use `--include-lint-blocked` only when diagnosing rejected collection entries.
 
 ## Router Mode
 

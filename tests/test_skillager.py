@@ -15,7 +15,7 @@ from unittest.mock import patch
 from skillager.cli import _print_materialize_results, build_parser, main
 from skillager.index import build_index, load_index
 from skillager.lookback import build_lookback
-from skillager.materialize import materialize_working_skill, render_working_skill, working_source_hash
+from skillager.materialize import materialize_skills, materialize_working_skill, render_working_skill, working_source_hash
 from skillager.onboard import onboard_path
 from skillager.paths import find_project_root, state_root
 from skillager.scan import scan_path, scan_text
@@ -194,7 +194,7 @@ class SkillagerTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SchemaError, "entrypoint must stay inside"):
+            with self.assertRaisesRegex(SchemaError, "unknown manifest key"):
                 load_skill_from_dir(skill_dir, {"type": "project"})
 
     def test_show_content_requires_reviewed_skill(self) -> None:
@@ -218,6 +218,137 @@ class SkillagerTests(unittest.TestCase):
                 self.assertEqual(main(["show", "project/demo", "--content"]), 2)
             self.assertNotIn("Secret unreviewed body", stdout.getvalue())
             self.assertIn("not available until reviewed", stderr.getvalue())
+
+    def test_invalid_manifest_is_lint_blocked_until_audited_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                "schema: skillager.skill.v1\nsummary: hostile manifest bait\naudience:\n  - user\nactivation:\n  default: manual\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                data = build_index(state, include_packages=False)
+                self.assertEqual(data["skills"][0]["trust"], "lint_blocked")
+                self.assertEqual(data["skills"][0]["lint"]["findings"][0]["code"], "unknown_key")
+                self.assertEqual(data["skills"][0]["lint"]["findings"][0]["rule_key"], "unknown_key:v1")
+
+                search_output = StringIO()
+                with redirect_stdout(search_output):
+                    self.assertEqual(main(["search", "hostile", "--no-session-record", "--json"]), 0)
+                self.assertEqual(json.loads(search_output.getvalue()), [])
+
+                trust_error = StringIO()
+                with redirect_stderr(trust_error):
+                    self.assertEqual(main(["trust", "project/demo"]), 2)
+                self.assertIn("override-lint", trust_error.getvalue())
+
+                activate_error = StringIO()
+                with redirect_stderr(activate_error):
+                    self.assertEqual(main(["activate", "project/demo"]), 2)
+                self.assertIn("lint-blocked", activate_error.getvalue())
+
+                lint_output = StringIO()
+                with redirect_stdout(lint_output):
+                    self.assertEqual(main(["lint", "project/demo", "--json"]), 0)
+                lint_report = json.loads(lint_output.getvalue())[0]
+                self.assertEqual(lint_report["lint"]["status"], "blocked")
+                self.assertNotIn("hostile manifest bait", lint_output.getvalue())
+
+                self.assertEqual(main(["trust", "project/demo", "--override-lint", "--reason", "local test fixture"]), 0)
+                trusted = load_index(state)["skills"][0]
+                self.assertEqual(trusted["trust"], "reviewed")
+                trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
+                self.assertEqual(trust_log["skills"]["project/demo"]["lint_override"]["reason"], "local test fixture")
+
+    def test_lint_output_sanitizes_author_controlled_manifest_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                'schema: skillager.skill.v1\n"reset; rm -rf /": hostile manifest bait\naudience:\n  - user\nactivation:\n  default: manual\n',
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                data = build_index(state, include_packages=False)
+                finding = data["skills"][0]["lint"]["findings"][0]
+                self.assertEqual(finding["field"], "skillager.yaml")
+                self.assertEqual(finding["detail"], "contains unknown manifest field")
+                self.assertEqual(finding["rule_key"], "unknown_key:v1")
+
+                lint_output = StringIO()
+                with redirect_stdout(lint_output):
+                    self.assertEqual(main(["lint", "project/demo", "--json"]), 0)
+                text = lint_output.getvalue()
+                self.assertNotIn("reset; rm -rf /", text)
+                self.assertNotIn("hostile manifest bait", text)
+
+    def test_lint_output_sanitizes_strict_yaml_parse_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                '"reset; rm -rf /": one\n"reset; rm -rf /": two\n',
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                data = build_index(state, include_packages=False)
+                finding = data["skills"][0]["lint"]["findings"][0]
+                self.assertEqual(finding["field"], "skillager.yaml")
+                self.assertEqual(finding["detail"], "skillager.yaml failed strict manifest parsing")
+
+                lint_output = StringIO()
+                with redirect_stdout(lint_output):
+                    self.assertEqual(main(["lint", "project/demo", "--json"]), 0)
+                self.assertNotIn("reset; rm -rf /", lint_output.getvalue())
+
+    def test_search_does_not_match_path_derived_id_as_free_text(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "dataframe-bait"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Weather Help\n\nUse weather guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                build_index(state, include_packages=False)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["search", "dataframe", "--no-session-record", "--json"]), 0)
+                self.assertEqual(json.loads(output.getvalue()), [])
+
+                exact = StringIO()
+                with redirect_stdout(exact):
+                    self.assertEqual(main(["search", "project/dataframe-bait", "--no-session-record", "--json"]), 0)
+                self.assertEqual(json.loads(exact.getvalue())[0]["id"], "project/dataframe-bait")
 
     def test_setup_rejects_incompatible_json_flags_before_trust_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -520,6 +651,54 @@ class SkillagerTests(unittest.TestCase):
                 self.assertNotIn("availability", collection_data)
                 self.assertNotIn("exposure", collection_data)
 
+    def test_collection_lint_blocked_entries_are_diagnostic_only_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            good = collection / "gis-domain"
+            bad = collection / "bad"
+            good.mkdir(parents=True)
+            bad.mkdir(parents=True)
+            (good / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (bad / "SKILL.md").write_text("# Bad\n\nUse ordinary bad fixture guidance.\n", encoding="utf-8")
+            (bad / "skillager.yaml").write_text(
+                "schema: skillager.skill.v1\nsummary: hostile collection bait\naudience:\n  - user\nactivation:\n  default: manual\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+
+                default_search = StringIO()
+                with redirect_stdout(default_search):
+                    self.assertEqual(main(["collection", "search", "community", "community/bad", "--json"]), 0)
+                self.assertEqual(json.loads(default_search.getvalue()), [])
+
+                hidden_show = StringIO()
+                with redirect_stderr(hidden_show):
+                    self.assertEqual(main(["collection", "show", "community/bad", "--json"]), 2)
+
+                diagnostic_show = StringIO()
+                with redirect_stdout(diagnostic_show):
+                    self.assertEqual(main(["collection", "show", "community/bad", "--include-lint-blocked", "--json"]), 0)
+                diagnostic = json.loads(diagnostic_show.getvalue())
+                self.assertEqual(diagnostic["trust"], "lint_blocked")
+                self.assertNotIn("hostile collection bait", diagnostic_show.getvalue())
+
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "enable", "community", "--tag", "all"]), 0)
+                tag_output = StringIO()
+                with redirect_stdout(tag_output):
+                    self.assertEqual(main(["tag", "show", "all", "--json"]), 0)
+                tag_data = json.loads(tag_output.getvalue())
+                self.assertEqual([skill["id"] for skill in tag_data["skills"]], ["community/gis-domain"])
+
     def test_tag_add_from_collection_and_sync(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -591,16 +770,10 @@ class SkillagerTests(unittest.TestCase):
                 "\n".join(
                     [
                         "schema: skillager.skill.v1",
-                        "id: upstream/legacy",
-                        "name: Legacy",
-                        "summary: Use legacy guidance.",
-                        "source:",
-                        "  type: collection",
                         "audience:",
                         "  - user",
                         "activation:",
                         "  default: manual",
-                        "entrypoint: SKILL.md",
                     ]
                 )
                 + "\n",
@@ -623,7 +796,7 @@ class SkillagerTests(unittest.TestCase):
                 index = json.loads((state / "collections" / "personal.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 [skill["id"] for skill in index["skills"]],
-                ["personal/legacy", "personal/project-a/review-pr", "personal/project-b/deploy-preview"],
+                ["personal/legacy-root", "personal/project-a/review-pr", "personal/project-b/deploy-preview"],
             )
 
     def test_collection_refresh_migrates_flattened_trust_and_tag_by_old_root(self) -> None:
@@ -1667,23 +1840,18 @@ class SkillagerTests(unittest.TestCase):
                 "\n".join(
                     [
                         "schema: skillager.skill.v1",
-                        "id: demo/skill",
-                        "name: Demo Skill",
-                        "summary: Useful demo skill.",
-                        "source:",
-                        "  type: project",
                         "audience:",
                         "  - user",
                         "activation:",
                         "  default: suggested",
-                        "entrypoint: SKILL.md",
                     ]
                 )
                 + "\n",
                 encoding="utf-8",
             )
             skill = load_skill_from_dir(skill_dir, {"type": "project"})
-            self.assertEqual(skill.id, "demo/skill")
+            self.assertEqual(skill.id, "project/demo")
+            self.assertEqual(skill.name, "Demo")
             self.assertEqual(skill.activation, "suggested")
 
     def test_inferred_skill_uses_frontmatter_description(self) -> None:
@@ -2261,10 +2429,6 @@ class SkillagerTests(unittest.TestCase):
             claude_skill.mkdir(parents=True)
             (codex_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
             (claude_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
-            (claude_skill / "skillager.yaml").write_text(
-                "schema: skillager.skill.v1\nid: project/gis-domain-vibespatial-claude\nname: GIS Domain\nsummary: Use GIS domain concepts.\nsource:\n  type: project\naudience:\n  - user\nactivation:\n  default: manual\nentrypoint: SKILL.md\n",
-                encoding="utf-8",
-            )
             stdin = TtyStringIO("1\ny\ny\ny\n")
             stdout = TtyStringIO()
             with (
@@ -2292,10 +2456,6 @@ class SkillagerTests(unittest.TestCase):
             claude_skill.mkdir(parents=True)
             (codex_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts for Codex.\n", encoding="utf-8")
             (claude_skill / "SKILL.md").write_text("# GIS Domain\n\nUse different GIS domain concepts for Claude.\n", encoding="utf-8")
-            (claude_skill / "skillager.yaml").write_text(
-                "schema: skillager.skill.v1\nid: project/gis-domain-vibespatial-claude\nname: GIS Domain\nsummary: Use different GIS domain concepts for Claude.\nsource:\n  type: project\naudience:\n  - user\nactivation:\n  default: manual\nentrypoint: SKILL.md\n",
-                encoding="utf-8",
-            )
             stdin = TtyStringIO("1\ny\ny\nn\n")
             stdout = TtyStringIO()
             with (
@@ -2689,7 +2849,7 @@ class SkillagerTests(unittest.TestCase):
                     self.assertEqual(main(["materialize", "project/demo", "--agent", "codex"]), 0)
             target = root / ".agents" / "skills" / "project-demo"
             self.assertTrue((target / "SKILL.md").exists())
-            self.assertTrue((target / "skillager.yaml").exists())
+            self.assertFalse((target / "skillager.yaml").exists())
             self.assertTrue((target / "skillager.materialized.yaml").exists())
 
     def test_skills_without_compatibility_metadata_are_assumed_compatible(self) -> None:
@@ -2717,19 +2877,10 @@ class SkillagerTests(unittest.TestCase):
                 "\n".join(
                     [
                         "schema: skillager.skill.v1",
-                        "id: project/claude-only",
-                        "name: Claude Only",
-                        "summary: Use Claude-only guidance.",
-                        "source:",
-                        "  type: project",
                         "audience:",
                         "  - user",
                         "activation:",
                         "  default: manual",
-                        "entrypoint: SKILL.md",
-                        "safety:",
-                        "  min_trust: reviewed",
-                        "  allow_tools: false",
                         "compatibility:",
                         "  incompatible_with:",
                         "    - codex",
@@ -2761,19 +2912,10 @@ class SkillagerTests(unittest.TestCase):
                 "\n".join(
                     [
                         "schema: skillager.skill.v1",
-                        "id: project/claude-only",
-                        "name: Claude Only",
-                        "summary: Use Claude-only guidance.",
-                        "source:",
-                        "  type: project",
                         "audience:",
                         "  - user",
                         "activation:",
                         "  default: manual",
-                        "entrypoint: SKILL.md",
-                        "safety:",
-                        "  min_trust: reviewed",
-                        "  allow_tools: false",
                         "compatibility:",
                         "  exclusive_to: claude",
                     ]
@@ -2859,7 +3001,7 @@ class SkillagerTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
                     self.assertEqual(main(["materialize", "project/demo", "--mode", "stub", "--agent", "codex"]), 0)
             stub = (root / ".agents" / "skills" / "project-demo" / "SKILL.md").read_text(encoding="utf-8")
-            self.assertTrue(stub.startswith("# project/demo\n"))
+            self.assertIn("# project/demo\n", stub)
 
     def test_materialize_existing_native_skill_does_not_create_prefixed_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2924,27 +3066,35 @@ class SkillagerTests(unittest.TestCase):
     def test_materialize_slug_collision_uses_hashed_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            state = root / ".skillager"
             first = root / ".skills" / "nested"
             second = root / ".skills" / "flat"
             first.mkdir(parents=True)
             second.mkdir(parents=True)
             (first / "SKILL.md").write_text("# First\n\nUse first guidance.\n", encoding="utf-8")
-            (first / "skillager.yaml").write_text(
-                "schema: skillager.skill.v1\nid: project/a/b\nname: First\nsummary: Use first guidance.\nsource:\n  type: project\naudience:\n  - user\nactivation:\n  default: manual\nentrypoint: SKILL.md\n",
-                encoding="utf-8",
-            )
             (second / "SKILL.md").write_text("# Second\n\nUse second guidance.\n", encoding="utf-8")
-            (second / "skillager.yaml").write_text(
-                "schema: skillager.skill.v1\nid: project/a-b\nname: Second\nsummary: Use second guidance.\nsource:\n  type: project\naudience:\n  - user\nactivation:\n  default: manual\nentrypoint: SKILL.md\n",
-                encoding="utf-8",
-            )
-            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "NO_COLOR": "1"}):
-                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
-                    for skill in build_index(state, include_packages=False)["skills"]:
-                        set_trust(state, skill["id"], "reviewed", skill["content_hash"], skill["source"])
-                    self.assertEqual(main(["materialize", "project/a/b", "--agent", "codex"]), 0)
-                    self.assertEqual(main(["materialize", "project/a-b", "--agent", "codex"]), 0)
+            skills = [
+                {
+                    "id": "project/a/b",
+                    "root": str(first),
+                    "entrypoint": str(first / "SKILL.md"),
+                    "source": {"type": "project"},
+                    "content_hash": content_hash(first),
+                    "trust": "reviewed",
+                    "scan": {"risk": "low"},
+                },
+                {
+                    "id": "project/a-b",
+                    "root": str(second),
+                    "entrypoint": str(second / "SKILL.md"),
+                    "source": {"type": "project"},
+                    "content_hash": content_hash(second),
+                    "trust": "reviewed",
+                    "scan": {"risk": "low"},
+                },
+            ]
+            with patch("pathlib.Path.home", return_value=root), chdir(root):
+                results = materialize_skills(skills, agents=["codex"], scope="project", include_working=False, project_dir=root)
+            self.assertEqual([item["status"] for item in results], ["materialized", "materialized"])
             base = root / ".agents" / "skills"
             self.assertTrue((base / "project-a-b" / "SKILL.md").exists())
             fallback = [path for path in base.iterdir() if path.name.startswith("project-a-b-")]

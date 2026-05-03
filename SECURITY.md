@@ -27,8 +27,13 @@ Skillager's built-in scanner is deterministic and local. It does not use an agen
 Skillager should not:
 
 - activate unreviewed skills by default
-   - caveat: manually installed skills are trusted by default
-- materialize blocked skills
+- materialize blocked or lint-blocked skills
 - expose full skill bodies through metadata commands
+- expose unreviewed manifest free text through search/list/show before review
+- allow authors to choose scanner behavior, trust requirements, source identity, package version, or the body file path from `skillager.yaml`
+- approve lint-blocked skills without `--override-lint --reason`
+- echo hostile manifest contents through lint output
 - import arbitrary packages during indexing
 - store chat transcripts in session logs
+
+Manually installed native skills are trusted by default only after manifest lint passes. Lint-blocked native skills remain blocked until the user fixes the source or records an audited override.

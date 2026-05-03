@@ -3,21 +3,31 @@ from __future__ import annotations
 from typing import Any
 
 
-def search(skills: list[dict[str, Any]], query: str, *, include_blocked: bool = False, include_untrusted: bool = True) -> list[dict[str, Any]]:
+def search(
+    skills: list[dict[str, Any]],
+    query: str,
+    *,
+    include_blocked: bool = False,
+    include_lint_blocked: bool = False,
+    include_untrusted: bool = True,
+) -> list[dict[str, Any]]:
     terms = [term.lower() for term in query.split() if term.strip()]
+    normalized_query = query.strip().lower()
     results: list[dict[str, Any]] = []
     for skill in skills:
         if skill.get("trust") == "blocked" and not include_blocked:
+            continue
+        if skill.get("trust") == "lint_blocked" and not include_lint_blocked:
             continue
         if skill.get("trust") == "discovered" and not include_untrusted:
             continue
         haystack = _haystack(skill)
         score = 0
         reasons: list[str] = []
+        if normalized_query and normalized_query == skill.get("id", "").lower():
+            score += 6
+            reasons.append("id:exact")
         for term in terms:
-            if term in skill.get("id", "").lower():
-                score += 5
-                reasons.append(f"id:{term}")
             if term in skill.get("name", "").lower():
                 score += 4
                 reasons.append(f"name:{term}")
@@ -36,16 +46,12 @@ def _haystack(skill: dict[str, Any]) -> str:
     parts = [
         skill.get("summary", ""),
         " ".join(skill.get("audience", [])),
-        " ".join(skill.get("domains", [])),
         skill.get("package") or "",
     ]
-    triggers = skill.get("triggers", {})
-    if isinstance(triggers, dict):
-        for value in triggers.values():
-            if isinstance(value, list):
-                parts.append(" ".join(str(item) for item in value))
-            else:
-                parts.append(str(value))
+    targets = skill.get("targets", {}).get("python_packages", []) if isinstance(skill.get("targets"), dict) else []
+    for target in targets:
+        if isinstance(target, dict):
+            parts.append(str(target.get("name") or ""))
     return " ".join(parts).lower()
 
 

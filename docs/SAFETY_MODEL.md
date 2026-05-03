@@ -6,7 +6,9 @@ Skillager is a review and activation gate. It reduces accidental context exposur
 
 - Never expose unapproved skill bodies to agents by default.
 - Keep discovery and search metadata-only.
+- Never index free-text from `skillager.yaml`; searchable identity comes from reviewed `SKILL.md` text and derived provenance.
 - Require explicit user approval before trust changes.
+- Require an audited lint override before approving a lint-blocked skill.
 - Require reviewed/trusted/pinned state before activation or materialization.
 - Assume agent compatibility by default; block only explicit agent exclusions unless the user overrides them.
 - Copy skills into project-local native directories so users can inspect and customize them.
@@ -31,7 +33,21 @@ Current rule families:
 - encoded payload-like blobs
 - oversized content
 
-Findings include severity, line number, matched text, explanation, and review recommendation.
+Scanner findings include severity, line number, matched text, explanation, and review recommendation.
+
+## Manifest Lint
+
+`skillager.yaml` is structured-only metadata. Unknown keys, invalid enum values, unsafe YAML features, invalid package specifiers, hidden/control characters, missing canonical `SKILL.md`, and invalid derived IDs produce a blocking lint finding.
+
+Lint-blocked skills are indexed only as quarantined records with safe derived fields, `trust: lint_blocked`, and safe lint findings. Skillager does not expose hostile manifest values through `search`, `list`, `show`, or `lint` output.
+
+Approving a lint-blocked skill requires:
+
+```bash
+skillager review <skill-id> --trust-selected reviewed --override-lint --reason "<why this is acceptable>"
+```
+
+The override is stored in `trust.json` with the reason, timestamp, content hash, and the accepted finding identities. Content changes or new blocking finding identities drop the skill back to `lint_blocked`.
 
 ## Compatibility Gate
 
@@ -59,6 +75,7 @@ Inferred warnings come from inert text only. Examples include agent-specific ski
 - A passing scan is not a guarantee of safety.
 - Skillager does not inspect runtime behavior after activation.
 - Skillager does not store chat transcripts for lookback.
+- User-installed native skills are auto-trusted only when they are not lint-blocked.
 
 Users own the final trust decision.
 
@@ -67,5 +84,6 @@ Users own the final trust decision.
 - Approve only the audience you need for the current work.
 - Prefer project-scope materialization over global materialization.
 - Block skills that request secrets, hidden prompts, or unapproved autonomy.
+- Fix lint-blocked manifests instead of overriding when possible.
 - Re-run `skillager setup --fresh` after major dependency or skill-repo changes.
 - Use router mode for broad skill collections where native materialization would add too much context.

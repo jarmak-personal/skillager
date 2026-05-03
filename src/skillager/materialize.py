@@ -51,6 +51,9 @@ def materialize_skills(
         if skill.get("trust") == "blocked":
             results.append(_result(skill, None, "skipped", "blocked"))
             continue
+        if skill.get("trust") == "lint_blocked":
+            results.append(_result(skill, None, "skipped", "lint-blocked"))
+            continue
         if reviewed_only and skill.get("trust") not in TRUSTED_STATES:
             results.append(_result(skill, None, "skipped", "not reviewed or trusted"))
             continue
@@ -157,14 +160,18 @@ def materialize_working_skill_one(
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
         (target / "SKILL.md").write_text(render_working_skill(agent), encoding="utf-8")
-        (target / "skillager.yaml").write_text(dumps(_working_manifest()), encoding="utf-8")
         materialized_hash = content_hash(target)
         sidecar.write_text(dumps(_working_sidecar(agent=agent, scope=scope, materialized_hash=materialized_hash)), encoding="utf-8")
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
 def render_working_skill(agent: str = "codex") -> str:
-    return f"""# Skillager Working
+    return f"""---
+name: "Skillager Working"
+description: "Use Skillager safely from an agent: status first, approved metadata only, guarded activation, and lookback."
+---
+
+# Skillager Working
 
 Use when starting work in a project that has Skillager-managed skills, when `skillager status` reports available approved skills, or when the user asks you to set up, expose, route, activate, or review skills.
 
@@ -301,7 +308,6 @@ def materialize_router_one(
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
         (target / "SKILL.md").write_text(render_router_skill(tag, skills, agent=agent), encoding="utf-8")
-        (target / "skillager.yaml").write_text(dumps(_router_manifest(tag)), encoding="utf-8")
         materialized_hash = content_hash(target)
         sidecar.write_text(dumps(_router_sidecar(tag, skills, agent=agent, scope=scope, materialized_hash=materialized_hash)), encoding="utf-8")
         return _result(router_skill, target, "materialized", None, agent=agent, scope=scope)
@@ -309,6 +315,11 @@ def materialize_router_one(
 
 def render_router_skill(tag: str, skills: list[dict[str, Any]], *, agent: str | None = None) -> str:
     lines = [
+        "---",
+        f"name: \"{_frontmatter_string(f'Skillager {tag} Router')}\"",
+        f"description: \"Route {tag} tasks to reviewed Skillager-managed skills.\"",
+        "---",
+        "",
         f"# Skillager {tag} Router",
         "",
         f"Use when the task is related to the `{tag}` skill tag or one of the reviewed skills exposed by this router.",
@@ -370,7 +381,6 @@ def materialize_stub_one(
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
         (target / "SKILL.md").write_text(render_stub_skill(skill), encoding="utf-8")
-        (target / "skillager.yaml").write_text(dumps(_stub_manifest(skill)), encoding="utf-8")
         materialized_hash = content_hash(target)
         sidecar.write_text(dumps(_stub_sidecar(skill, agent=agent, scope=scope, materialized_hash=materialized_hash)), encoding="utf-8")
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
@@ -381,6 +391,11 @@ def render_stub_skill(skill: dict[str, Any]) -> str:
     name = _stub_display_name(skill)
     summary = str(skill.get("summary") or "Use this Skillager-managed skill when it matches the user's task.").strip()
     lines = [
+        "---",
+        f"name: \"{_frontmatter_string(name)}\"",
+        f"description: \"{_frontmatter_string(summary)}\"",
+        "---",
+        "",
         f"# {name}",
         "",
         summary,
@@ -417,6 +432,10 @@ def _stub_display_name(skill: dict[str, Any]) -> str:
     return name
 
 
+def _frontmatter_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ").strip()
+
+
 def materialize_one(
     skill: dict[str, Any],
     *,
@@ -444,8 +463,6 @@ def materialize_one(
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
         _copy_skill_tree(Path(skill["root"]), target)
-        if not (target / "skillager.yaml").exists():
-            (target / "skillager.yaml").write_text(dumps(_skill_manifest(skill)), encoding="utf-8")
         materialized_hash = content_hash(target)
         sidecar.write_text(dumps(_sidecar(skill, agent=agent, scope=scope, materialized_hash=materialized_hash)), encoding="utf-8")
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
@@ -613,56 +630,6 @@ def _sidecar(skill: dict[str, Any], *, agent: str, scope: str, materialized_hash
     }
 
 
-def _skill_manifest(skill: dict[str, Any]) -> dict[str, Any]:
-    manifest: dict[str, Any] = {
-        "schema": "skillager.skill.v1",
-        "id": skill["id"],
-        "name": skill["name"],
-        "summary": skill["summary"],
-        "source": {"type": "project-override", "source_id": skill["id"]},
-        "audience": skill.get("audience", ["user"]),
-        "activation": {"default": skill.get("activation", "manual")},
-        "entrypoint": "SKILL.md",
-        "safety": skill.get("safety", {"min_trust": "reviewed", "allow_tools": False}),
-    }
-    if skill.get("triggers"):
-        manifest["triggers"] = skill["triggers"]
-    if skill.get("context"):
-        manifest["context"] = skill["context"]
-    if skill.get("compatibility"):
-        manifest["compatibility"] = skill["compatibility"]
-    return manifest
-
-
-def _router_manifest(tag: str) -> dict[str, Any]:
-    return {
-        "schema": "skillager.skill.v1",
-        "id": f"skillager/{tag}",
-        "name": f"Skillager {tag} Router",
-        "summary": f"Route {tag} tasks to reviewed Skillager-managed skills.",
-        "source": {"type": "skillager-router", "tag": tag},
-        "audience": ["user"],
-        "activation": {"default": "suggested"},
-        "entrypoint": "SKILL.md",
-        "safety": {"min_trust": "reviewed", "allow_tools": False},
-    }
-
-
-def _stub_manifest(skill: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "schema": "skillager.skill.v1",
-        "id": skill["id"],
-        "name": skill.get("name") or skill["id"],
-        "summary": skill.get("summary") or "",
-        "source": {"type": "skillager-stub", "source_id": skill["id"]},
-        "audience": skill.get("audience", ["user"]),
-        "activation": {"default": "suggested"},
-        "entrypoint": "SKILL.md",
-        "safety": {"min_trust": "reviewed", "allow_tools": True},
-        "compatibility": skill.get("compatibility", {}),
-    }
-
-
 def _working_skill(agent: str) -> dict[str, Any]:
     source_hash = _working_source_hash(agent)
     return {
@@ -681,20 +648,6 @@ def _working_source_hash(agent: str) -> str:
 
 def working_source_hash(agent: str) -> str:
     return hashlib.sha256(render_working_skill(agent).encode("utf-8")).hexdigest()[:16]
-
-
-def _working_manifest() -> dict[str, Any]:
-    return {
-        "schema": "skillager.skill.v1",
-        "id": WORKING_SKILL_ID,
-        "name": "Skillager Working",
-        "summary": "Use Skillager safely from an agent: status first, approved metadata only, narrow router/native materialization, guarded activation, and lookback.",
-        "source": {"type": "skillager-working"},
-        "audience": ["dev", "user"],
-        "activation": {"default": "always"},
-        "entrypoint": "SKILL.md",
-        "safety": {"min_trust": "reviewed", "allow_tools": True},
-    }
 
 
 def _working_sidecar(*, agent: str, scope: str, materialized_hash: str) -> dict[str, Any]:

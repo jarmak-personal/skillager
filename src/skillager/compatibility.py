@@ -4,7 +4,23 @@ import re
 from pathlib import Path
 from typing import Any
 
-KNOWN_AGENTS = {"codex", "claude"}
+KNOWN_AGENTS = {"codex", "claude", "any"}
+WARNING_CODES = {
+    "parallel_subagents_unsupported",
+    "claude_only_paths",
+    "codex_only_paths",
+    "assumes_writes_files",
+    "assumes_shell",
+    "assumes_subagents",
+}
+WARNING_MESSAGES = {
+    "parallel_subagents_unsupported": "Mentions Claude Agent Teams; requires a workflow with parallel subagents.",
+    "claude_only_paths": "References Claude skill paths; adapt paths before following file-relative instructions.",
+    "codex_only_paths": "References Codex skill paths; adapt paths before following file-relative instructions.",
+    "assumes_writes_files": "Assumes the agent can write files.",
+    "assumes_shell": "Assumes the agent can run shell commands.",
+    "assumes_subagents": "Uses or benefits from parallel subagents.",
+}
 
 
 def normalize_compatibility(raw: Any = None, *, text: str = "", root: Path | None = None) -> dict[str, Any]:
@@ -26,7 +42,7 @@ def normalize_compatibility(raw: Any = None, *, text: str = "", root: Path | Non
     merged_warnings.update(warnings)
 
     return {
-        "exclusive_to": exclusive_to,
+        "exclusive_to": None if exclusive_to == "any" else exclusive_to,
         "incompatible_with": incompatible_with,
         "assumptions": merged_assumptions,
         "warnings": merged_warnings,
@@ -44,19 +60,19 @@ def infer_compatibility(text: str, *, root: Path | None = None) -> dict[str, Any
     if "claude_code_experimental_agent_teams" in haystack or "agent teams" in haystack:
         signals.append("mentions Claude Agent Teams")
         assumptions["parallel_subagents"] = {"required": True}
-        assumptions["agent_harness_features"] = _append_unique(assumptions.get("agent_harness_features"), "agent-teams")
-        warnings["codex"] = "Mentions Claude Agent Teams; use as guidance unless this Codex session has an equivalent workflow."
+        warnings["codex"] = "parallel_subagents_unsupported"
     elif re.search(r"\b(parallel|background)\s+(subagents?|agents?)\b", haystack) or "agent tool" in haystack:
         signals.append("mentions parallel agents")
         assumptions["parallel_subagents"] = {"required": False}
+        warnings["any"] = "assumes_subagents"
 
     if "${claude_skill_dir}" in haystack or ".claude/skills" in haystack or "/.claude/skills" in root_text:
         signals.append("mentions Claude skill paths")
-        warnings.setdefault("codex", "References Claude skill paths; adapt paths before following file-relative instructions.")
+        warnings.setdefault("codex", "claude_only_paths")
 
     if ".agents/skills" in haystack or ".agents/codex/skills" in haystack or "/.agents/skills" in root_text:
         signals.append("mentions Codex skill paths")
-        warnings.setdefault("claude", "References Codex skill paths; adapt paths before following file-relative instructions.")
+        warnings.setdefault("claude", "codex_only_paths")
 
     env_vars = sorted(set(re.findall(r"\b[A-Z][A-Z0-9_]{4,}\b", text)))
     env_vars = [name for name in env_vars if name.startswith(("CLAUDE_", "CODEX_", "SKILLAGER_"))]
@@ -67,10 +83,11 @@ def infer_compatibility(text: str, *, root: Path | None = None) -> dict[str, Any
     if re.search(r"\b(write|save|create|edit)\b.{0,60}\b(file|files|directory|directories|folder|folders)\b", haystack):
         assumptions["writes_files"] = True
         signals.append("mentions writing files")
+        warnings.setdefault("any", "assumes_writes_files")
 
     if re.search(r"\b(run|execute)\b.{0,40}\b(shell|bash|sh|command)\b", haystack):
-        assumptions["shell"] = True
         signals.append("mentions shell commands")
+        warnings.setdefault("any", "assumes_shell")
 
     return {"assumptions": assumptions, "warnings": warnings, "signals": signals}
 
@@ -81,10 +98,10 @@ def compatibility_problem(skill: dict[str, Any], agent: str | None) -> str | Non
     agent = agent.lower()
     compatibility = skill.get("compatibility") or {}
     exclusive_to = compatibility.get("exclusive_to")
-    if exclusive_to and str(exclusive_to).lower() != agent:
+    if exclusive_to and str(exclusive_to).lower() not in {agent, "any"}:
         return f"exclusive to {exclusive_to}"
     incompatible = {str(item).lower() for item in compatibility.get("incompatible_with", [])}
-    if agent in incompatible:
+    if "any" in incompatible or agent in incompatible:
         return f"incompatible with {agent}"
     return None
 
@@ -94,13 +111,13 @@ def compatibility_warnings(skill: dict[str, Any], agent: str | None = None) -> l
     warnings = compatibility.get("warnings") or {}
     result: list[str] = []
     if isinstance(warnings, dict):
-        general = warnings.get("all") or warnings.get("default")
+        general = warnings.get("any")
         if isinstance(general, str) and general:
-            result.append(general)
+            result.append(_warning_message(general))
         if agent:
             value = warnings.get(agent.lower())
             if isinstance(value, str) and value:
-                result.append(value)
+                result.append(_warning_message(value))
     assumptions = compatibility.get("assumptions") or {}
     if isinstance(assumptions, dict):
         parallel = assumptions.get("parallel_subagents")
@@ -136,11 +153,13 @@ def _agent_list(value: Any) -> list[str]:
 
 
 def _warning_map(value: Any) -> dict[str, str]:
-    if isinstance(value, str):
-        return {"all": value}
     if not isinstance(value, dict):
         return {}
-    return {str(key).lower(): str(message) for key, message in value.items() if isinstance(message, str) and message.strip()}
+    return {
+        str(key).lower(): str(code)
+        for key, code in value.items()
+        if str(key).lower() in KNOWN_AGENTS and isinstance(code, str) and code in WARNING_CODES
+    }
 
 
 def _append_unique(values: Any, value: str) -> list[str]:
@@ -156,3 +175,7 @@ def _dedupe(values: list[str]) -> list[str]:
         if value and value not in result:
             result.append(value)
     return result
+
+
+def _warning_message(code: str) -> str:
+    return WARNING_MESSAGES.get(code, code)
