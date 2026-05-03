@@ -161,7 +161,7 @@ def set_trust(
     if state in {"reviewed", "trusted", "pinned"} and blocking_findings(lint) and not lint_override:
         raise ValueError("lint-blocked skills require --override-lint --reason")
     use_global = bool(global_scope and approval_key and approval_root)
-    target_root = approval_root if use_global else state_root
+    target_root: Path = approval_root if use_global and approval_root is not None else state_root
     data = load_trust(target_root)
     record: dict[str, Any] = {
         "state": state,

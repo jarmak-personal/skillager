@@ -59,8 +59,11 @@ def authored_info(skill: dict[str, Any], *, project_root: Path | None = None) ->
         skill_root = Path(str(root)).expanduser().resolve()
     except (OSError, ValueError):
         return None
-    project_root = (project_root or find_project_root()).expanduser().resolve()
-    if not _is_relative_to(skill_root, project_root):
+    effective_project_root = project_root or find_project_root()
+    if effective_project_root is None:
+        return None
+    project_root_resolved = effective_project_root.expanduser().resolve()
+    if not _is_relative_to(skill_root, project_root_resolved):
         return None
     try:
         authored = load_authored()
@@ -69,7 +72,7 @@ def authored_info(skill: dict[str, Any], *, project_root: Path | None = None) ->
     record = authored.get("skills", {}).get(str(skill_root))
     if not isinstance(record, dict):
         return None
-    if record.get("project_key") != project_key(project_root):
+    if record.get("project_key") != project_key(project_root_resolved):
         return None
     if record.get("skill_root") != str(skill_root):
         return None

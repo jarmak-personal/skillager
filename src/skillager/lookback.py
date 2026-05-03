@@ -210,7 +210,7 @@ def _observed_overlaps(
             continue
         sessions = sorted(pair_sessions.get(pair, set()))
         active_sessions = sum(1 for item in sessions if session_records.get(item, {}).get("active"))
-        skills = [
+        group_skills = [
             {
                 "id": skill_id,
                 "events": dict(by_skill.get(skill_id, Counter())),
@@ -227,7 +227,7 @@ def _observed_overlaps(
                 "sessions": sessions,
                 "session_count": len(sessions),
                 "active_session_count": active_sessions,
-                "skills": skills,
+                "skills": group_skills,
                 "query_previews": sorted(pair_queries.get(pair, set()))[:3],
                 "suggested_next_step": "ask user whether to pin a winner, keep route-only, stub commands, block old skills, or ignore",
             }

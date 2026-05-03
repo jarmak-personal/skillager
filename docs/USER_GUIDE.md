@@ -90,6 +90,15 @@ skillager materialize <skill-id> --mode stub --agent codex --scope project
 
 Use `--json` when another program needs stable output. `status --json` and `search --json` are compact for agent use; pass `--full-json` for verbose debugging. Use `setup --summary-json` for setup automation that only needs counts, IDs, summary buckets, and action results.
 
+For a project-local automation smoke flow:
+
+<!-- skillager-test fixture=basic_project -->
+```bash
+skillager status --no-packages --json
+skillager setup --source project --accept-low --no-packages --summary-json
+skillager search "spatial" --trusted-only --no-session-record --json
+```
+
 Skillager does not require git. In a plain directory, it treats the current directory as the project root. Project state is user-local at `${XDG_STATE_HOME:-~/.local/state}/skillager/projects/<sha256(project_path)>/`, or `SKILLAGER_STATE_DIR` when explicitly set. Reusable catalog state is separate at `${XDG_CONFIG_HOME:-~/.config}/skillager/`, or `SKILLAGER_CATALOG_STATE_DIR` / `--catalog-state-dir` when explicitly set.
 
 Legacy in-tree `<project>/.skillager/` state is ignored by ordinary commands. If you intentionally want to import reviewed local state from an older Skillager version, run `skillager state migrate` from the project and review the records it will copy. Legacy reusable `global_approvals` require the separate `skillager state import-global-approvals` command.

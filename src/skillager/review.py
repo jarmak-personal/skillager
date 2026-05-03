@@ -12,9 +12,9 @@ from .trust import clear_global_approvals, clear_trust, make_lint_override, set_
 
 def review_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
     by_source: dict[str, Counter[str]] = defaultdict(Counter)
-    by_audience = Counter()
-    by_risk = Counter()
-    by_trust = Counter()
+    by_audience: Counter[str] = Counter()
+    by_risk: Counter[str] = Counter()
+    by_trust: Counter[str] = Counter()
     families: dict[str, set[str]] = defaultdict(set)
     for skill in skills:
         source = skill.get("source", {}).get("type") or "unknown"

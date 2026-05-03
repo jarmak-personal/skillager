@@ -893,7 +893,7 @@ def cmd_tag_add(args: argparse.Namespace) -> int:
     if any(skill_id not in valid_ids for skill_id in skill_ids):
         valid_ids.update(_inventory_taggable_skill_ids(root(args), catalog_root(args)))
     if args.sync or args.from_collection or args.all:
-        tag = set_tag_skills(
+        updated_tag = set_tag_skills(
             catalog_root(args),
             args.tag,
             skill_ids,
@@ -901,12 +901,12 @@ def cmd_tag_add(args: argparse.Namespace) -> int:
             source_collection=source_collection,
             valid_ids=valid_ids,
         )
-        print(f"{tag['tag']}: {len(tag['skills'])} skill(s)")
+        print(f"{updated_tag['tag']}: {len(updated_tag['skills'])} skill(s)")
         return 0
     missing = sorted(skill_id for skill_id in skill_ids if skill_id not in valid_ids)
     if missing:
         raise KeyError(f"skill not found in collection catalog or current project inventory: {missing[0]}")
-    tag = None
+    tag: dict[str, Any] | None = None
     for skill_id in skill_ids:
         tag = add_tag_skill(catalog_root(args), args.tag, skill_id, validate=False)
     if tag is None:
@@ -3752,10 +3752,10 @@ def _print_setup_next_steps(skills: list[dict[str, Any]]) -> None:
         return
     print("  - Inspect candidates: skillager review --summary")
     if by_source:
-        source = max(by_source, key=by_source.get)
+        source = max(by_source, key=by_source.__getitem__)
         print(f"  - Narrow by source: skillager review --source {source}")
     if by_package:
-        package = max(by_package, key=by_package.get)
+        package = max(by_package, key=by_package.__getitem__)
         print(f"  - Narrow by package: skillager review --package {package}")
     print("  - Approve one skill: skillager review <skill-id> --trust-selected reviewed")
     print("  - Show full list: skillager setup --details")
@@ -4264,7 +4264,11 @@ def _choose_materialize_agents() -> list[str]:
 def _print_agent_next_steps(results: list[dict[str, Any]]) -> None:
     target_bases = _materialized_target_bases(results)
     project_dir = _materialized_project_dir_from_bases(target_bases)
-    agents = sorted({item.get("agent") for item in results if item.get("status") == "materialized" and item.get("agent")})
+    agents = sorted(
+        agent
+        for agent in {item.get("agent") for item in results if item.get("status") == "materialized" and item.get("agent")}
+        if isinstance(agent, str)
+    )
     print()
     print(_style("Next step", "bold"))
     if len(target_bases) == 1:
@@ -4298,7 +4302,11 @@ def _agent_label(agents: list[str]) -> str:
 
 
 def _materialized_agents(results: list[dict[str, Any]]) -> list[str]:
-    return sorted({item.get("agent") for item in results if item.get("status") == "materialized" and item.get("agent")})
+    return sorted(
+        agent
+        for agent in {item.get("agent") for item in results if item.get("status") == "materialized" and item.get("agent")}
+        if isinstance(agent, str)
+    )
 
 
 def _common_audience(skills: list[dict[str, Any]]) -> str | None:

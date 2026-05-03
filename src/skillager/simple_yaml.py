@@ -63,15 +63,17 @@ def _construct_undefined(loader: _StrictManifestLoader, node: yaml.Node) -> Any:
 def _compose_node(loader: _StrictManifestLoader, parent: yaml.Node | None, index: int | None) -> yaml.Node:
     if loader.check_event(yaml.AliasEvent):
         raise StrictYamlError("YAML aliases are not allowed in skillager.yaml")
-    node = yaml.SafeLoader.compose_node(loader, parent, index)
+    node = yaml.SafeLoader.compose_node(loader, parent, index)  # type: ignore[arg-type]
+    if node is None:
+        raise StrictYamlError("skillager.yaml contains invalid YAML")
     if getattr(node, "anchor", None):
         raise StrictYamlError("YAML anchors are not allowed in skillager.yaml")
     return node
 
 
 _StrictManifestLoader.add_constructor("tag:yaml.org,2002:map", _construct_mapping)
-_StrictManifestLoader.add_constructor(None, _construct_undefined)
-_StrictManifestLoader.compose_node = _compose_node  # type: ignore[method-assign]
+_StrictManifestLoader.add_constructor(None, _construct_undefined)  # type: ignore[arg-type]
+_StrictManifestLoader.compose_node = _compose_node  # type: ignore[method-assign,assignment]
 
 
 def load_manifest_mapping(path: Path) -> dict[str, Any]:

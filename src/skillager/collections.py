@@ -489,14 +489,14 @@ def _index_collection_skills(state_root: Path, name: str, root: Path) -> tuple[l
             quarantined = quarantine_skill_from_dir(skill_dir, source, exc)
             if quarantined:
                 try:
-                    skill = _collection_quarantined(quarantined, collection=name, collection_root=root)
+                    q_skill = _collection_quarantined(quarantined, collection=name, collection_root=root)
                 except ValueError:
-                    skill = quarantined
-                digest = content_hash(skill.root)
-                scan = scan_path(skill.root, allow_tools=False)
-                approval_key = approval_key_for(skill.id, skill.root, skill.source, entrypoint=skill.entrypoint)
-                trust = trust_info(state_root, skill.id, digest, lint=skill.lint, approval_key=approval_key, approval_root=state_root)
-                entry = skill.to_index(digest, scan, trust.get("state", "discovered"))
+                    q_skill = quarantined
+                digest = content_hash(q_skill.root)
+                scan = scan_path(q_skill.root, allow_tools=False)
+                approval_key = approval_key_for(q_skill.id, q_skill.root, q_skill.source, entrypoint=q_skill.entrypoint)
+                trust = trust_info(state_root, q_skill.id, digest, lint=q_skill.lint, approval_key=approval_key, approval_root=state_root)
+                entry = q_skill.to_index(digest, scan, trust.get("state", "discovered"))
                 _apply_approval_metadata(entry, approval_key, trust)
                 skills.append(entry)
             errors.append({"path": str(skill_dir), "error": str(exc)})
@@ -596,7 +596,8 @@ def _migrate_collection_references(
     }
     id_migrations = []
     for old in old_entries:
-        new = new_by_root.get(old.get("root"))
+        old_root = old.get("root")
+        new = new_by_root.get(old_root) if isinstance(old_root, str) else None
         if not new or old.get("id") == new.get("id"):
             continue
         id_migrations.append(
@@ -643,7 +644,8 @@ def _migrate_trust(state_root: Path, old_entries: list[dict[str, Any]], new_by_r
             needs_review.append({"old_id": old_id, "reason": "ambiguous old ID/content hash"})
             continue
         old = candidates[0]
-        new = new_by_root.get(old.get("root"))
+        old_root = old.get("root")
+        new = new_by_root.get(old_root) if isinstance(old_root, str) else None
         if not new or new.get("id") == old_id:
             continue
         if new.get("content_hash") != record_hash:

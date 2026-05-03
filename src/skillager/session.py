@@ -73,8 +73,9 @@ def start_session(
     cwd: Path | None = None,
 ) -> dict[str, Any]:
     cwd = (cwd or Path.cwd()).resolve()
-    meta = {
-        "session_id": new_session_id(),
+    session_id = new_session_id()
+    meta: dict[str, Any] = {
+        "session_id": session_id,
         "agent": agent,
         "external_session_id": external_session_id,
         "external_conversation_id": external_conversation_id,
@@ -86,7 +87,7 @@ def start_session(
     sessions_root(state_root).mkdir(parents=True, exist_ok=True)
     with _session_lock(state_root):
         current_path(state_root).write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    append_event(state_root, meta["session_id"], "session_started", meta)
+    append_event(state_root, session_id, "session_started", meta)
     prune_sessions(state_root)
     return meta
 

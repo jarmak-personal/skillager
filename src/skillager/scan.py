@@ -7,7 +7,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-FINDINGS = [
+FINDINGS: list[dict[str, Any]] = [
     {
         "code": "instruction_override",
         "severity": "high",

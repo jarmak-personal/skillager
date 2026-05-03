@@ -5,7 +5,7 @@ import hashlib
 from dataclasses import replace
 from importlib import metadata
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
 
 from .paths import environment_roots, find_project_root, venv_site_packages
@@ -120,7 +120,7 @@ def discover_package_skills() -> tuple[list[IndexableSkill], list[dict[str, str]
     seen_dirs: set[Path] = set()
     project_root = find_project_root()
     for dist, environment in _package_distributions(project_root):
-        name = dist.metadata.get("Name", "unknown")
+        name = dist.metadata["Name"] if "Name" in dist.metadata else "unknown"
         version = dist.version
         files = dist.files or []
         candidates = sorted({dist.locate_file(file).parent for file in files if _is_packaged_skill_file(file.parts, file.name)})
@@ -140,9 +140,10 @@ def discover_package_skills() -> tuple[list[IndexableSkill], list[dict[str, str]
                 "type": "python-package",
                 "package": name,
                 "version": version,
-                "environment": environment,
                 "editable": "true",
             }
+            if environment is not None:
+                source["environment"] = environment
             for root, root_source in project_skill_roots(editable_root, source):
                 for skill_dir in _skill_dirs(root):
                     skill_dir = skill_dir.resolve()
@@ -164,8 +165,8 @@ def discover_package_skills() -> tuple[list[IndexableSkill], list[dict[str, str]
             try:
                 skills.append(load_skill_from_dir(skill_dir, {"type": "python-package", "package": package, "version": None, "environment": str(site_packages)}))
             except (SchemaError, OSError, ValueError) as exc:
-                source = {"type": "python-package", "package": package, "version": None, "environment": str(site_packages)}
-                quarantined = quarantine_skill_from_dir(skill_dir, source, exc)
+                package_source: dict[str, Any] = {"type": "python-package", "package": package, "version": None, "environment": str(site_packages)}
+                quarantined = quarantine_skill_from_dir(skill_dir, package_source, exc)
                 if quarantined:
                     skills.append(quarantined)
                 errors.append({"path": str(skill_dir), "error": str(exc)})
@@ -279,7 +280,7 @@ def _with_source_suffix(skill_id: str, suffix: str) -> str:
     return f"{namespace}/{name}-{suffix}"
 
 
-def _source_suffix(skill: Skill) -> str:
+def _source_suffix(skill: IndexableSkill) -> str:
     parts = []
     if skill.source.get("package"):
         parts.append(skill.source["package"])

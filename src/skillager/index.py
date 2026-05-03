@@ -10,6 +10,7 @@ from .discovery import discover
 from .families import canonical_agent_variant_slug
 from .lint import lint_skill
 from .scan import scan_path
+from .schema import QuarantinedSkill
 from .trust import approval_key_for, content_hash, trust_info
 
 
@@ -31,7 +32,7 @@ def build_index(
     for skill in skills:
         digest = content_hash(skill.root)
         scan = scan_path(skill.root, allow_tools=False)
-        lint = skill.lint if getattr(skill, "lint", None) else lint_skill(skill)
+        lint = skill.lint if isinstance(skill, QuarantinedSkill) else lint_skill(skill)
         approval_key = approval_key_for(skill.id, skill.root, skill.source, entrypoint=skill.entrypoint)
         trust = trust_info(state_root, skill.id, digest, lint=lint, approval_key=approval_key, approval_root=approval_root)
         entry = skill.to_index(digest, scan, trust.get("state", "discovered"))
