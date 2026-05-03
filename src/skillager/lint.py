@@ -52,13 +52,6 @@ def lint_skill(skill: Any) -> dict[str, Any]:
     summary = str(getattr(skill, "summary", "") or "").strip().lower()
     if summary in {"", "skill", "use this skill", "use this guidance", "guidance"}:
         findings.append(finding("generic_description", "warn", "SKILL.md.description", "description or first paragraph is generic"))
-    compatibility = getattr(skill, "compatibility", {}) or {}
-    warnings = compatibility.get("warnings") if isinstance(compatibility, dict) else {}
-    incompatible = set(compatibility.get("incompatible_with", [])) if isinstance(compatibility, dict) else set()
-    if isinstance(warnings, dict):
-        for agent in warnings:
-            if agent not in incompatible and agent != "any":
-                findings.append(finding("warning_for_undeclared", "warn", f"compatibility.warnings.{agent}", "warning is advisory only"))
     return lint_report(findings)
 
 

@@ -5,4 +5,4 @@ activation:
   default: suggested
 targets:
   python_packages:
-    - name: pandas
+    - name: fastapi

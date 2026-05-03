@@ -62,13 +62,15 @@ This keeps the default context small while still giving agents a deterministic p
 
 If you maintain a Python library, Skillager gives you a way to ship agent-facing guidance with the package itself. Users can discover those skills after install, review them locally, and expose all, or just the ones relevant to their project.
 
-Example:
+[FastAPI](https://github.com/fastapi/fastapi) already does this — its wheel includes a skill at `fastapi/.agents/skills/fastapi/SKILL.md`, which Skillager discovers after a normal `pip install fastapi`.
+
+A complete skillager layout:
 
 ```text
 your_package/
   __init__.py
-  .skills/
-    data-cleaning/
+  .agents/skills/
+    fastapi-usage/
       SKILL.md
       skillager.yaml
       references/
@@ -98,7 +100,7 @@ See the [library author guide](docs/LIBRARY_AUTHORS.md) for metadata and packagi
 - Materializes only reviewed skills into Codex or Claude native skill directories.
 - Supports stubs and routers for large skill collections.
 - Records compact local usage signals for lookback, without storing transcripts or skill bodies.
-- Treats manually installed native skills as user-installed while still warning on risk.
+- Keeps direct native skills behind review unless their current content is approved.
 
 ## Safety Shape
 
@@ -136,7 +138,7 @@ The next `skillager handoff` can tell the agent that lookback is pending. Then t
 - [Safety model](docs/SAFETY_MODEL.md)
 - [Security policy](SECURITY.md)
 
-External contributions are not being accepted yet while the 0.1 API and workflow settle.
+External contributions are not being accepted yet while the early API and workflow settle.
 
 ## Development
 

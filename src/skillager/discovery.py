@@ -11,6 +11,27 @@ from urllib.parse import unquote, urlparse
 from .paths import environment_roots, find_project_root, venv_site_packages
 from .schema import QuarantinedSkill, SchemaError, Skill, load_skill_from_dir, quarantine_skill_from_dir
 
+IGNORED_CHILD_REPO_DIR_NAMES = {
+    ".cache",
+    ".git",
+    ".gradle",
+    ".hg",
+    ".mypy_cache",
+    ".next",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".svn",
+    ".tox",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "target",
+    "venv",
+}
+
 
 def project_skill_roots(root: Path, source: dict[str, str]) -> list[tuple[Path, dict[str, str]]]:
     return [
@@ -26,9 +47,10 @@ def project_skill_roots(root: Path, source: dict[str, str]) -> list[tuple[Path, 
 
 def default_source_roots(project_root: Path | None = None) -> list[tuple[Path, dict[str, str]]]:
     roots: list[tuple[Path, dict[str, str]]] = []
-    project_root = project_root or find_project_root()
+    project_root = project_root or find_project_root() or Path.cwd()
     if project_root:
         roots.extend(project_skill_roots(project_root, {"type": "project"}))
+        roots.extend(project_child_skill_repo_roots(project_root))
     roots.extend(
         [
             (Path.home() / ".codex" / "skills", {"type": "global", "agent": "codex"}),
@@ -41,16 +63,41 @@ def default_source_roots(project_root: Path | None = None) -> list[tuple[Path, d
     return roots
 
 
+def project_child_skill_repo_roots(project_root: Path) -> list[tuple[Path, dict[str, str]]]:
+    if not project_root.exists():
+        return []
+    roots: list[tuple[Path, dict[str, str]]] = []
+    for child in sorted(project_root.iterdir(), key=lambda path: path.name):
+        if not child.is_dir() or child.name in IGNORED_CHILD_REPO_DIR_NAMES:
+            continue
+        source = {
+            "type": "collection",
+            "collection": _slug(child.name) or "local",
+            "path": str(child.resolve()),
+            "local": "true",
+        }
+        roots.extend((skill_root, root_source) for skill_root, root_source in project_skill_roots(child, source) if skill_root.is_dir())
+    return roots
+
+
 IndexableSkill = Skill | QuarantinedSkill
 
 
-def discover(paths: Iterable[Path] | None = None, *, include_packages: bool = True) -> tuple[list[IndexableSkill], list[dict[str, str]]]:
+def discover(
+    paths: Iterable[Path] | None = None,
+    *,
+    include_packages: bool = True,
+    extra_paths: Iterable[Path] | None = None,
+) -> tuple[list[IndexableSkill], list[dict[str, str]]]:
     skills: list[IndexableSkill] = []
     errors: list[dict[str, str]] = []
+    roots: list[tuple[Path, dict[str, str]]] = []
+    if extra_paths:
+        roots.extend((path, {"type": "path"}) for path in extra_paths)
     if paths is None:
-        roots = default_source_roots()
+        roots.extend(default_source_roots())
     else:
-        roots = [(path, {"type": "path"}) for path in paths]
+        roots.extend((path, {"type": "path"}) for path in paths)
     for root, source in roots:
         for skill_dir in _skill_dirs(root):
             try:
@@ -62,7 +109,7 @@ def discover(paths: Iterable[Path] | None = None, *, include_packages: bool = Tr
                 errors.append({"path": str(skill_dir), "error": str(exc)})
     if include_packages:
         package_skills, package_errors = discover_package_skills()
-        skills.extend(package_skills)
+        skills = [*package_skills, *skills]
         errors.extend(package_errors)
     return _dedupe(skills), errors
 

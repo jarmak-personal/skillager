@@ -7,8 +7,8 @@ Libraries can ship skills alongside package code. Skillager discovers package-pr
 ```text
 your_package/
   __init__.py
-  .skills/
-    data-cleaning/
+  .agents/skills/
+    fastapi-usage/
       SKILL.md
       skillager.yaml
       references/

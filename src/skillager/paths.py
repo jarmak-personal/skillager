@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -20,15 +21,30 @@ def state_root(start: Path | None = None) -> Path:
         return Path(explicit).expanduser().resolve()
     project = find_project_root(start)
     if project:
-        return project / ".skillager"
-    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "skillager"
+        return project_state_root(project)
+    return state_home() / "skillager"
+
+
+def project_state_root(project: Path) -> Path:
+    project = project.expanduser().resolve()
+    digest = hashlib.sha256(str(project).encode("utf-8")).hexdigest()
+    return state_home() / "skillager" / "projects" / digest
+
+
+def state_home() -> Path:
+    explicit = os.environ.get("XDG_STATE_HOME")
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    return Path.home() / ".local" / "state"
+
+
+def legacy_project_state_root(start: Path | None = None) -> Path | None:
+    project = find_project_root(start)
+    return project / ".skillager" if project else None
 
 
 def catalog_state_root() -> Path:
     explicit = os.environ.get("SKILLAGER_CATALOG_STATE_DIR")
-    if explicit:
-        return Path(explicit).expanduser().resolve()
-    explicit = os.environ.get("SKILLAGER_STATE_DIR")
     if explicit:
         return Path(explicit).expanduser().resolve()
     return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "skillager"

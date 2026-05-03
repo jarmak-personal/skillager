@@ -13,7 +13,7 @@ from .scan import scan_path
 from .schema import QuarantinedSkill, SchemaError, Skill, load_skill_from_dir, quarantine_skill_from_dir
 from .search import search as search_skills
 from .selection import select_visible_skills
-from .trust import content_hash, load_trust, save_trust, trust_state
+from .trust import approval_key_for, content_hash, load_trust, save_trust, trust_info
 
 COLLECTION_MIGRATIONS_SCHEMA = "skillager.collection-migrations.v1"
 IGNORED_SKILL_DIR_NAMES = {
@@ -109,26 +109,48 @@ def select_collection_skills(
     name: str | None = None,
     *,
     trust_root: Path | None = None,
+    approval_root: Path | None = None,
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
 ) -> list[dict[str, Any]]:
     return select_visible_skills(
-        _collection_skills(state_root, name, trust_root=trust_root),
+        _collection_skills(state_root, name, trust_root=trust_root, approval_root=approval_root),
         include_blocked=include_blocked,
         include_lint_blocked=include_lint_blocked,
     )
 
 
-def _collection_skills(state_root: Path, name: str | None = None, *, trust_root: Path | None = None) -> list[dict[str, Any]]:
+def _collection_skills(
+    state_root: Path,
+    name: str | None = None,
+    *,
+    trust_root: Path | None = None,
+    approval_root: Path | None = None,
+) -> list[dict[str, Any]]:
     names = [_slug(name)] if name else sorted(load_collections(state_root).get("collections", {}))
     trust_root = trust_root or state_root
+    approval_root = approval_root or trust_root
     skills: list[dict[str, Any]] = []
     for collection_name in names:
         data = _load_or_refresh_collection_index(state_root, collection_name)
         for skill in data.get("skills", []):
             skill = dict(skill)
             if skill.get("id") and skill.get("content_hash"):
-                skill["trust"] = trust_state(trust_root, skill["id"], skill["content_hash"], lint=skill.get("lint"))
+                approval_key = skill.get("approval_key") or approval_key_for(
+                    skill["id"],
+                    skill.get("root"),
+                    skill.get("source") or {},
+                    entrypoint=skill.get("entrypoint"),
+                )
+                trust = trust_info(
+                    trust_root,
+                    skill["id"],
+                    skill["content_hash"],
+                    lint=skill.get("lint"),
+                    approval_key=approval_key,
+                    approval_root=approval_root,
+                )
+                _apply_approval_metadata(skill, approval_key, trust)
             skills.append(skill)
     return skills
 
@@ -141,12 +163,14 @@ def search_collection(
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
     trust_root: Path | None = None,
+    approval_root: Path | None = None,
 ) -> list[dict[str, Any]]:
     return search_skills(
         select_collection_skills(
             state_root,
             name,
             trust_root=trust_root,
+            approval_root=approval_root,
             include_blocked=include_blocked,
             include_lint_blocked=include_lint_blocked,
         ),
@@ -156,8 +180,14 @@ def search_collection(
     )
 
 
-def _find_collection_skill(state_root: Path, skill_id: str, *, trust_root: Path | None = None) -> dict[str, Any]:
-    for skill in _collection_skills(state_root, trust_root=trust_root):
+def _find_collection_skill(
+    state_root: Path,
+    skill_id: str,
+    *,
+    trust_root: Path | None = None,
+    approval_root: Path | None = None,
+) -> dict[str, Any]:
+    for skill in _collection_skills(state_root, trust_root=trust_root, approval_root=approval_root):
         if skill.get("id") == skill_id:
             return skill
     raise KeyError(f"collection skill not found: {skill_id}")
@@ -183,9 +213,10 @@ def create_tag(state_root: Path, tag: str) -> dict[str, Any]:
     return {"tag": tag, "skills": data["tags"][tag]}
 
 
-def add_tag_skill(state_root: Path, tag: str, skill_id: str) -> dict[str, Any]:
+def add_tag_skill(state_root: Path, tag: str, skill_id: str, *, validate: bool = True) -> dict[str, Any]:
     tag = _slug(tag)
-    _find_collection_skill(state_root, skill_id)
+    if validate:
+        _find_collection_skill(state_root, skill_id)
     data = load_tags(state_root)
     skills = data.setdefault("tags", {}).setdefault(tag, [])
     if skill_id not in skills:
@@ -202,9 +233,10 @@ def set_tag_skills(
     *,
     sync: bool = False,
     source_collection: str | None = None,
+    valid_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     tag = _slug(tag)
-    valid_ids = {skill["id"] for skill in _collection_skills(state_root)}
+    valid_ids = valid_ids if valid_ids is not None else {skill["id"] for skill in _collection_skills(state_root)}
     missing = sorted(skill_id for skill_id in skill_ids if skill_id not in valid_ids)
     if missing:
         hint = f" for collection {source_collection}" if source_collection else ""
@@ -241,22 +273,33 @@ def select_tag_skills(
     tag: str,
     *,
     trust_root: Path | None = None,
+    approval_root: Path | None = None,
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
 ) -> list[dict[str, Any]]:
     return select_visible_skills(
-        _tag_skills(state_root, tag, trust_root=trust_root),
+        _tag_skills(state_root, tag, trust_root=trust_root, approval_root=approval_root),
         include_blocked=include_blocked,
         include_lint_blocked=include_lint_blocked,
     )
 
 
-def _tag_skills(state_root: Path, tag: str, *, trust_root: Path | None = None) -> list[dict[str, Any]]:
+def _tag_skills(
+    state_root: Path,
+    tag: str,
+    *,
+    trust_root: Path | None = None,
+    approval_root: Path | None = None,
+) -> list[dict[str, Any]]:
     tag = _slug(tag)
     if trust_root:
         apply_collection_trust_migrations(trust_root, state_root)
     ids = set(load_tags(state_root).get("tags", {}).get(tag, []))
-    return [skill for skill in _collection_skills(state_root, trust_root=trust_root) if skill.get("id") in ids]
+    return [
+        skill
+        for skill in _collection_skills(state_root, trust_root=trust_root, approval_root=approval_root)
+        if skill.get("id") in ids
+    ]
 
 
 def load_project_tags(state_root: Path) -> dict[str, Any]:
@@ -380,23 +423,29 @@ def select_attached_tag_skills(
     state_root: Path,
     *,
     catalog_root: Path | None = None,
+    approval_root: Path | None = None,
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
 ) -> list[dict[str, Any]]:
     return select_visible_skills(
-        _attached_tag_skills(state_root, catalog_root=catalog_root),
+        _attached_tag_skills(state_root, catalog_root=catalog_root, approval_root=approval_root),
         include_blocked=include_blocked,
         include_lint_blocked=include_lint_blocked,
     )
 
 
-def _attached_tag_skills(state_root: Path, *, catalog_root: Path | None = None) -> list[dict[str, Any]]:
+def _attached_tag_skills(
+    state_root: Path,
+    *,
+    catalog_root: Path | None = None,
+    approval_root: Path | None = None,
+) -> list[dict[str, Any]]:
     catalog_root = catalog_root or state_root
     apply_collection_trust_migrations(state_root, catalog_root)
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for tag in load_project_tags(state_root).get("attached_tags", []):
-        for skill in _tag_skills(catalog_root, tag, trust_root=state_root):
+        for skill in _tag_skills(catalog_root, tag, trust_root=state_root, approval_root=approval_root):
             if skill["id"] in seen:
                 continue
             item = dict(skill)
@@ -404,6 +453,18 @@ def _attached_tag_skills(state_root: Path, *, catalog_root: Path | None = None) 
             result.append(item)
             seen.add(skill["id"])
     return result
+
+
+def _apply_approval_metadata(entry: dict[str, Any], approval_key: str | None, trust: dict[str, Any]) -> None:
+    entry["trust"] = trust.get("state", "discovered")
+    for key in ("trust_reason", "trust_scope"):
+        entry.pop(key, None)
+    if approval_key:
+        entry["approval_key"] = approval_key
+    if trust.get("reason"):
+        entry["trust_reason"] = trust["reason"]
+    if trust.get("scope"):
+        entry["trust_scope"] = trust["scope"]
 
 
 def _index_collection_skills(state_root: Path, name: str, root: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
@@ -416,8 +477,10 @@ def _index_collection_skills(state_root: Path, name: str, root: Path) -> tuple[l
             digest = content_hash(skill.root)
             scan = scan_path(skill.root, allow_tools=False)
             lint = lint_skill(skill)
-            trust = trust_state(state_root, skill.id, digest, lint=lint)
-            entry = skill.to_index(digest, scan, trust)
+            approval_key = approval_key_for(skill.id, skill.root, skill.source, entrypoint=skill.entrypoint)
+            trust = trust_info(state_root, skill.id, digest, lint=lint, approval_key=approval_key, approval_root=state_root)
+            entry = skill.to_index(digest, scan, trust.get("state", "discovered"))
+            _apply_approval_metadata(entry, approval_key, trust)
             entry["lint"] = lint
             entry["audience_guess"] = classify_audience(skill)
             skills.append(entry)
@@ -431,8 +494,11 @@ def _index_collection_skills(state_root: Path, name: str, root: Path) -> tuple[l
                     skill = quarantined
                 digest = content_hash(skill.root)
                 scan = scan_path(skill.root, allow_tools=False)
-                trust = trust_state(state_root, skill.id, digest, lint=skill.lint)
-                skills.append(skill.to_index(digest, scan, trust))
+                approval_key = approval_key_for(skill.id, skill.root, skill.source, entrypoint=skill.entrypoint)
+                trust = trust_info(state_root, skill.id, digest, lint=skill.lint, approval_key=approval_key, approval_root=state_root)
+                entry = skill.to_index(digest, scan, trust.get("state", "discovered"))
+                _apply_approval_metadata(entry, approval_key, trust)
+                skills.append(entry)
             errors.append({"path": str(skill_dir), "error": str(exc)})
     skills.sort(key=lambda item: item["id"])
     return skills, errors
@@ -670,3 +736,7 @@ def _slug(value: str) -> str:
     if not slug:
         raise ValueError("name must contain at least one alphanumeric character")
     return slug
+
+
+def normalize_tag(value: str) -> str:
+    return _slug(value)

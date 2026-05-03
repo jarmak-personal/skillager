@@ -1,0 +1,15 @@
+schema: skillager.skill.v1
+audience:
+  - dev
+activation:
+  default: suggested
+compatibility:
+  assumptions:
+    parallel_subagents:
+      required: true
+      preferred: 1
+    writes_files: true
+targets:
+  python_packages:
+    - name: skillager
+      versions: ">=0.3.0"

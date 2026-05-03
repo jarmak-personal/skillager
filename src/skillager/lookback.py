@@ -47,13 +47,14 @@ def build_lookback(
     skill_sessions = _skill_sessions(candidate_events)
     session_records = {item["session_id"]: item for item in list_sessions(state_root, agent=agent)}
     recommendations = _recommendations(aggregate_by_skill, skill_sessions, session_records)
-    overlaps = _observed_overlaps(candidate_events, aggregate_by_skill, skill_sessions)
+    overlaps = _observed_overlaps(candidate_events, aggregate_by_skill, skill_sessions, session_records)
     first = events[0] if events else (candidate_events[0] if candidate_events else {})
     return {
         "sessions": session_ids,
         "candidate_sessions": candidate_sessions,
         "candidate_session_count": len(candidate_sessions),
         "active_candidate_sessions": sum(1 for item in candidate_sessions if session_records.get(item, {}).get("active")),
+        "completed_candidate_sessions": sum(1 for item in candidate_sessions if not session_records.get(item, {}).get("active")),
         "agent": first.get("agent"),
         "external_session_id": first.get("external_session_id"),
         "started_at": first.get("started_at") or first.get("timestamp"),
@@ -177,9 +178,11 @@ def _observed_overlaps(
     events: list[dict[str, Any]],
     by_skill: dict[str, Counter[str]],
     skill_sessions: dict[str, set[str]],
+    session_records: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     pair_counts: Counter[tuple[str, str]] = Counter()
     pair_queries: dict[tuple[str, str], set[str]] = defaultdict(set)
+    pair_sessions: dict[tuple[str, str], set[str]] = defaultdict(set)
     session_skills: dict[str, set[str]] = defaultdict(set)
     materialized = {skill_id for skill_id, counts in by_skill.items() if counts.get("skill_materialized")}
     for event in events:
@@ -192,16 +195,21 @@ def _observed_overlaps(
         top_ids = [item for item in event.get("top_ids", []) if isinstance(item, str)]
         for pair in _pairs(top_ids[:5]):
             pair_counts[pair] += 1
+            if session_id:
+                pair_sessions[pair].add(session_id)
             preview = event.get("query_preview")
             if isinstance(preview, str) and preview:
                 pair_queries[pair].add(preview)
-    for skills in session_skills.values():
+    for session_id, skills in session_skills.items():
         for pair in _pairs(sorted(skills)):
             pair_counts[pair] += 1
+            pair_sessions[pair].add(session_id)
     groups: list[dict[str, Any]] = []
     for pair, count in pair_counts.most_common(12):
         if count < 2:
             continue
+        sessions = sorted(pair_sessions.get(pair, set()))
+        active_sessions = sum(1 for item in sessions if session_records.get(item, {}).get("active"))
         skills = [
             {
                 "id": skill_id,
@@ -216,6 +224,9 @@ def _observed_overlaps(
                 "reason": "co-occurred in searches or sessions",
                 "confidence": "behavioral-hint",
                 "score": count,
+                "sessions": sessions,
+                "session_count": len(sessions),
+                "active_session_count": active_sessions,
                 "skills": skills,
                 "query_previews": sorted(pair_queries.get(pair, set()))[:3],
                 "suggested_next_step": "ask user whether to pin a winner, keep route-only, stub commands, block old skills, or ignore",

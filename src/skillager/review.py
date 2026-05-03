@@ -4,9 +4,10 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
+from .families import agent_variant_family_key
 from .index import build_index, load_index
 from .selection import select_visible_skills
-from .trust import clear_trust, make_lint_override, set_trust, trust_state
+from .trust import clear_global_approvals, clear_trust, make_lint_override, set_trust, trust_state
 
 
 def review_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
@@ -37,22 +38,19 @@ def review_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _family_key(skill: dict[str, Any]) -> str:
-    name = skill["id"].rsplit("/", 1)[-1]
-    for suffix in ("-vibespatial-claude", "-claude", "-codex"):
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-    return name
+    return agent_variant_family_key(skill)
 
 
 def apply_review_action(
     state_root: Path,
     skills: list[dict[str, Any]],
     *,
+    approval_root: Path | None = None,
+    global_scope: bool = False,
     accept_low: bool = False,
     yolo: bool = False,
     trust_state: str | None = None,
     block_high: bool = False,
-    preserve_user_installed: bool = True,
     override_lint: bool = False,
     reason: str | None = None,
 ) -> dict[str, Any]:
@@ -62,9 +60,6 @@ def apply_review_action(
     skipped: list[dict[str, str]] = []
     for skill in skills:
         risk = skill.get("scan", {}).get("risk")
-        if preserve_user_installed and skill.get("trust_reason") == "user-installed":
-            skipped.append({"skill_id": skill["id"], "reason": "already trusted as user-installed native skill"})
-            continue
         lint_override = None
         if skill.get("trust") == "lint_blocked":
             if override_lint:
@@ -74,32 +69,77 @@ def apply_review_action(
                 continue
         if block_high and risk == "high":
             record = set_trust(state_root, skill["id"], "blocked", skill["content_hash"], skill["source"], lint=skill.get("lint"))
-            changed.append({"skill_id": skill["id"], "state": record["state"]})
+            changed.append({"skill_id": skill["id"], "state": record["state"], "scope": record.get("scope", "project")})
             continue
         if yolo:
-            record = set_trust(state_root, skill["id"], "reviewed", skill["content_hash"], skill["source"], lint=skill.get("lint"), lint_override=lint_override)
-            changed.append({"skill_id": skill["id"], "state": record["state"]})
+            record = _set_review_trust(
+                state_root,
+                skill,
+                "reviewed",
+                lint_override=lint_override,
+                approval_root=approval_root,
+                global_scope=global_scope,
+            )
+            changed.append({"skill_id": skill["id"], "state": record["state"], "scope": record.get("scope", "project")})
             continue
         if trust_state:
             if risk == "high" and trust_state in {"trusted", "pinned"}:
                 skipped.append({"skill_id": skill["id"], "reason": "high-risk skills require individual review"})
                 continue
-            record = set_trust(state_root, skill["id"], trust_state, skill["content_hash"], skill["source"], lint=skill.get("lint"), lint_override=lint_override)
-            changed.append({"skill_id": skill["id"], "state": record["state"]})
+            record = _set_review_trust(
+                state_root,
+                skill,
+                trust_state,
+                lint_override=lint_override,
+                approval_root=approval_root,
+                global_scope=global_scope,
+            )
+            changed.append({"skill_id": skill["id"], "state": record["state"], "scope": record.get("scope", "project")})
             continue
         if accept_low:
             if risk == "low":
-                record = set_trust(state_root, skill["id"], "reviewed", skill["content_hash"], skill["source"], lint=skill.get("lint"), lint_override=lint_override)
-                changed.append({"skill_id": skill["id"], "state": record["state"]})
+                record = _set_review_trust(
+                    state_root,
+                    skill,
+                    "reviewed",
+                    lint_override=lint_override,
+                    approval_root=approval_root,
+                    global_scope=global_scope,
+                )
+                changed.append({"skill_id": skill["id"], "state": record["state"], "scope": record.get("scope", "project")})
             else:
                 skipped.append({"skill_id": skill["id"], "reason": f"risk is {risk}"})
     return {"changed": changed, "skipped": skipped}
+
+
+def _set_review_trust(
+    state_root: Path,
+    skill: dict[str, Any],
+    state: str,
+    *,
+    lint_override: dict[str, Any] | None,
+    approval_root: Path | None,
+    global_scope: bool,
+) -> dict[str, Any]:
+    return set_trust(
+        state_root,
+        skill["id"],
+        state,
+        skill["content_hash"],
+        skill["source"],
+        lint=skill.get("lint"),
+        lint_override=lint_override,
+        approval_key=skill.get("approval_key"),
+        approval_root=approval_root,
+        global_scope=global_scope,
+    )
 
 
 def setup_environment(
     state_root: Path,
     *,
     paths: list[Path] | None = None,
+    extra_paths: list[Path] | None = None,
     include_packages: bool = True,
     source: str | None = None,
     audience: str | None = None,
@@ -111,14 +151,17 @@ def setup_environment(
     include_global: bool = False,
     extra_skills: list[dict[str, Any]] | None = None,
     fresh: bool = False,
+    fresh_all: bool = False,
     accept_low: bool = False,
     trust_state: str | None = None,
     block_high: bool = False,
     yolo: bool = False,
     override_lint: bool = False,
     reason: str | None = None,
+    approval_root: Path | None = None,
+    global_scope: bool = False,
 ) -> dict[str, Any]:
-    data = build_index(state_root, paths, include_packages=include_packages)
+    data = build_index(state_root, paths, include_packages=include_packages, approval_root=approval_root, extra_paths=extra_paths)
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
     skipped_global = 0
@@ -136,10 +179,17 @@ def setup_environment(
         include_global=include_global,
     )
     fresh_reset = 0
-    if fresh:
+    global_reset = 0
+    if fresh or fresh_all:
         fresh_reset = clear_trust(state_root, [skill["id"] for skill in skills])
-        data = load_index(state_root)
+        if fresh_all and approval_root is not None:
+            global_reset = clear_global_approvals(
+                approval_root,
+                [skill["approval_key"] for skill in skills if skill.get("approval_key")],
+            )
+        data = load_index(state_root, approval_root=approval_root)
         if extra_skills:
+            extra_skills = _refresh_extra_skill_trust(state_root, extra_skills, approval_root=approval_root)
             data["skills"] = [*data.get("skills", []), *extra_skills]
         skills = select_visible_skills(
             data.get("skills", []),
@@ -159,13 +209,14 @@ def setup_environment(
         yolo=yolo,
         trust_state=trust_state,
         block_high=block_high,
-        preserve_user_installed=True,
         override_lint=override_lint,
         reason=reason,
+        approval_root=approval_root,
+        global_scope=global_scope,
     )
-    refreshed = load_index(state_root)
+    refreshed = load_index(state_root, approval_root=approval_root)
     if extra_skills:
-        extra_skills = _refresh_extra_skill_trust(state_root, extra_skills)
+        extra_skills = _refresh_extra_skill_trust(state_root, extra_skills, approval_root=approval_root)
         refreshed["skills"] = [*refreshed.get("skills", []), *extra_skills]
     selected = select_visible_skills(
         refreshed.get("skills", []),
@@ -182,6 +233,8 @@ def setup_environment(
         "indexed": len(data.get("skills", [])),
         "skipped_global": skipped_global,
         "fresh_reset": fresh_reset,
+        "global_reset": global_reset,
+        "global_approved": sum(1 for skill in selected if skill.get("trust_reason") == "global-approval"),
         "errors": data.get("errors", []),
         "selected": selected,
         "summary": review_summary(selected),
@@ -189,11 +242,23 @@ def setup_environment(
     }
 
 
-def _refresh_extra_skill_trust(state_root: Path, skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _refresh_extra_skill_trust(
+    state_root: Path,
+    skills: list[dict[str, Any]],
+    *,
+    approval_root: Path | None = None,
+) -> list[dict[str, Any]]:
     refreshed = []
     for skill in skills:
         item = dict(skill)
         if item.get("id") and item.get("content_hash"):
-            item["trust"] = trust_state(state_root, item["id"], item["content_hash"], lint=item.get("lint"))
+            item["trust"] = trust_state(
+                state_root,
+                item["id"],
+                item["content_hash"],
+                lint=item.get("lint"),
+                approval_key=item.get("approval_key"),
+                approval_root=approval_root,
+            )
         refreshed.append(item)
     return refreshed

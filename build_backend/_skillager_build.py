@@ -5,15 +5,19 @@ import csv
 import hashlib
 import io
 import tarfile
+import tomllib
 import zipfile
 from email.message import Message
 from pathlib import Path
 
-NAME = "skillager"
-VERSION = "0.2.0"
+ROOT = Path(__file__).resolve().parents[1]
+PROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+NAME = PROJECT["name"]
+VERSION = PROJECT["version"]
+DEPENDENCIES = PROJECT.get("dependencies", [])
 DIST = f"{NAME}-{VERSION}"
 DIST_INFO = f"{NAME}-{VERSION}.dist-info"
-ROOT = Path(__file__).resolve().parents[1]
+REPO_SKILL_ROOT = ROOT / ".agents" / "skills"
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
@@ -23,6 +27,11 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
     with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in sorted((ROOT / "src" / NAME).rglob("*.py")):
             arcname = f"{NAME}/{path.relative_to(ROOT / 'src' / NAME).as_posix()}"
+            data = path.read_bytes()
+            zf.writestr(arcname, data)
+            records.append((arcname, data))
+        for path in _repo_skill_files():
+            arcname = f"{NAME}/.agents/skills/{path.relative_to(REPO_SKILL_ROOT).as_posix()}"
             data = path.read_bytes()
             zf.writestr(arcname, data)
             records.append((arcname, data))
@@ -67,8 +76,8 @@ def build_editable(wheel_directory, config_settings=None, metadata_directory=Non
 def build_sdist(sdist_directory, config_settings=None):
     sdist_name = f"{DIST}.tar.gz"
     sdist_path = Path(sdist_directory) / sdist_name
-    include_roots = ["build_backend", "docs", "examples", "src", "tests"]
-    include_files = ["pyproject.toml", "README.md", "LICENSE"]
+    include_roots = [".agents", "build_backend", "docs", "examples", "src", "tests"]
+    include_files = ["pyproject.toml", "README.md", "LICENSE", "SECURITY.md"]
     with tarfile.open(sdist_path, "w:gz", format=tarfile.PAX_FORMAT) as tf:
         for filename in include_files:
             path = ROOT / filename
@@ -114,8 +123,8 @@ def _metadata() -> str:
     message["Version"] = VERSION
     message["Summary"] = "A Python environment skill registry and activation layer for coding agents."
     message["Requires-Python"] = ">=3.11"
-    message["Requires-Dist"] = "pyyaml>=6.0.3"
-    message["Requires-Dist"] = "rich>=15.0.0"
+    for dependency in DEPENDENCIES:
+        message["Requires-Dist"] = dependency
     message["Provides-Extra"] = "test"
     message["License"] = "MIT"
     message["Keywords"] = "agents,skills,codex,claude,llm"
@@ -134,13 +143,35 @@ def _metadata() -> str:
 
 
 def _excluded(path: Path) -> bool:
+    if _is_repo_skill_file(path):
+        return False
     if any(part in {".git", ".venv", ".skillager", ".codex", ".claude", ".agents"} for part in path.parts):
+        return True
+    if path.name == "MANIFEST_HARDENING_PLAN.md":
         return True
     if any(part.endswith(".egg-info") for part in path.parts):
         return True
     if any(part == "__pycache__" for part in path.parts):
         return True
     return path.suffix in {".pyc", ".pyo"}
+
+
+def _repo_skill_files() -> list[Path]:
+    if not REPO_SKILL_ROOT.exists():
+        return []
+    return sorted(path for path in REPO_SKILL_ROOT.rglob("*") if path.is_file() and not _excluded(path))
+
+
+def _is_repo_skill_file(path: Path) -> bool:
+    try:
+        relative = path.relative_to(REPO_SKILL_ROOT)
+    except ValueError:
+        return False
+    if any(part == "__pycache__" for part in relative.parts):
+        return False
+    if path.suffix in {".pyc", ".pyo"}:
+        return False
+    return True
 
 
 def _record(records: list[tuple[str, bytes]], record_path: str) -> str:
