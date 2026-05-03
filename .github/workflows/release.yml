@@ -78,7 +78,6 @@ jobs:
           replacements = {
               "pyproject.toml": [(f'version = "{current}"', f'version = "{next_version}"')],
               "src/skillager/__init__.py": [(f'__version__ = "{current}"', f'__version__ = "{next_version}"')],
-              "build_backend/_skillager_build.py": [(f'VERSION = "{current}"', f'VERSION = "{next_version}"')],
           }
           for filename, pairs in replacements.items():
               path = pathlib.Path(filename)
@@ -109,7 +108,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml src/skillager/__init__.py build_backend/_skillager_build.py
+          git add pyproject.toml src/skillager/__init__.py
           if git diff --cached --quiet; then
             echo "No version bump commit needed for $NEXT"
           else
