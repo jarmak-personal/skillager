@@ -17,6 +17,10 @@ permissions:
   contents: write
   id-token: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -27,6 +31,95 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
+          fetch-tags: true
+
+      - name: Preflight release services
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          def fetch_json(url, *, headers=None):
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "Accept": "application/json",
+                      "User-Agent": "skillager-release-workflow",
+                      **(headers or {}),
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  return json.load(response)
+
+          def fetch_probe(url, *, headers=None):
+              request = urllib.request.Request(
+                  url,
+                  headers={
+                      "User-Agent": "skillager-release-workflow",
+                      **(headers or {}),
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  response.read(1)
+
+          def require_green_statuspage(name, url):
+              payload = fetch_json(url)
+              status = payload.get("status", {})
+              indicator = status.get("indicator")
+              description = status.get("description", "unknown")
+              if indicator != "none":
+                  raise SystemExit(f"{name} status is not green: {indicator} ({description})")
+              print(f"{name} status: {description}")
+
+          def require_operational_components(name, url, selector):
+              # Python status has no PyPI-only aggregate. Keep this fail-closed if
+              # component names drift so the release owner can update the matcher.
+              payload = fetch_json(url)
+              components = [
+                  component
+                  for component in payload.get("components", [])
+                  if selector(component.get("name", ""))
+              ]
+              if not components:
+                  raise SystemExit(f"{name} status check found no matching components")
+              degraded = [
+                  f"{component.get('name')}={component.get('status')}"
+                  for component in components
+                  if component.get("status") != "operational"
+              ]
+              if degraded:
+                  raise SystemExit(f"{name} status is not green: {', '.join(degraded)}")
+              print(f"{name} status: {len(components)} relevant components operational")
+
+          def require_probe(name, url, *, headers=None):
+              try:
+                  fetch_probe(url, headers=headers)
+              except urllib.error.HTTPError as exc:
+                  raise SystemExit(f"{name} probe failed with HTTP {exc.code}") from exc
+              except urllib.error.URLError as exc:
+                  raise SystemExit(f"{name} probe failed: {exc.reason}") from exc
+              print(f"{name} probe: ok")
+
+          github_headers = {"Accept": "application/vnd.github+json"}
+          token = os.environ.get("GH_TOKEN")
+          if token:
+              github_headers["Authorization"] = f"Bearer {token}"
+
+          require_green_statuspage("GitHub", "https://www.githubstatus.com/api/v2/summary.json")
+          require_operational_components(
+              "PyPI",
+              "https://status.python.org/api/v2/summary.json",
+              lambda component_name: component_name == "PyPI"
+              or component_name.startswith("pypi.org -")
+              or component_name.startswith("files.pythonhosted.org -"),
+          )
+          require_probe("GitHub API", "https://api.github.com/rate_limit", headers=github_headers)
+          require_probe("PyPI API", "https://pypi.org/simple/")
+          PY
 
       - name: Compute next version
         id: version
@@ -63,6 +156,24 @@ jobs:
           )
           echo "next=$NEXT" >> "$GITHUB_OUTPUT"
           echo "### Version bump: $CURRENT -> $NEXT (${{ inputs.bump }})" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Reuse existing current release tag
+        if: inputs.bump == 'current'
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+        run: |
+          tag="v$NEXT"
+          remote_tag_sha=$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')
+          if [ -z "$remote_tag_sha" ]; then
+            remote_tag_sha=$(git ls-remote origin "refs/tags/$tag" | awk '{print $1}')
+          fi
+
+          if [ -n "$remote_tag_sha" ]; then
+            git checkout --detach "$remote_tag_sha"
+            echo "Reusing existing $tag at $remote_tag_sha"
+          else
+            echo "$tag does not exist yet; release will tag the current commit"
+          fi
 
       - name: Update version files
         env:
@@ -114,12 +225,38 @@ jobs:
           else
             git commit -m "Bump version to $NEXT"
           fi
-          git tag "v$NEXT"
-          if [ "$NEXT" = "$CURRENT" ]; then
+
+          tag="v$NEXT"
+          head_sha=$(git rev-parse HEAD)
+          remote_tag_sha=$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')
+          if [ -z "$remote_tag_sha" ]; then
+            remote_tag_sha=$(git ls-remote origin "refs/tags/$tag" | awk '{print $1}')
+          fi
+
+          if [ -n "$remote_tag_sha" ] && [ "$remote_tag_sha" != "$head_sha" ]; then
+            echo "::error::$tag already exists at $remote_tag_sha, but release HEAD is $head_sha"
+            exit 1
+          fi
+
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            local_tag_sha=$(git rev-list -n 1 "$tag")
+            if [ "$local_tag_sha" != "$head_sha" ]; then
+              echo "::error::local $tag points at $local_tag_sha, but release HEAD is $head_sha"
+              exit 1
+            fi
+            echo "$tag already exists locally at release HEAD"
+          else
+            git tag "$tag" "$head_sha"
+          fi
+
+          if [ "$NEXT" != "$CURRENT" ]; then
+            git push origin HEAD:main
+          fi
+
+          if [ -z "$remote_tag_sha" ]; then
             git push origin "v$NEXT"
           else
-            git push origin HEAD:main
-            git push origin "v$NEXT"
+            echo "$tag already exists on origin at release HEAD; skipping tag push"
           fi
 
       - name: Build release notes from commit subjects
@@ -136,15 +273,69 @@ jobs:
           fi
           printf '%s\n' "$NOTES" > RELEASE_NOTES.md
 
-      - name: Create GitHub Release
+      - name: Create or update draft GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NEXT: ${{ steps.version.outputs.next }}
         run: |
-          gh release create "v$NEXT" \
-            --title "v$NEXT" \
-            --notes-file RELEASE_NOTES.md \
-            --latest
+          gh_api_retry() {
+            attempt=1
+            while true; do
+              if gh api "$@"; then
+                return 0
+              fi
+              if [ "$attempt" -ge 3 ]; then
+                return 1
+              fi
+              sleep_seconds=$((attempt * 10))
+              echo "gh api failed; retrying in ${sleep_seconds}s" >&2
+              sleep "$sleep_seconds"
+              attempt=$((attempt + 1))
+            done
+          }
+
+          release_id_for_tag() {
+            lookup_tag="$1"
+            attempt=1
+            while true; do
+              error_file=$(mktemp)
+              if release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$lookup_tag" --jq .id 2>"$error_file"); then
+                rm -f "$error_file"
+                printf '%s\n' "$release_id"
+                return 0
+              fi
+              if grep -q "HTTP 404" "$error_file"; then
+                rm -f "$error_file"
+                return 0
+              fi
+              if [ "$attempt" -ge 3 ]; then
+                cat "$error_file" >&2
+                rm -f "$error_file"
+                return 1
+              fi
+              cat "$error_file" >&2
+              rm -f "$error_file"
+              sleep_seconds=$((attempt * 10))
+              echo "Release lookup failed; retrying in ${sleep_seconds}s" >&2
+              sleep "$sleep_seconds"
+              attempt=$((attempt + 1))
+            done
+          }
+
+          tag="v$NEXT"
+          release_id=$(release_id_for_tag "$tag")
+          if [ -n "$release_id" ]; then
+            gh_api_retry --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+              -f name="$tag" \
+              -F body=@RELEASE_NOTES.md \
+              --silent
+          else
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$tag" \
+              --notes-file RELEASE_NOTES.md \
+              --draft
+          fi
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7.0.1
@@ -166,7 +357,7 @@ jobs:
       - name: Upload assets to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "v${{ needs.release.outputs.version }}" dist/* --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "v${{ needs.release.outputs.version }}" dist/* --repo "$GITHUB_REPOSITORY" --clobber
 
   publish-pypi:
     needs: release
@@ -183,5 +374,100 @@ jobs:
           name: dist
           path: dist/
 
+      - name: Check whether version is already on PyPI
+        id: pypi
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["VERSION"]
+          url = f"https://pypi.org/pypi/skillager/{version}/json"
+          exists = False
+          try:
+              with urllib.request.urlopen(url, timeout=20) as response:
+                  exists = response.status == 200
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  raise
+
+          print(f"exists={str(exists).lower()}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"exists={str(exists).lower()}\n")
+          PY
+
       - name: Publish to PyPI
+        if: steps.pypi.outputs.exists != 'true'
         uses: pypa/gh-action-pypi-publish@v1.14.0
+
+  publish-github-release:
+    needs:
+      - release
+      - release-assets
+      - publish-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          gh_api_retry() {
+            attempt=1
+            while true; do
+              if gh api "$@"; then
+                return 0
+              fi
+              if [ "$attempt" -ge 3 ]; then
+                return 1
+              fi
+              sleep_seconds=$((attempt * 10))
+              echo "gh api failed; retrying in ${sleep_seconds}s" >&2
+              sleep "$sleep_seconds"
+              attempt=$((attempt + 1))
+            done
+          }
+
+          release_id_for_tag() {
+            lookup_tag="$1"
+            attempt=1
+            while true; do
+              error_file=$(mktemp)
+              if release_id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$lookup_tag" --jq .id 2>"$error_file"); then
+                rm -f "$error_file"
+                printf '%s\n' "$release_id"
+                return 0
+              fi
+              if grep -q "HTTP 404" "$error_file"; then
+                rm -f "$error_file"
+                return 0
+              fi
+              if [ "$attempt" -ge 3 ]; then
+                cat "$error_file" >&2
+                rm -f "$error_file"
+                return 1
+              fi
+              cat "$error_file" >&2
+              rm -f "$error_file"
+              sleep_seconds=$((attempt * 10))
+              echo "Release lookup failed; retrying in ${sleep_seconds}s" >&2
+              sleep "$sleep_seconds"
+              attempt=$((attempt + 1))
+            done
+          }
+
+          release_id=$(release_id_for_tag "v$VERSION")
+          if [ -z "$release_id" ]; then
+            echo "::error::GitHub Release v$VERSION does not exist"
+            exit 1
+          fi
+
+          gh_api_retry --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            -F draft=false \
+            -f make_latest=true \
+            --silent
