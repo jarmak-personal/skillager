@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from support import TtyStringIO, chdir
 from skillager.cli import main
+from skillager.index import build_index
 from skillager.lookback import build_lookback
 from skillager.materialize import materialize_working_skill
 from skillager.session import append_event, end_session, prune_sessions, read_events, redact_session, start_session
@@ -195,9 +196,9 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
             data = json.loads(output.getvalue())
-            self.assertFalse(data["needs_setup"])
+            self.assertTrue(data["needs_setup"])
             self.assertEqual(data["selected"], 2)
-            self.assertEqual(data["review_needed"], 0)
+            self.assertEqual(data["review_needed"], 1)
             self.assertEqual(data["scope"]["audience"], "user")
 
             all_output = StringIO()
@@ -212,6 +213,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             all_data = json.loads(all_output.getvalue())
             self.assertTrue(all_data["needs_setup"])
             self.assertEqual(all_data["selected"], 3)
+            self.assertEqual(all_data["review_needed"], 2)
 
     def test_status_ack_migration_without_pending_is_noop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -376,6 +378,45 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                 self.assertEqual(main(["handoff", "--agent", "codex"]), 0)
             self.assertIn("Suggested commands:", text.getvalue())
             self.assertIn("skillager list --summary-json --agent codex", text.getvalue())
+
+    def test_handoff_requires_setup_for_unapproved_skill_in_saved_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            approved = root / ".skills" / "approved"
+            unapproved = root / ".skills" / "unapproved"
+            approved.mkdir(parents=True)
+            unapproved.mkdir(parents=True)
+            (approved / "SKILL.md").write_text("# Approved\n\nUse approved guidance.\n", encoding="utf-8")
+            (unapproved / "SKILL.md").write_text("# Unapproved\n\nUse unapproved guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                data = build_index(state, include_packages=False)
+                by_id = {skill["id"]: skill for skill in data["skills"]}
+                set_trust(state, "project/approved", "reviewed", by_id["project/approved"]["content_hash"], by_id["project/approved"]["source"])
+                (state / "status_scope.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.status-scope.v1",
+                            "selected_count": 2,
+                            "agents": ["codex"],
+                            "baseline": {skill["id"]: skill["content_hash"] for skill in data["skills"]},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                materialize_working_skill(agents=["codex"], project_dir=root)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            handoff = json.loads(output.getvalue())
+            self.assertEqual(handoff["status"], "setup-needed")
+            self.assertEqual(handoff["state"]["setup"]["unreviewed"], 1)
+            self.assertIn("skillager setup", handoff["next"]["next_commands"])
 
     def test_handoff_reports_stale_working_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

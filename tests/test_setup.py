@@ -429,6 +429,28 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertNotIn("second sentence", text)
             self.assertIn("file:", text)
 
+    def test_interactive_setup_explains_working_skill_requires_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "gis-domain"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            stdin = TtyStringIO("4\n5\n")
+            stdout = TtyStringIO()
+            with (
+                patch("sys.stdin", stdin),
+                patch("sys.stdout", stdout),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                self.assertEqual(main(["setup", "--no-packages"]), 0)
+            text = stdout.getvalue()
+            self.assertIn("Install Skillager working skill for project scope (requires approved skills)", text)
+            self.assertIn("No reviewed/trusted/pinned skills are ready for project setup.", text)
+            self.assertIn("Approve low-risk skills first with setup option 2", text)
+
     def test_setup_needs_review_hides_reviewed_risky_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -735,6 +757,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 self.assertEqual(main(["setup", "--no-packages"]), 0)
             text = stdout.getvalue()
             self.assertIn("Audience scope", text)
+            self.assertIn("before a specific task is known", text)
             self.assertIn("Low-risk skills span multiple audiences", text)
             self.assertIn("    - dev: 1", text)
             self.assertIn("    - user: 1", text)

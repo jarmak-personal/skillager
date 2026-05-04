@@ -942,9 +942,15 @@ def cmd_tag_show(args: argparse.Namespace) -> int:
         args.tag,
         include_lint_blocked=args.include_lint_blocked,
     )
+    summary = _tag_trust_summary(
+        args.tag,
+        _select_project_tag_skills(root(args), catalog_root(args), args.tag, include_blocked=True, include_lint_blocked=True),
+    )
     if args.json:
-        print(json.dumps({"tag": args.tag, "skills": skills}, indent=2, sort_keys=True))
+        print(json.dumps({"tag": args.tag, "summary": summary, "skills": skills}, indent=2, sort_keys=True))
     else:
+        print(_tag_summary_line(summary))
+        _print_tag_review_warning(summary)
         for skill in skills:
             print(f"{skill['id']}\t{skill['trust']}\t{skill['summary']}")
     return 0
@@ -954,6 +960,7 @@ def cmd_project_attach_tag(args: argparse.Namespace) -> int:
     data = attach_project_tag(root(args), args.tag, catalog_root=catalog_root(args))
     print(f"{args.tag}: attached")
     print(f"attached tags: {', '.join(data.get('attached_tags', [])) or '-'}")
+    _print_tag_review_warning(_tag_trust_summary(args.tag, _select_project_tag_skills(root(args), catalog_root(args), args.tag, include_lint_blocked=True)))
     return 0
 
 
@@ -966,11 +973,15 @@ def cmd_project_detach_tag(args: argparse.Namespace) -> int:
 
 def cmd_project_tags(args: argparse.Namespace) -> int:
     data = load_project_tags(root(args))
+    summaries = _tag_trust_summaries(root(args), catalog_root(args), data.get("attached_tags", []))
     if args.json:
-        print(json.dumps(data, indent=2, sort_keys=True))
+        payload = dict(data)
+        payload["tag_summaries"] = summaries
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        for tag in data.get("attached_tags", []):
-            print(tag)
+        for summary in summaries:
+            print(_tag_summary_line(summary))
+            _print_tag_review_warning(summary, indent="  ")
     return 0
 
 
@@ -1598,6 +1609,12 @@ def _print_handoff(handoff: dict[str, Any]) -> None:
         f"{', '.join(state['unmaterialized_attached_tags']) if state['unmaterialized_attached_tags'] else 'none'}"
     )
     tagging = state.get("tagging") or {}
+    if tagging.get("mixed_trust_tag_count"):
+        names = ", ".join(
+            f"{item['tag']}={item['review_needed']} unreviewed"
+            for item in tagging.get("mixed_trust_tags", [])[:5]
+        )
+        print(f"  Attached tags needing review: {names}")
     if tagging.get("approved_untagged_count"):
         names = ", ".join(
             f"{item['collection']}={item['approved_untagged']}"
@@ -1883,9 +1900,75 @@ def _print_out_of_scope_collections(state_root: Path, catalog_root: Path, *, act
     print("  run `skillager collection enable <name>` to include one in project setup")
 
 
+def _tag_trust_summaries(state_root: Path, catalog_root: Path, tags: list[str]) -> list[dict[str, Any]]:
+    return [
+        _tag_trust_summary(
+            tag,
+            _select_project_tag_skills(state_root, catalog_root, tag, include_blocked=True, include_lint_blocked=True),
+        )
+        for tag in tags
+    ]
+
+
+def _tag_trust_summary(tag: str, skills: list[dict[str, Any]]) -> dict[str, Any]:
+    by_trust = Counter(str(skill.get("trust") or "unknown") for skill in skills)
+    review_needed_ids = [skill["id"] for skill in skills if skill.get("trust") == "discovered"]
+    lint_blocked_ids = [skill["id"] for skill in skills if skill.get("trust") == "lint_blocked"]
+    blocked_ids = [skill["id"] for skill in skills if skill.get("trust") == "blocked"]
+    approved = sum(count for trust, count in by_trust.items() if trust in TRUSTED_STATES)
+    review_needed = by_trust.get("discovered", 0)
+    lint_blocked = by_trust.get("lint_blocked", 0)
+    blocked = by_trust.get("blocked", 0)
+    active_buckets = sum(1 for count in by_trust.values() if count)
+    return {
+        "tag": normalize_tag(tag),
+        "skills": len(skills),
+        "approved": approved,
+        "review_needed": review_needed,
+        "lint_blocked": lint_blocked,
+        "blocked": blocked,
+        "by_trust": dict(sorted(by_trust.items())),
+        "mixed_trust": active_buckets > 1,
+        "review_needed_ids": review_needed_ids[:10],
+        "lint_blocked_ids": lint_blocked_ids[:10],
+        "blocked_ids": blocked_ids[:10],
+    }
+
+
+def _tag_summary_line(summary: dict[str, Any]) -> str:
+    parts = [
+        f"{summary['tag']}: {summary['skills']} skill(s)",
+        f"approved={summary['approved']}",
+        f"review_needed={summary['review_needed']}",
+    ]
+    if summary.get("lint_blocked"):
+        parts.append(f"lint_blocked={summary['lint_blocked']}")
+    if summary.get("blocked"):
+        parts.append(f"blocked={summary['blocked']}")
+    return ", ".join(parts)
+
+
+def _print_tag_review_warning(summary: dict[str, Any], *, indent: str = "") -> None:
+    if not (summary.get("review_needed") or summary.get("lint_blocked")):
+        return
+    print(
+        f"{indent}warning: tag {summary['tag']} contains "
+        f"{summary.get('review_needed', 0)} unreviewed and {summary.get('lint_blocked', 0)} lint-blocked skill(s); "
+        "approved-only search and router materialization will use only reviewed/trusted/pinned members."
+    )
+    print(f"{indent}review remaining tag members with: skillager setup --source collection")
+
+
 def _status_tagging_summary(state_root: Path, catalog_root: Path) -> dict[str, Any]:
     tag_data = load_tags(catalog_root)
     tags = tag_data.get("tags", {})
+    attached_tags = load_project_tags(state_root).get("attached_tags", [])
+    attached_summaries = _tag_trust_summaries(state_root, catalog_root, attached_tags)
+    mixed_attached = [
+        summary
+        for summary in attached_summaries
+        if summary.get("review_needed") or summary.get("lint_blocked")
+    ]
     tagged_ids = {skill_id for skill_ids in tags.values() for skill_id in skill_ids}
     groups: dict[str, dict[str, Any]] = {}
     for skill in _effective_project_skills(state_root, catalog_root=catalog_root):
@@ -1912,6 +1995,9 @@ def _status_tagging_summary(state_root: Path, catalog_root: Path) -> dict[str, A
     items = [groups[name] for name in sorted(groups)]
     return {
         "tag_count": len(tags),
+        "attached_tag_summaries": attached_summaries,
+        "mixed_trust_tag_count": len(mixed_attached),
+        "mixed_trust_tags": mixed_attached,
         "approved_untagged_count": sum(item["approved_untagged"] for item in items),
         "approved_untagged_collections": items,
     }
@@ -1937,7 +2023,7 @@ def _status_message(
             "Run `skillager status --ack-migration` after reviewing."
         )
     if review_needed:
-        return f"Skillager: {len(review_needed)} new or changed unreviewed skill(s) available. Ask the user to run `skillager setup`."
+        return f"Skillager: {len(review_needed)} unreviewed skill(s) need review in the active setup scope. Ask the user to run `skillager setup`."
     if collection_summary and collection_summary.get("unattached_count"):
         return "Skillager: registered collections are not attached to this project. Run `skillager collection enable <name>` before setup."
     if lookback_summary and lookback_summary.get("pending"):
@@ -1989,6 +2075,12 @@ def _print_status(status: dict[str, Any]) -> None:
             f"{collection_inventory['count']} ({names})"
         )
     tagging = status.get("tagging") or {}
+    if tagging.get("mixed_trust_tag_count"):
+        names = ", ".join(
+            f"{item['tag']}={item['review_needed']} unreviewed"
+            for item in tagging.get("mixed_trust_tags", [])[:5]
+        )
+        print(f"  - attached tags needing review: {tagging['mixed_trust_tag_count']} ({names})")
     if tagging.get("approved_untagged_count"):
         names = ", ".join(
             f"{item['collection']}={item['approved_untagged']}"
@@ -2067,15 +2159,7 @@ def _print_migration_details(migrations: dict[str, Any]) -> None:
 
 
 def _status_review_needed(skills: list[dict[str, Any]], *, saved_scope: dict[str, Any] | None) -> list[dict[str, Any]]:
-    baseline = saved_scope.get("baseline", {}) if saved_scope else {}
-    review_needed = []
-    for skill in skills:
-        if skill.get("trust") != "discovered":
-            continue
-        if baseline.get(skill["id"]) == skill.get("content_hash"):
-            continue
-        review_needed.append(skill)
-    return review_needed
+    return [skill for skill in skills if skill.get("trust") == "discovered"]
 
 
 def _authored_unreviewed(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2267,6 +2351,7 @@ def _prompt_setup_audience(state_root: Path, args: argparse.Namespace, *, catalo
 
     print(_style("Audience scope", "bold"))
     print("  This setup selection spans multiple audiences.")
+    print("  If you are setting up before a specific task is known, choose both; agents can narrow after asking the user goal.")
     for audience, count in sorted(counts.items()):
         print(f"    - {audience}: {count}")
     while True:
@@ -3825,7 +3910,7 @@ def _interactive_setup(
         print(f"  {_style('1', 'cyan')}. Review unapproved skills one by one")
         print(f"  {_style('2', 'green')}. Approve all low-risk selected skills")
         print(f"  {_style('3', 'red')}. Block all high-risk selected skills")
-        print(f"  {_style('4', 'cyan')}. Install Skillager working skill for project scope")
+        print(f"  {_style('4', 'cyan')}. Install Skillager working skill for project scope (requires approved skills)")
         print(f"  {_style('5', 'dim')}. Exit")
         choice = _interactive_input("> ").strip()
         if choice == "1":
@@ -4056,6 +4141,7 @@ def _materialize_reviewed_for_project(
 ) -> list[dict[str, Any]] | None:
     if not skills:
         print("No reviewed/trusted/pinned skills are ready for project setup.")
+        print("Approve low-risk skills first with setup option 2, or review warned/high-risk skills with option 1.")
         return None
     agents = _choose_materialize_agents()
     if not agents:

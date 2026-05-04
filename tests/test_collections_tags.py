@@ -219,6 +219,62 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             tags = json.loads((state / "tags.json").read_text(encoding="utf-8"))
             self.assertEqual(tags["tag_metadata"]["mixed"]["source_collections"], ["community"])
 
+    def test_tag_and_project_tag_commands_surface_mixed_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            reviewed = collection / "reviewed"
+            unreviewed = collection / "unreviewed"
+            reviewed.mkdir(parents=True)
+            unreviewed.mkdir(parents=True)
+            (reviewed / "SKILL.md").write_text("# Reviewed\n\nUse reviewed guidance.\n", encoding="utf-8")
+            (unreviewed / "SKILL.md").write_text("# Unreviewed\n\nUse unreviewed guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    index = json.loads((state / "collections" / "community.json").read_text(encoding="utf-8"))
+                    reviewed_skill = next(skill for skill in index["skills"] if skill["id"] == "community/reviewed")
+                    set_trust(
+                        state,
+                        reviewed_skill["id"],
+                        "reviewed",
+                        reviewed_skill["content_hash"],
+                        reviewed_skill["source"],
+                        approval_key=reviewed_skill.get("approval_key"),
+                    )
+                    self.assertEqual(main(["tag", "add", "mixed", "--from-collection", "community"]), 0)
+
+                tag_output = StringIO()
+                with redirect_stdout(tag_output):
+                    self.assertEqual(main(["tag", "show", "mixed", "--json"]), 0)
+                attach_text = StringIO()
+                with redirect_stdout(attach_text):
+                    self.assertEqual(main(["project", "attach-tag", "mixed"]), 0)
+                project_output = StringIO()
+                with redirect_stdout(project_output):
+                    self.assertEqual(main(["project", "tags", "--json"]), 0)
+                status_output = StringIO()
+                with redirect_stdout(status_output):
+                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
+
+            tag_data = json.loads(tag_output.getvalue())
+            self.assertTrue(tag_data["summary"]["mixed_trust"])
+            self.assertEqual(tag_data["summary"]["approved"], 1)
+            self.assertEqual(tag_data["summary"]["review_needed"], 1)
+            self.assertIn("warning: tag mixed contains 1 unreviewed", attach_text.getvalue())
+            project_data = json.loads(project_output.getvalue())
+            self.assertEqual(project_data["tag_summaries"][0]["tag"], "mixed")
+            self.assertEqual(project_data["tag_summaries"][0]["review_needed"], 1)
+            status_data = json.loads(status_output.getvalue())
+            self.assertEqual(status_data["tagging"]["mixed_trust_tag_count"], 1)
+            self.assertEqual(status_data["tagging"]["mixed_trust_tags"][0]["tag"], "mixed")
+
     def test_collection_add_recursively_indexes_repo_tree_with_path_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
