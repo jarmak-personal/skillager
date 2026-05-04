@@ -49,58 +49,6 @@ class SkillagerCoreTests(unittest.TestCase):
         )
         self.assertIn("skillager", result.stdout)
 
-    def test_build_backend_metadata_matches_project_metadata(self) -> None:
-        from build_backend import _skillager_build
-
-        project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
-        metadata = _skillager_build._metadata()
-        self.assertIn(f"Version: {project['version']}", metadata)
-        for dependency in project["dependencies"]:
-            self.assertIn(f"Requires-Dist: {dependency}", metadata)
-
-    def test_build_backend_packages_repo_testing_skill(self) -> None:
-        from build_backend import _skillager_build
-
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp)
-            wheel_name = _skillager_build.build_wheel(out)
-            wheel_path = out / wheel_name
-            with zipfile.ZipFile(wheel_path) as wheel:
-                names = set(wheel.namelist())
-                manifest = wheel.read("skillager/.agents/skills/simulate-skillager-setup/skillager.yaml").decode()
-            self.assertIn("skillager/.agents/skills/simulate-skillager-setup/SKILL.md", names)
-            self.assertIn("skillager/.agents/skills/simulate-skillager-setup/skillager.yaml", names)
-            self.assertIn("schema: skillager.skill.v1", manifest)
-            self.assertIn("  - dev", manifest)
-
-            sdist_name = _skillager_build.build_sdist(out)
-            with tarfile.open(out / sdist_name, "r:gz") as sdist:
-                sdist_names = set(sdist.getnames())
-            self.assertIn(f"{_skillager_build.DIST}/.agents/skills/simulate-skillager-setup/SKILL.md", sdist_names)
-            self.assertIn(f"{_skillager_build.DIST}/.agents/skills/simulate-skillager-setup/skillager.yaml", sdist_names)
-            self.assertNotIn(f"{_skillager_build.DIST}/docs/MANIFEST_HARDENING_PLAN.md", sdist_names)
-
-    def test_packaged_repo_testing_skill_is_discoverable_from_wheel_files(self) -> None:
-        from build_backend import _skillager_build
-
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp)
-            site_packages = out / "site-packages"
-            site_packages.mkdir()
-            wheel_name = _skillager_build.build_wheel(out)
-            with zipfile.ZipFile(out / wheel_name) as wheel:
-                wheel.extractall(site_packages)
-            with (
-                patch("skillager.discovery._site_package_paths", return_value=[site_packages]),
-                patch("skillager.discovery.find_project_root", return_value=None),
-            ):
-                skills, errors = discover_package_skills()
-            self.assertEqual(errors, [])
-            by_id = {skill.id: skill for skill in skills}
-            self.assertIn("skillager/simulate-skillager-setup", by_id)
-            skill = by_id["skillager/simulate-skillager-setup"]
-            self.assertEqual(skill.package, "skillager")
-            self.assertEqual(skill.audience, ["dev"])
 
     def test_packaged_simulation_skill_manifest_loads(self) -> None:
         skill = load_skill_from_dir(Path(".agents/skills/simulate-skillager-setup"), {"type": "project"})
@@ -438,6 +386,86 @@ class SkillagerCoreTests(unittest.TestCase):
                 self.assertEqual(main(["session", "start", "--agent", "codex", "--external-session-id", "codex-1"]), 0)
                 self.assertEqual(main(["session", "end", "--agent", "claude", "--external-session-id", "codex-1"]), 2)
             self.assertIn("skillager session current --json", stderr.getvalue())
+
+
+class SkillagerPackagingTests(unittest.TestCase):
+    """Verify build artifacts (wheel + sdist) match the invariants we need.
+
+    Runs `uv build` once per class to keep cost low.
+    """
+
+    _build_dir: tempfile.TemporaryDirectory[str]
+    wheel_path: Path
+    sdist_path: Path
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._build_dir = tempfile.TemporaryDirectory()
+        repo_root = Path(__file__).resolve().parents[1]
+        subprocess.run(
+            ["uv", "build", "--out-dir", cls._build_dir.name],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+        )
+        out = Path(cls._build_dir.name)
+        cls.wheel_path = next(out.glob("*.whl"))
+        cls.sdist_path = next(out.glob("*.tar.gz"))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._build_dir.cleanup()
+
+    def test_wheel_metadata_matches_pyproject(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        project = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        with zipfile.ZipFile(self.wheel_path) as wheel:
+            metadata_name = next(name for name in wheel.namelist() if name.endswith(".dist-info/METADATA"))
+            metadata = wheel.read(metadata_name).decode()
+        self.assertIn(f"Version: {project['version']}", metadata)
+        for dependency in project["dependencies"]:
+            self.assertIn(f"Requires-Dist: {dependency}", metadata)
+
+    def test_wheel_bundles_repo_testing_skill(self) -> None:
+        with zipfile.ZipFile(self.wheel_path) as wheel:
+            names = set(wheel.namelist())
+            manifest = wheel.read("skillager/.agents/skills/simulate-skillager-setup/skillager.yaml").decode()
+        self.assertIn("skillager/.agents/skills/simulate-skillager-setup/SKILL.md", names)
+        self.assertIn("skillager/.agents/skills/simulate-skillager-setup/skillager.yaml", names)
+        self.assertIn("schema: skillager.skill.v1", manifest)
+        self.assertIn("  - dev", manifest)
+
+    def test_wheel_bundles_user_docs_and_excludes_planning_docs(self) -> None:
+        with zipfile.ZipFile(self.wheel_path) as wheel:
+            names = set(wheel.namelist())
+        self.assertIn("skillager/docs/USER_GUIDE.md", names)
+        self.assertIn("skillager/docs/AGENT_CLI_GUIDE.md", names)
+        self.assertNotIn("skillager/docs/MANIFEST_HARDENING_PLAN.md", names)
+
+    def test_sdist_includes_repo_skill_and_excludes_planning_doc(self) -> None:
+        with tarfile.open(self.sdist_path, "r:gz") as sdist:
+            names = set(sdist.getnames())
+        prefix = sorted(names)[0].split("/", 1)[0]
+        self.assertIn(f"{prefix}/.agents/skills/simulate-skillager-setup/SKILL.md", names)
+        self.assertIn(f"{prefix}/.agents/skills/simulate-skillager-setup/skillager.yaml", names)
+        self.assertNotIn(f"{prefix}/docs/MANIFEST_HARDENING_PLAN.md", names)
+
+    def test_packaged_repo_testing_skill_is_discoverable_from_wheel_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site_packages = Path(tmp)
+            with zipfile.ZipFile(self.wheel_path) as wheel:
+                wheel.extractall(site_packages)
+            with (
+                patch("skillager.discovery._site_package_paths", return_value=[site_packages]),
+                patch("skillager.discovery.find_project_root", return_value=None),
+            ):
+                skills, errors = discover_package_skills()
+        self.assertEqual(errors, [])
+        by_id = {skill.id: skill for skill in skills}
+        self.assertIn("skillager/simulate-skillager-setup", by_id)
+        skill = by_id["skillager/simulate-skillager-setup"]
+        self.assertEqual(skill.package, "skillager")
+        self.assertEqual(skill.audience, ["dev"])
 
 
 if __name__ == "__main__":
