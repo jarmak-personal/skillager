@@ -75,7 +75,7 @@ Inferred warnings come from inert text only. Examples include agent-specific ski
 - A passing scan is not a guarantee of safety.
 - Skillager does not inspect runtime behavior after activation.
 - Skillager does not store chat transcripts for lookback.
-- User-installed native skills are auto-trusted only when they are not lint-blocked.
+- User-installed native skills are discovered and scanned, but remain unreviewed until explicitly approved.
 
 Users own the final trust decision.
 
