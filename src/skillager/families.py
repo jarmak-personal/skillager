@@ -1,38 +1,27 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+import sys
+import types
+
+from .skills import families as _impl
+
+for _name in dir(_impl):
+    if not _name.startswith("__"):
+        globals()[_name] = getattr(_impl, _name)
 
 
-def agent_variant_family_key(skill: Mapping[str, Any]) -> str:
-    skill_id = str(skill.get("id") or "")
-    namespace, separator, slug = skill_id.rpartition("/")
-    slug = canonical_agent_variant_slug(slug or skill_id)
-    if separator and namespace:
-        return f"{namespace}/{slug}"
-    source = skill.get("source") or {}
-    if isinstance(source, Mapping):
-        prefix = source.get("collection") or source.get("package") or source.get("type") or "skill"
-    else:
-        prefix = "skill"
-    return f"{prefix}/{slug}"
+def __getattr__(name: str):
+    return getattr(_impl, name)
 
 
-def canonical_agent_variant_slug(value: str) -> str:
-    slug = value.strip().lower()
-    suffixes = (
-        "-vibespatial-claude",
-        "-vibespatial-codex",
-        "-claude-skill",
-        "-codex-skill",
-        "-claude",
-        "-codex",
-    )
-    changed = True
-    while changed:
-        changed = False
-        for suffix in suffixes:
-            if slug.endswith(suffix) and len(slug) > len(suffix):
-                slug = slug[: -len(suffix)]
-                changed = True
-                break
-    return slug
+class _FacadeModule(types.ModuleType):
+    def __setattr__(self, name: str, value: object) -> None:
+        if hasattr(_impl, name):
+            setattr(_impl, name, value)
+        super().__setattr__(name, value)
+
+
+sys.modules[__name__].__class__ = _FacadeModule
+
+
+__all__ = [name for name in dir(_impl) if not name.startswith("_")]

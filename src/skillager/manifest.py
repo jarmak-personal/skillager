@@ -1,23 +1,27 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+import sys
+import types
 
-from .schema import infer_skill, manifest_for_skill
-from .scan import scan_path
-from .simple_yaml import dumps
+from .skills import manifest as _impl
+
+for _name in dir(_impl):
+    if not _name.startswith("__"):
+        globals()[_name] = getattr(_impl, _name)
 
 
-def init_manifests(path: Path, *, dry_run: bool = False) -> list[dict[str, Any]]:
-    roots = [path] if (path / "SKILL.md").exists() else sorted(item.parent for item in path.rglob("SKILL.md"))
-    results: list[dict[str, Any]] = []
-    for root in roots:
-        skill = infer_skill(root, {"type": "local"})
-        manifest = manifest_for_skill(skill)
-        scan = scan_path(skill.entrypoint)
-        target = root / "skillager.yaml"
-        wrote = not dry_run and not target.exists()
-        if wrote:
-            target.write_text(dumps(manifest), encoding="utf-8")
-        results.append({"skill_id": skill.id, "path": str(root), "manifest": str(target), "written": wrote, "scan": scan})
-    return results
+def __getattr__(name: str):
+    return getattr(_impl, name)
+
+
+class _FacadeModule(types.ModuleType):
+    def __setattr__(self, name: str, value: object) -> None:
+        if hasattr(_impl, name):
+            setattr(_impl, name, value)
+        super().__setattr__(name, value)
+
+
+sys.modules[__name__].__class__ = _FacadeModule
+
+
+__all__ = [name for name in dir(_impl) if not name.startswith("_")]

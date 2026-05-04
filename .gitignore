@@ -1,4 +1,5 @@
 .venv/
+.venv*/
 .skillager/
 dist/
 build/
@@ -7,3 +8,6 @@ __pycache__/
 *.py[cod]
 .codex
 .claude/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
