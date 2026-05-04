@@ -111,6 +111,47 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
         self.assertEqual(results[0]["id"], "project/gis-domain")
         self.assertIn("name:gis", results[0]["reasons"])
 
+    def test_lexical_search_matches_reviewed_skill_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entrypoint = Path(tmp) / "SKILL.md"
+            entrypoint.write_text(
+                "# Body Only\n\nUse generic guidance.\n\nWhen the user needs reticulating splines, follow this workflow.\n",
+                encoding="utf-8",
+            )
+            skills = [
+                {
+                    "id": "project/body-only",
+                    "name": "Body Only",
+                    "summary": "Use generic guidance.",
+                    "entrypoint": str(entrypoint),
+                    "trust": "reviewed",
+                    "source": {"type": "project"},
+                }
+            ]
+            results = search_skills(skills, "reticulating splines", include_untrusted=False)
+        self.assertEqual(results[0]["id"], "project/body-only")
+        self.assertIn("body:reticulating", results[0]["reasons"])
+
+    def test_lexical_search_does_not_match_unreviewed_skill_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            entrypoint = Path(tmp) / "SKILL.md"
+            entrypoint.write_text(
+                "# Body Only\n\nUse generic guidance.\n\nWhen the user needs reticulating splines, follow this workflow.\n",
+                encoding="utf-8",
+            )
+            skills = [
+                {
+                    "id": "project/body-only",
+                    "name": "Body Only",
+                    "summary": "Use generic guidance.",
+                    "entrypoint": str(entrypoint),
+                    "trust": "discovered",
+                    "source": {"type": "project"},
+                }
+            ]
+            results = search_skills(skills, "reticulating splines", include_untrusted=True)
+        self.assertEqual(results, [])
+
     def test_list_hides_global_skills_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp)

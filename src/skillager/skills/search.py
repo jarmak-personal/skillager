@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from pathlib import Path
 from typing import Any
+
+from ..state.trust import APPROVED_TRUST_STATES
 
 STOPWORDS = {
     "a",
@@ -70,6 +73,7 @@ STOPWORDS = {
 }
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+BODY_SEARCH_CHAR_LIMIT = 50_000
 
 
 def search(
@@ -103,6 +107,7 @@ def _fts5_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any
             return []
         return [_with_score(skill, 0.0, []) for skill in sorted(skills, key=lambda item: (_visibility_rank(item), item["id"]))]
 
+    body_texts = {skill["id"]: _body_text(skill) for skill in skills}
     conn = sqlite3.connect(":memory:")
     try:
         conn.execute(
@@ -115,13 +120,14 @@ def _fts5_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any
                 targets,
                 source,
                 tags,
+                body,
                 tokenize = 'unicode61 remove_diacritics 2'
             )
             """
         )
         for rowid, skill in enumerate(skills, start=1):
             conn.execute(
-                "INSERT INTO skill_fts(rowid, name, summary, audience, package, targets, source, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO skill_fts(rowid, name, summary, audience, package, targets, source, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     rowid,
                     skill.get("name") or "",
@@ -131,12 +137,13 @@ def _fts5_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any
                     _target_text(skill),
                     _source_text(skill),
                     " ".join(str(tag) for tag in skill.get("tags", [])),
+                    body_texts[skill["id"]],
                 ),
             )
         match = " OR ".join(f'"{term}"' for term in terms)
         rows = conn.execute(
             """
-            SELECT rowid, bm25(skill_fts, 8.0, 3.0, 0.5, 4.0, 4.0, 3.0, 6.0) AS rank
+            SELECT rowid, bm25(skill_fts, 8.0, 3.0, 0.5, 4.0, 4.0, 3.0, 6.0, 0.2) AS rank
             FROM skill_fts
             WHERE skill_fts MATCH ?
             ORDER BY rank
@@ -148,11 +155,21 @@ def _fts5_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any
 
     by_id: dict[str, dict[str, Any]] = {}
     if exact:
-        by_id[exact["id"]] = _with_score(exact, 100.0 + _score_boost(exact, terms), ["id:exact", *_reasons(exact, terms)])
+        exact_body = body_texts.get(exact["id"], "")
+        by_id[exact["id"]] = _with_score(
+            exact,
+            100.0 + _score_boost(exact, terms, body_text=exact_body),
+            ["id:exact", *_reasons(exact, terms, body_text=exact_body)],
+        )
     for rowid, rank in rows:
         skill = skills[int(rowid) - 1]
+        body_text = body_texts[skill["id"]]
         base = max(0.0, -float(rank) * 1_000_000.0)
-        item = _with_score(skill, base + _score_boost(skill, terms), _reasons(skill, terms))
+        item = _with_score(
+            skill,
+            base + _score_boost(skill, terms, body_text=body_text),
+            _reasons(skill, terms, body_text=body_text),
+        )
         by_id.setdefault(skill["id"], item)
     return sorted(by_id.values(), key=lambda item: (-float(item["score"]), _visibility_rank(item), item["id"]))
 
@@ -162,13 +179,15 @@ def _fallback_search(skills: list[dict[str, Any]], query: str) -> list[dict[str,
     exact = _exact_id_match(skills, query)
     if _looks_like_skill_id(query) and not exact:
         return []
+    body_texts = {skill["id"]: _body_text(skill) for skill in skills} if terms else {}
     results: list[dict[str, Any]] = []
     for skill in skills:
         reasons: list[str] = ["id:exact"] if exact and skill["id"] == exact["id"] else []
         if terms:
-            reasons.extend(_reasons(skill, terms))
+            reasons.extend(_reasons(skill, terms, body_text=body_texts[skill["id"]]))
         if reasons or (not terms and not query.strip()):
-            score = (100.0 if "id:exact" in reasons else 0.0) + _score_boost(skill, terms)
+            body_text = body_texts.get(skill["id"], "")
+            score = (100.0 if "id:exact" in reasons else 0.0) + _score_boost(skill, terms, body_text=body_text)
             results.append(_with_score(skill, score, reasons))
     return sorted(results, key=lambda item: (-item["score"], _visibility_rank(item), item["id"]))
 
@@ -213,10 +232,10 @@ def _tokens(text: str) -> list[str]:
     return [match.group(0).lower() for match in TOKEN_RE.finditer(text or "")]
 
 
-def _score_boost(skill: dict[str, Any], terms: list[str]) -> float:
+def _score_boost(skill: dict[str, Any], terms: list[str], *, body_text: str) -> float:
     if not terms:
         return 0.0
-    fields = _token_fields(skill)
+    fields = _token_fields(skill, body_text=body_text)
     score = 0.0
     for term in terms:
         if term in fields["name"]:
@@ -231,6 +250,8 @@ def _score_boost(skill: dict[str, Any], terms: list[str]) -> float:
             score += 4.0
         if term in fields["summary"]:
             score += 2.0
+        if term in fields["body"]:
+            score += 0.2
         if term in fields["audience"]:
             score += 0.5
     if " ".join(terms) == " ".join(_tokens(skill.get("name") or "")):
@@ -238,18 +259,18 @@ def _score_boost(skill: dict[str, Any], terms: list[str]) -> float:
     return score
 
 
-def _reasons(skill: dict[str, Any], terms: list[str]) -> list[str]:
-    fields = _token_fields(skill)
+def _reasons(skill: dict[str, Any], terms: list[str], *, body_text: str) -> list[str]:
+    fields = _token_fields(skill, body_text=body_text)
     reasons: list[str] = []
     for term in terms:
-        for field in ("name", "tags", "package", "targets", "source", "summary", "audience"):
+        for field in ("name", "tags", "package", "targets", "source", "summary", "body", "audience"):
             if term in fields[field]:
                 reasons.append(f"{field}:{term}")
                 break
     return sorted(set(reasons))
 
 
-def _token_fields(skill: dict[str, Any]) -> dict[str, set[str]]:
+def _token_fields(skill: dict[str, Any], *, body_text: str) -> dict[str, set[str]]:
     return {
         "name": set(_tokens(skill.get("name") or "")),
         "summary": set(_tokens(skill.get("summary") or "")),
@@ -258,6 +279,7 @@ def _token_fields(skill: dict[str, Any]) -> dict[str, set[str]]:
         "targets": set(_tokens(_target_text(skill))),
         "source": set(_tokens(_source_text(skill))),
         "tags": set(_tokens(" ".join(str(tag) for tag in skill.get("tags", [])))),
+        "body": set(_tokens(body_text)),
     }
 
 
@@ -293,6 +315,19 @@ def _source_text(skill: dict[str, Any]) -> str:
         )
         if item
     )
+
+
+def _body_text(skill: dict[str, Any]) -> str:
+    if skill.get("trust") not in APPROVED_TRUST_STATES:
+        return ""
+    entrypoint = skill.get("entrypoint")
+    if not entrypoint:
+        return ""
+    try:
+        text = Path(entrypoint).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return text[:BODY_SEARCH_CHAR_LIMIT]
 
 
 def _with_score(skill: dict[str, Any], score: float, reasons: list[str]) -> dict[str, Any]:
