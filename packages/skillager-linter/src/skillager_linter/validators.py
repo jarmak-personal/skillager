@@ -40,11 +40,11 @@ def validate_skill_metadata(
 ) -> ValidatedSkillMetadata:
     source_data = dict(source or {"type": "local"})
     if raw_manifest is None:
-        entrypoint = _canonical_entrypoint(root)
+        entrypoint = canonical_entrypoint(root)
         text = skill_text if skill_text is not None else entrypoint.read_text(encoding="utf-8", errors="replace")
         name, summary = _identity_from_skill_md(root, text)
         return ValidatedSkillMetadata(
-            skill_id=_infer_id(root, source_data),
+            skill_id=infer_id(root, source_data),
             name=name,
             summary=summary,
             root=root.resolve(),
@@ -76,12 +76,12 @@ def validate_skill_metadata(
         )
     compatibility_raw = _compatibility(raw.get("compatibility"))
     targets = _targets(raw.get("targets"))
-    entrypoint = _canonical_entrypoint(root)
+    entrypoint = canonical_entrypoint(root)
     text = skill_text if skill_text is not None else entrypoint.read_text(encoding="utf-8", errors="replace")
     name, summary = _identity_from_skill_md(root, text)
     compatibility = normalize_compatibility(compatibility_raw, text=text, root=root)
     return ValidatedSkillMetadata(
-        skill_id=_infer_id(root, source_data),
+        skill_id=infer_id(root, source_data),
         name=name,
         summary=summary,
         root=root.resolve(),
@@ -103,7 +103,7 @@ def manifest_for_metadata(audience: tuple[str, ...] | list[str], activation: str
     }
 
 
-def _canonical_entrypoint(root: Path) -> Path:
+def canonical_entrypoint(root: Path) -> Path:
     entrypoint = root / "SKILL.md"
     root_resolved = root.resolve()
     if entrypoint.is_symlink():
@@ -125,7 +125,7 @@ def _canonical_entrypoint(root: Path) -> Path:
     return resolved
 
 
-def _find_manifest(root: Path) -> Path | None:
+def find_manifest(root: Path) -> Path | None:
     path = root / "skillager.yaml"
     return path if path.exists() else None
 
@@ -445,7 +445,7 @@ def _body_without_frontmatter(text: str) -> str:
     return text
 
 
-def _infer_id(root: Path, source: dict[str, Any] | None = None) -> str:
+def infer_id(root: Path, source: dict[str, Any] | None = None) -> str:
     source_data = source or {"type": "local"}
     prefix_value = source_data.get("package") or source_data.get("collection") or source_data.get("type") or "skill"
     prefix = _id_part(str(prefix_value), "source")
@@ -464,13 +464,13 @@ def _id_part(value: str, field: str) -> str:
     return normalized
 
 
-def _schema_findings(exc: BaseException) -> list[dict[str, Any]]:
+def schema_findings(exc: BaseException) -> list[dict[str, Any]]:
     if isinstance(exc, ManifestValidationError):
         return list(exc.findings)
-    return [finding("schema_violation", "block", "skillager.yaml", _safe_error(exc))]
+    return [finding("schema_violation", "block", "skillager.yaml", safe_error(exc))]
 
 
-def _safe_error(exc: BaseException) -> str:
+def safe_error(exc: BaseException) -> str:
     if isinstance(exc, UnicodeError):
         return "skillager.yaml must be valid UTF-8"
     if isinstance(exc, YamlError):

@@ -490,6 +490,7 @@ from skillager.skills.lint import RULE_KEYS, blocking_findings, finding, lint_re
 from skillager.skills.compatibility import KNOWN_AGENTS, WARNING_CODES, normalize_compatibility
 from skillager.compatibility import compatibility_problem, compatibility_warnings, is_explicitly_incompatible
 from skillager.skills.schema import SchemaError
+from skillager_linter.templates import MINIMAL_MANIFEST_YAML
 
 assert MAX_MANIFEST_BYTES
 assert StrictYamlError
@@ -510,10 +511,14 @@ assert compatibility_problem
 assert compatibility_warnings
 assert is_explicitly_incompatible
 assert SchemaError
+assert MINIMAL_MANIFEST_YAML.strip()
 """
             env = os.environ.copy()
             env["PYTHONPATH"] = str(site_packages)
-            subprocess.run([sys.executable, "-c", code], cwd=tmp, env=env, check=True, capture_output=True, text=True)
+            try:
+                subprocess.run([sys.executable, "-c", code], cwd=tmp, env=env, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as exc:
+                self.fail(f"shim import failed:\nstdout={exc.stdout}\nstderr={exc.stderr}")
 
     def test_wheel_bundles_repo_testing_skill(self) -> None:
         with zipfile.ZipFile(self.wheel_path) as wheel:
@@ -538,6 +543,7 @@ assert SchemaError
         self.assertIn(f"{prefix}/.agents/skills/simulate-skillager-setup/SKILL.md", names)
         self.assertIn(f"{prefix}/.agents/skills/simulate-skillager-setup/skillager.yaml", names)
         self.assertNotIn(f"{prefix}/docs/MANIFEST_HARDENING_PLAN.md", names)
+        self.assertNotIn(f"{prefix}/packages/skillager-linter/src/skillager_linter/cli.py", names)
 
     def test_linter_sdist_contains_linter_source_only(self) -> None:
         with tarfile.open(self.linter_sdist_path, "r:gz") as sdist:

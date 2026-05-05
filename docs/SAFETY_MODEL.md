@@ -39,6 +39,10 @@ Scanner findings include severity, line number, matched text, explanation, and r
 
 `skillager.yaml` is structured-only metadata. Unknown keys, invalid enum values, unsafe YAML features, invalid package specifiers, hidden/control characters, missing canonical `SKILL.md`, and invalid derived IDs produce a blocking lint finding.
 
+`skillager lint` and the standalone `skillager-lint` console script share the same strict loader and manifest validator. The standalone linter is meant for package and skill-repository CI; it reports safe diagnostics without reading or writing trust state, activating skills, materializing files, or emitting skill bodies.
+
+The standalone linter reads `SKILL.md` to validate the canonical entrypoint, infer compatibility warnings, and check description quality, but it never emits body text or body-derived names/summaries in findings or output.
+
 Lint-blocked skills are indexed only as quarantined records with safe derived fields, `trust: lint_blocked`, and safe lint findings. Skillager does not expose hostile manifest values through `search`, `list`, `show`, or `lint` output.
 
 Approving a lint-blocked skill requires:

@@ -81,6 +81,8 @@ When a user installs your package, Skillager can discover those skills without i
 
 `skillager.yaml` is optional and structured-only. Put prose in `SKILL.md`; manifests can declare audience, activation, compatibility constraints, and typed package targets, but not free-text identity, source, safety policy, or body paths.
 
+For CI, library authors can run `uvx --from skillager-linter skillager-lint .` to validate the same manifest contract without installing the full Skillager runtime.
+
 This lets a library ship:
 
 - user-facing skills for using the API well

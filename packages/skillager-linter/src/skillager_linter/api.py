@@ -9,10 +9,10 @@ from .scan_paths import iter_lint_targets
 from .simple_yaml import YamlError, load_manifest_mapping
 from .validators import (
     ManifestValidationError,
-    _canonical_entrypoint,
-    _find_manifest,
-    _infer_id,
-    _schema_findings,
+    canonical_entrypoint,
+    find_manifest,
+    infer_id,
+    schema_findings,
     validate_skill_metadata,
 )
 
@@ -20,7 +20,7 @@ from .validators import (
 def lint_skill_root(path: Path, *, source: dict[str, Any] | None = None) -> LintResult:
     root = path.resolve()
     source_data = _source(source)
-    manifest = _find_manifest(root)
+    manifest = find_manifest(root)
     raw_manifest = None
     if manifest:
         try:
@@ -108,19 +108,19 @@ def lint_paths(paths: list[Path], *, recursive: bool = True) -> list[LintResult]
 
 
 def _read_skill_text(root: Path) -> str:
-    return _canonical_entrypoint(root).read_text(encoding="utf-8", errors="replace")
+    return canonical_entrypoint(root).read_text(encoding="utf-8", errors="replace")
 
 
 def _error_result(path: Path, manifest_path: Path | None, source: dict[str, Any], exc: BaseException) -> LintResult:
     try:
-        skill_id = _infer_id(path, source)
+        skill_id = infer_id(path, source)
     except ManifestValidationError:
         skill_id = None
     return LintResult(
         path=path.resolve(),
         manifest_path=manifest_path.resolve() if manifest_path else None,
         skill_id=skill_id,
-        lint=to_lint_report(_schema_findings(exc)),
+        lint=to_lint_report(schema_findings(exc)),
         metadata=None,
     )
 

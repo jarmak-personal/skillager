@@ -90,14 +90,14 @@ class QuarantinedSkill:
 
 
 def load_skill_from_dir(root: _Path, source: dict[str, _Any]) -> Skill:
-    manifest = _validators._find_manifest(root)
+    manifest = _validators.find_manifest(root)
     if manifest:
         try:
             raw = _load_manifest_mapping(manifest)
         except (_YamlError, OSError, UnicodeError) as exc:
             raise SchemaError(
                 "invalid skillager.yaml",
-                findings=[_finding("schema_violation", "block", "skillager.yaml", _validators._safe_error(exc))],
+                findings=[_finding("schema_violation", "block", "skillager.yaml", _validators.safe_error(exc))],
             ) from exc
         return parse_skill(raw, root=root, manifest_path=manifest, source_default=source, inferred=False)
     return infer_skill(root, source)
@@ -107,15 +107,16 @@ def quarantine_skill_from_dir(root: _Path, source: dict[str, _Any], exc: BaseExc
     if not (root / "SKILL.md").exists() and not (root / "SKILL.md").is_symlink():
         return None
     root_resolved = root.resolve()
-    manifest = _validators._find_manifest(root)
+    manifest = _validators.find_manifest(root)
     try:
-        skill_id = _validators._infer_id(root_resolved, source)
+        skill_id = _validators.infer_id(root_resolved, source)
     except SchemaError as id_exc:
         skill_id = _fallback_quarantine_id(root_resolved, source)
-        findings = list(_validators._schema_findings(id_exc))
+        findings = list(_validators.schema_findings(id_exc))
     else:
         findings = []
-    findings.extend(_validators._schema_findings(exc))
+    findings.extend(_validators.schema_findings(exc))
+    findings = _dedupe_findings(findings)
     return QuarantinedSkill(
         id=skill_id,
         root=root_resolved,
@@ -183,6 +184,24 @@ def _fallback_quarantine_id(root: _Path, source: dict[str, _Any]) -> str:
     prefix = _re.sub(r"[^a-z0-9]+", "-", str(source.get("type") or "skill").lower()).strip("-") or "skill"
     digest = _hashlib.sha256(str(root).encode("utf-8")).hexdigest()[:10]
     return f"{prefix}/lint-blocked-{digest}"
+
+
+def _dedupe_findings(findings: list[dict[str, _Any]]) -> list[dict[str, _Any]]:
+    result: list[dict[str, _Any]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for item in findings:
+        key = (
+            str(item.get("code") or ""),
+            str(item.get("severity") or ""),
+            str(item.get("field") or ""),
+            str(item.get("detail") or ""),
+            str(item.get("rule_key") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
 
 
 __all__ = [
