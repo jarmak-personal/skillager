@@ -1,6 +1,6 @@
 [project]
 name = "skillager"
-version = "0.3.1"
+version = "0.4.0"
 description = "A Python environment skill registry and activation layer for coding agents."
 readme = "README.md"
 requires-python = ">=3.10"
