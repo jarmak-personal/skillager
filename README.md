@@ -81,6 +81,8 @@ When a user installs your package, Skillager can discover those skills without i
 
 `skillager.yaml` is optional and structured-only. Put prose in `SKILL.md`; manifests can declare audience, activation, compatibility constraints, and typed package targets, but not free-text identity, source, safety policy, or body paths.
 
+For CI, library authors can run `uvx --from skillager-linter skillager-lint .` to validate the same manifest contract without installing the full Skillager runtime.
+
 This lets a library ship:
 
 - user-facing skills for using the API well
@@ -136,6 +138,7 @@ The next `skillager handoff` can tell the agent that lookback is pending. Then t
 - [Skill repositories](docs/SKILL_REPOSITORIES.md)
 - [Library author guide](docs/LIBRARY_AUTHORS.md)
 - [Safety model](docs/SAFETY_MODEL.md)
+- [Release runbook](docs/RELEASE.md)
 - [Security policy](SECURITY.md)
 
 External contributions are not being accepted yet while the early API and workflow settle.
@@ -144,7 +147,9 @@ External contributions are not being accepted yet while the early API and workfl
 
 ```bash
 uv run python -m unittest discover -s tests
+uv run python -m unittest discover -s packages/skillager-linter/tests
 uv run --python 3.13 python scripts/check.py
+uv build packages/skillager-linter
 uv build
 ```
 

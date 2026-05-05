@@ -1,0 +1,30 @@
+[project]
+name = "skillager-linter"
+version = "0.1.0"
+description = "Standalone Skillager manifest linter."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Skillager Contributors" }]
+dependencies = [
+    "packaging>=26.2",
+    "pyyaml>=6.0.3",
+]
+
+[project.scripts]
+skillager-lint = "skillager_linter.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/skillager_linter"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/skillager_linter",
+    "tests",
+    "README.md",
+    "pyproject.toml",
+]

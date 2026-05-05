@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .models import LintFinding, LintReport
+
 RULE_KEYS = {
     "assumptions_env_invalid": "assumptions_env_invalid:v1",
     "audience_both": "audience_both:v1",
@@ -65,18 +67,15 @@ def blocking_findings(lint: dict[str, Any] | None) -> list[dict[str, Any]]:
     return [item for item in lint.get("findings", []) if item.get("severity") == "block"]
 
 
-def valid_lint_override(record: dict[str, Any] | None, lint: dict[str, Any] | None) -> bool:
-    current = {safe_finding_identity(item) for item in blocking_findings(lint)}
-    if not current:
-        return True
-    if not record:
-        return False
-    override = record.get("lint_override")
-    if not isinstance(override, dict):
-        return False
-    accepted = {
-        safe_finding_identity(item)
-        for item in override.get("findings", [])
-        if isinstance(item, dict) and item.get("severity") == "block"
-    }
-    return current.issubset(accepted)
+def to_lint_finding(item: dict[str, Any]) -> LintFinding:
+    return LintFinding(
+        code=str(item.get("code") or ""),
+        severity=str(item.get("severity") or ""),
+        field=str(item.get("field") or ""),
+        detail=str(item.get("detail") or ""),
+        rule_key=str(item.get("rule_key") or _rule_key(str(item.get("code") or ""))),
+    )
+
+
+def to_lint_report(findings: list[dict[str, Any]]) -> LintReport:
+    return LintReport(status=lint_status(findings), findings=tuple(to_lint_finding(item) for item in findings))

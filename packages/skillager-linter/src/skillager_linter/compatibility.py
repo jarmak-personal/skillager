@@ -26,8 +26,9 @@ WARNING_MESSAGES = {
 def normalize_compatibility(raw: Any = None, *, text: str = "", root: Path | None = None) -> dict[str, Any]:
     """Return negative-only compatibility metadata.
 
-    Skills are assumed compatible by default. This metadata only records explicit
-    exclusions plus advisory assumptions/warnings inferred from inert text.
+    Skills are assumed compatible by default. This metadata only records
+    explicit exclusions plus advisory assumptions/warnings inferred from inert
+    text.
     """
     data = _mapping(raw)
     exclusive_to = _optional_agent(data.get("exclusive_to"))

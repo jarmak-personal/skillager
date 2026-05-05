@@ -19,6 +19,24 @@ your_package/
 
 ## Minimal Metadata
 
+Print the current canonical minimal manifest with:
+
+```bash
+uvx --from skillager-linter skillager-lint --print-minimal-manifest
+```
+
+The minimal manifest currently contains:
+
+```yaml
+schema: skillager.skill.v1
+audience:
+  - user
+activation:
+  default: manual
+```
+
+Add package targets when the skill is only relevant for specific package ranges:
+
 ```yaml
 schema: skillager.skill.v1
 audience:
@@ -34,6 +52,28 @@ targets:
 The manifest is intentionally structured-only. It cannot declare `id`, `name`, `summary`, `source`, `entrypoint`, `safety`, `triggers`, `domains`, `tools`, or `references`. Skillager derives identity from the package/path and from the reviewed `SKILL.md` body: simple `name`/`description` frontmatter when present, then heading/first sentence fallbacks.
 
 `skillager.yaml` uses a strict loader: one document, string keys, no duplicate keys, no anchors, no aliases, no merge keys, no custom tags, and a small file-size cap. Unknown keys lint-block the skill.
+
+## Validate In CI
+
+Use the standalone linter before publishing package skills:
+
+`uvx --from skillager-linter skillager-lint .`
+
+It uses the same strict manifest loader and validator as `skillager lint`, but stays dependency-light and does not read trust state, activate skills, materialize files, or emit skill bodies. V1 validates the existing skill root contract: strict `skillager.yaml`, canonical `SKILL.md`, body-derived compatibility warnings, and current description-quality warnings.
+
+GitHub Actions example:
+
+```yaml
+name: skillager-lint
+on: [push, pull_request]
+jobs:
+  skillager-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uvx --from skillager-linter skillager-lint .
+```
 
 ## Compatibility Metadata
 
@@ -88,7 +128,7 @@ This distinction matters because setup asks the user what audience they want bef
 - Avoid shell execution unless the skill explicitly needs it.
 - Shell-command guidance is always scanned. Authors cannot suppress scanner findings from `skillager.yaml`.
 - Keep the `SKILL.md` heading and first paragraph accurate; Skillager uses them for reviewed metadata.
-- Validate manifests with `skillager lint` before publishing.
+- Validate manifests with `skillager-lint` or `skillager lint` before publishing.
 
 ## Test Locally
 
