@@ -39,6 +39,11 @@ def main(argv: list[str] | None = None) -> int:
         _run([str(python), "-m", "skillager_linter", "--version"])
 
         project = work / "project"
+        project.mkdir()
+        (project / "pyproject.toml").write_text(
+            '[project]\nname = "demo-project"\nversion = "0.0.0"\n',
+            encoding="utf-8",
+        )
         skill_dir = project / ".skills" / "demo"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
