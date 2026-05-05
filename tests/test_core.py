@@ -14,6 +14,8 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+from packaging.requirements import Requirement
+
 from support import chdir
 from skillager.authored import load_authored, mark_authored_metadata
 from skillager.cli import build_parser, main
@@ -27,6 +29,11 @@ from skillager.simple_yaml import loads
 from skillager.statefiles import read_user_json, write_user_json
 from skillager.trust import content_hash, load_trust, save_trust, set_trust
 from skillager.update_check import check_for_update, is_newer_version
+
+
+def _requirement_key(requirement: Requirement) -> tuple[str, str, str | None]:
+    marker = str(requirement.marker) if requirement.marker else None
+    return (requirement.name, str(requirement.specifier), marker)
 
 
 class SkillagerCoreTests(unittest.TestCase):
@@ -423,8 +430,13 @@ class SkillagerPackagingTests(unittest.TestCase):
             metadata_name = next(name for name in wheel.namelist() if name.endswith(".dist-info/METADATA"))
             metadata = wheel.read(metadata_name).decode()
         self.assertIn(f"Version: {project['version']}", metadata)
-        for dependency in project["dependencies"]:
-            self.assertIn(f"Requires-Dist: {dependency}", metadata)
+        actual = {
+            _requirement_key(Requirement(line.removeprefix("Requires-Dist: ")))
+            for line in metadata.splitlines()
+            if line.startswith("Requires-Dist: ")
+        }
+        expected = {_requirement_key(Requirement(dependency)) for dependency in project["dependencies"]}
+        self.assertLessEqual(expected, actual)
 
     def test_wheel_bundles_repo_testing_skill(self) -> None:
         with zipfile.ZipFile(self.wheel_path) as wheel:

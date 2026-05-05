@@ -144,7 +144,9 @@ External contributions are not being accepted yet while the early API and workfl
 
 ```bash
 uv run python -m unittest discover -s tests
+uv run python -m unittest discover -s packages/skillager-linter/tests
 uv run --python 3.13 python scripts/check.py
+uv build packages/skillager-linter
 uv build
 ```
 

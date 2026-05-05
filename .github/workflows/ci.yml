@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v6.0.2
 
@@ -28,8 +28,17 @@ jobs:
       - name: Run tests
         run: uv run python -m unittest discover -s tests
 
+      - name: Run linter package tests
+        run: uv run python -m unittest discover -s packages/skillager-linter/tests
+
       - name: Check module entry point
         run: uv run python -m skillager --version
+
+      - name: Check linter module entry point
+        run: uv run python -m skillager_linter --version
+
+      - name: Build linter package
+        run: uv build packages/skillager-linter
 
       - name: Build package
         run: uv build
@@ -37,8 +46,8 @@ jobs:
       - name: Verify distributions
         run: |
           ls -lh dist/
-          test "$(ls dist/*.tar.gz | wc -l)" -eq 1
-          test "$(ls dist/*.whl | wc -l)" -eq 1
+          test "$(ls dist/*.tar.gz | wc -l)" -eq 2
+          test "$(ls dist/*.whl | wc -l)" -eq 2
 
       - name: Whitespace check
         run: git diff --check
@@ -54,4 +63,7 @@ jobs:
           python-version: "3.13"
 
       - name: Run mypy
-        run: uv run mypy src/skillager
+        run: uv run mypy --python-version 3.10 src/skillager
+
+      - name: Run linter mypy
+        run: uv run mypy --python-version 3.10 packages/skillager-linter/src/skillager_linter

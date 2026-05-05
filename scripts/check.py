@@ -20,11 +20,15 @@ def main(argv: list[str] | None = None) -> int:
 
     commands = [
         ("ruff", uv_run(args.python, "ruff", "check", ".")),
-        ("mypy", uv_run(args.python, "mypy", "src/skillager")),
+        ("mypy", uv_run(args.python, "mypy", "--python-version", "3.10", "src/skillager")),
+        ("linter mypy", uv_run(args.python, "mypy", "--python-version", "3.10", "packages/skillager-linter/src/skillager_linter")),
         ("tests", uv_run(args.python, "python", "-m", "unittest", "discover", "-s", "tests")),
+        ("linter tests", uv_run(args.python, "python", "-m", "unittest", "discover", "-s", "packages/skillager-linter/tests")),
         ("module entrypoint", uv_run(args.python, "python", "-m", "skillager", "--version")),
+        ("linter module entrypoint", uv_run(args.python, "python", "-m", "skillager_linter", "--version")),
     ]
     if not args.skip_build:
+        commands.append(("linter build", ["uv", "build", "packages/skillager-linter"]))
         commands.append(("build", ["uv", "build"]))
     commands.append(("whitespace", ["git", "diff", "--check"]))
 
