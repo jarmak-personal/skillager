@@ -34,14 +34,15 @@ def validate_skill_metadata(
     *,
     root: Path,
     manifest_path: Path | None,
-    skill_text: str,
+    skill_text: str | None = None,
     source: dict[str, Any] | None = None,
     inferred: bool = False,
 ) -> ValidatedSkillMetadata:
     source_data = dict(source or {"type": "local"})
-    entrypoint = _canonical_entrypoint(root)
     if raw_manifest is None:
-        name, summary = _identity_from_skill_md(root, skill_text)
+        entrypoint = _canonical_entrypoint(root)
+        text = skill_text if skill_text is not None else entrypoint.read_text(encoding="utf-8", errors="replace")
+        name, summary = _identity_from_skill_md(root, text)
         return ValidatedSkillMetadata(
             skill_id=_infer_id(root, source_data),
             name=name,
@@ -51,7 +52,7 @@ def validate_skill_metadata(
             manifest_path=None,
             audience=("user",),
             activation="manual",
-            compatibility=normalize_compatibility(None, text=skill_text, root=root),
+            compatibility=normalize_compatibility(None, text=text, root=root),
             targets={},
             inferred=True,
         )
@@ -73,9 +74,12 @@ def validate_skill_metadata(
             "activation.default is invalid",
             findings=[finding("schema_violation", "block", "activation.default", "expected activation enum")],
         )
-    name, summary = _identity_from_skill_md(root, skill_text)
-    compatibility = normalize_compatibility(_compatibility(raw.get("compatibility")), text=skill_text, root=root)
+    compatibility_raw = _compatibility(raw.get("compatibility"))
     targets = _targets(raw.get("targets"))
+    entrypoint = _canonical_entrypoint(root)
+    text = skill_text if skill_text is not None else entrypoint.read_text(encoding="utf-8", errors="replace")
+    name, summary = _identity_from_skill_md(root, text)
+    compatibility = normalize_compatibility(compatibility_raw, text=text, root=root)
     return ValidatedSkillMetadata(
         skill_id=_infer_id(root, source_data),
         name=name,
