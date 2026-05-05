@@ -138,6 +138,7 @@ The next `skillager handoff` can tell the agent that lookback is pending. Then t
 - [Skill repositories](docs/SKILL_REPOSITORIES.md)
 - [Library author guide](docs/LIBRARY_AUTHORS.md)
 - [Safety model](docs/SAFETY_MODEL.md)
+- [Release runbook](docs/RELEASE.md)
 - [Security policy](SECURITY.md)
 
 External contributions are not being accepted yet while the early API and workflow settle.

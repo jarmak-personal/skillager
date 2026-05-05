@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.next }}
+      linter_version: ${{ steps.version.outputs.linter }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -155,7 +156,20 @@ jobs:
           PY
           )
           echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+          LINTER_VERSION=$(python3 - <<'PY'
+          import pathlib
+          text = pathlib.Path("packages/skillager-linter/pyproject.toml").read_text(encoding="utf-8")
+          for line in text.splitlines():
+              if line.startswith("version = "):
+                  print(line.split("=", 1)[1].strip().strip('"'))
+                  break
+          else:
+              raise SystemExit("could not find linter version")
+          PY
+          )
+          echo "linter=$LINTER_VERSION" >> "$GITHUB_OUTPUT"
           echo "### Version bump: $CURRENT -> $NEXT (${{ inputs.bump }})" >> "$GITHUB_STEP_SUMMARY"
+          echo "### skillager-linter: $LINTER_VERSION" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Reuse existing current release tag
         if: inputs.bump == 'current'
@@ -207,9 +221,14 @@ jobs:
 
       - name: Validate release build
         run: |
+          rm -rf dist
           uv run python -m unittest discover -s tests
+          uv run python -m unittest discover -s packages/skillager-linter/tests
           uv run python -m skillager --version
+          uv run python -m skillager_linter --version
+          uv build packages/skillager-linter
           uv build
+          uv run python scripts/check_wheelhouse.py --python 3.12
           ls -lh dist/
 
       - name: Commit version bump and tag
@@ -260,6 +279,9 @@ jobs:
           fi
 
       - name: Build release notes from commit subjects
+        env:
+          NEXT: ${{ steps.version.outputs.next }}
+          LINTER_VERSION: ${{ steps.version.outputs.linter }}
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           if [ -n "$PREV_TAG" ]; then
@@ -271,7 +293,17 @@ jobs:
           if [ -z "$NOTES" ]; then
             NOTES="- Initial release"
           fi
-          printf '%s\n' "$NOTES" > RELEASE_NOTES.md
+          {
+            echo "Packages:"
+            echo "- skillager $NEXT"
+            echo "- skillager-linter $LINTER_VERSION"
+            echo
+            echo "Private API note:"
+            echo "- Compatibility shims remain for existing imports from skillager.skills.simple_yaml and skillager.skills.lint; new integrations should import from skillager_linter."
+            echo
+            echo "Changes:"
+            printf '%s\n' "$NOTES"
+          } > RELEASE_NOTES.md
 
       - name: Create or update draft GitHub Release
         env:
@@ -359,12 +391,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "v${{ needs.release.outputs.version }}" dist/* --repo "$GITHUB_REPOSITORY" --clobber
 
-  publish-pypi:
+  publish-linter-pypi:
     needs: release
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/skillager
+      url: https://pypi.org/p/skillager-linter
     permissions:
       id-token: write
     steps:
@@ -374,18 +406,28 @@ jobs:
           name: dist
           path: dist/
 
+      - name: Select linter artifacts
+        env:
+          VERSION: ${{ needs.release.outputs.linter_version }}
+        run: |
+          mkdir dist-linter
+          cp "dist/skillager_linter-${VERSION}"* dist-linter/
+          test "$(find dist-linter -type f | wc -l)" -eq 2
+
       - name: Check whether version is already on PyPI
         id: pypi
         env:
-          VERSION: ${{ needs.release.outputs.version }}
+          PACKAGE: skillager-linter
+          VERSION: ${{ needs.release.outputs.linter_version }}
         run: |
           python3 - <<'PY'
           import os
           import urllib.error
           import urllib.request
 
+          package = os.environ["PACKAGE"]
           version = os.environ["VERSION"]
-          url = f"https://pypi.org/pypi/skillager/{version}/json"
+          url = f"https://pypi.org/pypi/{package}/{version}/json"
           exists = False
           try:
               with urllib.request.urlopen(url, timeout=20) as response:
@@ -402,11 +444,72 @@ jobs:
       - name: Publish to PyPI
         if: steps.pypi.outputs.exists != 'true'
         uses: pypa/gh-action-pypi-publish@v1.14.0
+        with:
+          packages-dir: dist-linter/
+
+  publish-pypi:
+    needs:
+      - release
+      - publish-linter-pypi
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/skillager
+    permissions:
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      - name: Select core artifacts
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          mkdir dist-core
+          cp "dist/skillager-${VERSION}"* dist-core/
+          test "$(find dist-core -type f | wc -l)" -eq 2
+
+      - name: Check whether version is already on PyPI
+        id: pypi
+        env:
+          PACKAGE: skillager
+          VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import urllib.error
+          import urllib.request
+
+          package = os.environ["PACKAGE"]
+          version = os.environ["VERSION"]
+          url = f"https://pypi.org/pypi/{package}/{version}/json"
+          exists = False
+          try:
+              with urllib.request.urlopen(url, timeout=20) as response:
+                  exists = response.status == 200
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  raise
+
+          print(f"exists={str(exists).lower()}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"exists={str(exists).lower()}\n")
+          PY
+
+      - name: Publish to PyPI
+        if: steps.pypi.outputs.exists != 'true'
+        uses: pypa/gh-action-pypi-publish@v1.14.0
+        with:
+          packages-dir: dist-core/
 
   publish-github-release:
     needs:
       - release
       - release-assets
+      - publish-linter-pypi
       - publish-pypi
     runs-on: ubuntu-latest
     permissions:
