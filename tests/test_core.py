@@ -6,7 +6,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import tomllib
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -15,6 +14,11 @@ from email.parser import Parser
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility path.
+    import tomli as tomllib
 
 from packaging.requirements import Requirement
 

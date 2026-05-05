@@ -316,7 +316,7 @@ wheels = [
 
 [[package]]
 name = "skillager"
-version = "0.3.1"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "packaging" },
@@ -329,6 +329,7 @@ dependencies = [
 dev = [
     { name = "mypy" },
     { name = "ruff" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
     { name = "types-pyyaml" },
 ]
 
@@ -345,6 +346,7 @@ provides-extras = ["test"]
 dev = [
     { name = "mypy", specifier = ">=1.20.2" },
     { name = "ruff", specifier = ">=0.15.12" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
     { name = "types-pyyaml", specifier = ">=6.0.12.20260408" },
 ]
 
