@@ -10,6 +10,8 @@ import tomllib
 import unittest
 import zipfile
 from contextlib import redirect_stderr, redirect_stdout
+from email.message import Message
+from email.parser import Parser
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -34,6 +36,22 @@ from skillager.update_check import check_for_update, is_newer_version
 def _requirement_key(requirement: Requirement) -> tuple[str, str, str | None]:
     marker = str(requirement.marker) if requirement.marker else None
     return (requirement.name, str(requirement.specifier), marker)
+
+
+def _wheel_metadata(wheel_path: Path) -> Message:
+    with zipfile.ZipFile(wheel_path) as wheel:
+        metadata_name = next(name for name in wheel.namelist() if name.endswith(".dist-info/METADATA"))
+        return Parser().parsestr(wheel.read(metadata_name).decode())
+
+
+def _metadata_requirements(metadata: Message) -> set[tuple[str, str, str | None]]:
+    return {_requirement_key(Requirement(line)) for line in metadata.get_all("Requires-Dist") or []}
+
+
+def _wheel_entry_points(wheel_path: Path) -> str:
+    with zipfile.ZipFile(wheel_path) as wheel:
+        entry_points_name = next(name for name in wheel.namelist() if name.endswith(".dist-info/entry_points.txt"))
+        return wheel.read(entry_points_name).decode()
 
 
 class SkillagerCoreTests(unittest.TestCase):
@@ -404,11 +422,19 @@ class SkillagerPackagingTests(unittest.TestCase):
     _build_dir: tempfile.TemporaryDirectory[str]
     wheel_path: Path
     sdist_path: Path
+    linter_wheel_path: Path
+    linter_sdist_path: Path
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._build_dir = tempfile.TemporaryDirectory()
         repo_root = Path(__file__).resolve().parents[1]
+        subprocess.run(
+            ["uv", "build", "packages/skillager-linter", "--out-dir", cls._build_dir.name],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+        )
         subprocess.run(
             ["uv", "build", "--out-dir", cls._build_dir.name],
             cwd=repo_root,
@@ -416,8 +442,10 @@ class SkillagerPackagingTests(unittest.TestCase):
             capture_output=True,
         )
         out = Path(cls._build_dir.name)
-        cls.wheel_path = next(out.glob("*.whl"))
-        cls.sdist_path = next(out.glob("*.tar.gz"))
+        cls.wheel_path = next(out.glob("skillager-*.whl"))
+        cls.sdist_path = next(out.glob("skillager-*.tar.gz"))
+        cls.linter_wheel_path = next(out.glob("skillager_linter-*.whl"))
+        cls.linter_sdist_path = next(out.glob("skillager_linter-*.tar.gz"))
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -426,17 +454,66 @@ class SkillagerPackagingTests(unittest.TestCase):
     def test_wheel_metadata_matches_pyproject(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         project = tomllib.loads((repo_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-        with zipfile.ZipFile(self.wheel_path) as wheel:
-            metadata_name = next(name for name in wheel.namelist() if name.endswith(".dist-info/METADATA"))
-            metadata = wheel.read(metadata_name).decode()
-        self.assertIn(f"Version: {project['version']}", metadata)
-        actual = {
-            _requirement_key(Requirement(line.removeprefix("Requires-Dist: ")))
-            for line in metadata.splitlines()
-            if line.startswith("Requires-Dist: ")
-        }
+        metadata = _wheel_metadata(self.wheel_path)
+        self.assertEqual(project["version"], metadata["Version"])
+        self.assertEqual(project["requires-python"], metadata["Requires-Python"])
+        actual = _metadata_requirements(metadata)
         expected = {_requirement_key(Requirement(dependency)) for dependency in project["dependencies"]}
         self.assertLessEqual(expected, actual)
+        self.assertIn("skillager = skillager.cli:main", _wheel_entry_points(self.wheel_path))
+
+    def test_linter_wheel_metadata_matches_pyproject_without_core_dependencies(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        project = tomllib.loads((repo_root / "packages" / "skillager-linter" / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+        metadata = _wheel_metadata(self.linter_wheel_path)
+        self.assertEqual(project["version"], metadata["Version"])
+        self.assertEqual(project["requires-python"], metadata["Requires-Python"])
+        actual = _metadata_requirements(metadata)
+        expected = {_requirement_key(Requirement(dependency)) for dependency in project["dependencies"]}
+        self.assertEqual(expected, actual)
+        self.assertNotIn("rich", {name.lower() for name, _, _ in actual})
+        self.assertNotIn("skillager", {name.lower() for name, _, _ in actual})
+        self.assertIn("skillager-lint = skillager_linter.cli:main", _wheel_entry_points(self.linter_wheel_path))
+
+    def test_built_wheels_preserve_core_shim_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            site_packages = Path(tmp) / "site"
+            site_packages.mkdir()
+            with zipfile.ZipFile(self.linter_wheel_path) as wheel:
+                wheel.extractall(site_packages)
+            with zipfile.ZipFile(self.wheel_path) as wheel:
+                wheel.extractall(site_packages)
+
+            code = """
+from skillager.skills.simple_yaml import MAX_MANIFEST_BYTES, StrictYamlError, YamlError, load_manifest_mapping
+from skillager.skills.lint import RULE_KEYS, blocking_findings, finding, lint_report, lint_skill, lint_status, safe_finding_identity, valid_lint_override
+from skillager.skills.compatibility import KNOWN_AGENTS, WARNING_CODES, normalize_compatibility
+from skillager.compatibility import compatibility_problem, compatibility_warnings, is_explicitly_incompatible
+from skillager.skills.schema import SchemaError
+
+assert MAX_MANIFEST_BYTES
+assert StrictYamlError
+assert YamlError
+assert load_manifest_mapping
+assert RULE_KEYS
+assert blocking_findings
+assert finding
+assert lint_report
+assert lint_skill
+assert lint_status
+assert safe_finding_identity
+assert valid_lint_override
+assert KNOWN_AGENTS
+assert WARNING_CODES
+assert normalize_compatibility
+assert compatibility_problem
+assert compatibility_warnings
+assert is_explicitly_incompatible
+assert SchemaError
+"""
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(site_packages)
+            subprocess.run([sys.executable, "-c", code], cwd=tmp, env=env, check=True, capture_output=True, text=True)
 
     def test_wheel_bundles_repo_testing_skill(self) -> None:
         with zipfile.ZipFile(self.wheel_path) as wheel:
@@ -461,6 +538,14 @@ class SkillagerPackagingTests(unittest.TestCase):
         self.assertIn(f"{prefix}/.agents/skills/simulate-skillager-setup/SKILL.md", names)
         self.assertIn(f"{prefix}/.agents/skills/simulate-skillager-setup/skillager.yaml", names)
         self.assertNotIn(f"{prefix}/docs/MANIFEST_HARDENING_PLAN.md", names)
+
+    def test_linter_sdist_contains_linter_source_only(self) -> None:
+        with tarfile.open(self.linter_sdist_path, "r:gz") as sdist:
+            names = set(sdist.getnames())
+        prefix = sorted(names)[0].split("/", 1)[0]
+        self.assertIn(f"{prefix}/src/skillager_linter/cli.py", names)
+        self.assertIn(f"{prefix}/src/skillager_linter/validators.py", names)
+        self.assertNotIn(f"{prefix}/src/skillager/cli.py", names)
 
     def test_packaged_repo_testing_skill_is_discoverable_from_wheel_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
