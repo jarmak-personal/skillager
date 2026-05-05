@@ -222,6 +222,8 @@ jobs:
       - name: Validate release build
         run: |
           rm -rf dist
+          uv run mypy --python-version 3.10 src/skillager
+          uv run mypy --python-version 3.10 packages/skillager-linter/src/skillager_linter
           uv run python -m unittest discover -s tests
           uv run python -m unittest discover -s packages/skillager-linter/tests
           uv run python -m skillager --version
@@ -297,9 +299,6 @@ jobs:
             echo "Packages:"
             echo "- skillager $NEXT"
             echo "- skillager-linter $LINTER_VERSION"
-            echo
-            echo "Private API note:"
-            echo "- Compatibility shims remain for existing imports from skillager.skills.simple_yaml and skillager.skills.lint; new integrations should import from skillager_linter."
             echo
             echo "Changes:"
             printf '%s\n' "$NOTES"
@@ -412,6 +411,7 @@ jobs:
         run: |
           mkdir dist-linter
           cp "dist/skillager_linter-${VERSION}"* dist-linter/
+          # V1 release artifacts are exactly one wheel plus one sdist.
           test "$(find dist-linter -type f | wc -l)" -eq 2
 
       - name: Check whether version is already on PyPI
@@ -470,6 +470,7 @@ jobs:
         run: |
           mkdir dist-core
           cp "dist/skillager-${VERSION}"* dist-core/
+          # V1 release artifacts are exactly one wheel plus one sdist.
           test "$(find dist-core -type f | wc -l)" -eq 2
 
       - name: Check whether version is already on PyPI

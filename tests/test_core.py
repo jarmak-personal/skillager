@@ -475,7 +475,7 @@ class SkillagerPackagingTests(unittest.TestCase):
         self.assertNotIn("skillager", {name.lower() for name, _, _ in actual})
         self.assertIn("skillager-lint = skillager_linter.cli:main", _wheel_entry_points(self.linter_wheel_path))
 
-    def test_built_wheels_preserve_core_shim_imports(self) -> None:
+    def test_built_wheels_preserve_public_split_imports(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             site_packages = Path(tmp) / "site"
             site_packages.mkdir()
@@ -485,9 +485,10 @@ class SkillagerPackagingTests(unittest.TestCase):
                 wheel.extractall(site_packages)
 
             code = """
-from skillager.skills.simple_yaml import MAX_MANIFEST_BYTES, StrictYamlError, YamlError, load_manifest_mapping
-from skillager.skills.lint import RULE_KEYS, blocking_findings, finding, lint_report, lint_skill, lint_status, safe_finding_identity, valid_lint_override
-from skillager.skills.compatibility import KNOWN_AGENTS, WARNING_CODES, normalize_compatibility
+from skillager.simple_yaml import MAX_MANIFEST_BYTES, StrictYamlError, YamlError, load_manifest_mapping
+from skillager.lint import RULE_KEYS, blocking_findings, finding, lint_report
+from skillager.lint import lint_skill, lint_status, safe_finding_identity, valid_lint_override
+from skillager.compatibility import KNOWN_AGENTS, WARNING_CODES, normalize_compatibility
 from skillager.compatibility import compatibility_problem, compatibility_warnings, is_explicitly_incompatible
 from skillager.skills.schema import SchemaError
 from skillager_linter.templates import MINIMAL_MANIFEST_YAML
@@ -518,7 +519,7 @@ assert MINIMAL_MANIFEST_YAML.strip()
             try:
                 subprocess.run([sys.executable, "-c", code], cwd=tmp, env=env, check=True, capture_output=True, text=True)
             except subprocess.CalledProcessError as exc:
-                self.fail(f"shim import failed:\nstdout={exc.stdout}\nstderr={exc.stderr}")
+                self.fail(f"public import failed:\nstdout={exc.stdout}\nstderr={exc.stderr}")
 
     def test_wheel_bundles_repo_testing_skill(self) -> None:
         with zipfile.ZipFile(self.wheel_path) as wheel:

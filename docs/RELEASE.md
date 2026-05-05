@@ -63,11 +63,13 @@ workflow:
 - publishes `skillager-linter` before `skillager`
 - publishes the GitHub Release only after PyPI jobs complete
 
-Release notes must name both package versions. Include this compatibility note
-while the V1 extraction is fresh:
+Release notes must name both package versions.
 
-```text
-Compatibility shims remain for existing imports from
-skillager.skills.simple_yaml and skillager.skills.lint. New integrations should
-import from skillager_linter.
-```
+## Recovering From a Half-Published Release
+
+If `skillager-linter` publishes successfully but `skillager` fails to publish,
+yank the just-published `skillager-linter` version on PyPI. Do not delete it.
+
+Fix the issue, publish a patch version of `skillager-linter` if the linter
+artifact itself needs to change, then rerun the local wheelhouse check and
+TestPyPI pairing smoke before continuing the core `skillager` release.

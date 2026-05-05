@@ -59,7 +59,9 @@ def main(argv: list[str] | None = None) -> int:
         state = work / "state"
         env.update({"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"})
         _run([str(python), "-m", "skillager", "index", "--no-packages"], cwd=project, env=env)
-        core = _json([str(python), "-m", "skillager", "lint", "project/demo", "--json"], cwd=project, env=env)
+        listing = _json([str(python), "-m", "skillager", "list", "--json"], cwd=project, env=env)
+        skill_id = _skill_id_for_root(listing, skill_dir, cwd=project)
+        core = _json([str(python), "-m", "skillager", "lint", skill_id, "--json"], cwd=project, env=env)
         _assert_finding(core[0]["lint"]["findings"], "audience_both")
 
     return 0
@@ -88,6 +90,30 @@ def _run(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | N
 def _json(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> object:
     completed = _run(command, cwd=cwd, env=env)
     return json.loads(completed.stdout)
+
+
+def _skill_id_for_root(listing: object, skill_dir: Path, *, cwd: Path) -> str:
+    if not isinstance(listing, list):
+        raise SystemExit(f"expected skill list JSON array, got {type(listing).__name__}")
+    target = skill_dir.resolve()
+    matches: list[dict[str, object]] = []
+    for skill in listing:
+        if not isinstance(skill, dict):
+            continue
+        root = skill.get("root")
+        if not isinstance(root, str):
+            continue
+        root_path = Path(root)
+        if not root_path.is_absolute():
+            root_path = cwd / root_path
+        if root_path.resolve() == target:
+            matches.append(skill)
+    if len(matches) != 1:
+        raise SystemExit(f"expected exactly one indexed skill rooted at {target}, found {len(matches)}")
+    skill_id = matches[0].get("id")
+    if not isinstance(skill_id, str) or not skill_id:
+        raise SystemExit(f"indexed skill at {target} is missing a string id")
+    return skill_id
 
 
 def _assert_finding(findings: list[dict[str, str]], code: str) -> None:
