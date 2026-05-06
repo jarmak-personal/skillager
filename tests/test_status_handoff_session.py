@@ -96,9 +96,69 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
             data = json.loads(output.getvalue())
+            self.assertIsNone(data["agent"])
             self.assertFalse(data["needs_setup"])
             self.assertEqual(data["review_needed"], 0)
+            self.assertTrue(data["readiness"]["review_ready"])
+            self.assertFalse(data["readiness"]["handoff_ready"])
+            self.assertFalse(data["readiness"]["ready"])
+            self.assertEqual(data["readiness"]["handoff"]["kind"], "agent-required")
+            self.assertEqual(data["readiness"]["handoff"]["reason_code"], "agent_required")
+            self.assertIsNone(data["readiness"]["handoff"]["command"])
+            self.assertIn("status --agent codex", data["message"])
             self.assertFalse(data["lookback_pending"])
+
+    def test_status_agent_controls_handoff_readiness_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["status", "--agent", "claude", "--no-packages", "--json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["agent"], "claude")
+            self.assertEqual(data["readiness"]["handoff"]["command"], "skillager bootstrap --agent claude")
+            self.assertEqual(data["readiness"]["handoff"]["reason_code"], "working_missing")
+            self.assertNotIn("skillager bootstrap --agent codex", data["message"])
+
+    def test_status_and_handoff_share_readiness_for_same_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                    materialize_working_skill(agents=["codex"], project_dir=root)
+                status_output = StringIO()
+                with redirect_stdout(status_output):
+                    self.assertEqual(main(["status", "--agent", "codex", "--no-packages", "--json"]), 0)
+                handoff_output = StringIO()
+                with redirect_stdout(handoff_output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            status = json.loads(status_output.getvalue())
+            handoff = json.loads(handoff_output.getvalue())
+            self.assertEqual(status["readiness"], handoff["readiness"])
+            self.assertTrue(status["readiness"]["ready"])
+            self.assertEqual(status["readiness"]["exposure"]["available_on_demand"], 1)
 
     def test_status_reports_pending_lookback_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -358,6 +418,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                     self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "ready")
+            self.assertTrue(data["readiness"]["ready"])
             self.assertEqual(data["state"]["artifacts"]["working_skill"]["status"], "present")
             self.assertEqual(data["next"]["command"], None)
             self.assertIn("scored slate", data["next"]["message"])
@@ -439,7 +500,9 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             handoff = json.loads(output.getvalue())
             self.assertEqual(handoff["status"], "artifact-attention-needed")
             self.assertEqual(handoff["state"]["artifacts"]["working_skill"]["status"], "stale")
-            self.assertEqual(handoff["next"]["command"], "skillager setup")
+            self.assertFalse(handoff["readiness"]["handoff_ready"])
+            self.assertEqual(handoff["readiness"]["handoff"]["reason_code"], "working_stale")
+            self.assertEqual(handoff["next"]["command"], "skillager bootstrap --agent codex")
 
     def test_handoff_reports_missing_project_note(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -459,7 +522,9 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             handoff = json.loads(output.getvalue())
             self.assertEqual(handoff["status"], "artifact-attention-needed")
             self.assertEqual(handoff["state"]["artifacts"]["project_notes"][0]["status"], "missing")
-            self.assertEqual(handoff["next"]["command"], "skillager setup")
+            self.assertFalse(handoff["readiness"]["handoff_ready"])
+            self.assertEqual(handoff["readiness"]["handoff"]["reason_code"], "project_note_missing")
+            self.assertEqual(handoff["next"]["command"], "skillager bootstrap --agent codex")
 
     def test_handoff_reports_unmanaged_working_skill_as_manual_repair(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -482,6 +547,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             handoff = json.loads(output.getvalue())
             self.assertEqual(handoff["status"], "manual-artifact-repair-needed")
             self.assertEqual(handoff["state"]["artifacts"]["working_skill"]["status"], "unmanaged")
+            self.assertEqual(handoff["readiness"]["handoff"]["reason_code"], "working_unmanaged")
             self.assertTrue(handoff["state"]["setup"]["needed"])
             self.assertIsNone(handoff["next"]["command"])
             self.assertIn("Move or remove unmanaged Skillager Working target", handoff["next"]["message"])
@@ -510,6 +576,8 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                     self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "ready")
+            self.assertTrue(data["readiness"]["ready"])
+            self.assertEqual(data["readiness"]["exposure"]["unmaterialized_attached_tags"], ["gis"])
             self.assertEqual(data["state"]["attached_tags"], ["gis"])
             self.assertEqual(data["state"]["unmaterialized_attached_tags"], ["gis"])
             self.assertIn("diagnostic only", data["state"]["unmaterialized_attached_tags_policy"])

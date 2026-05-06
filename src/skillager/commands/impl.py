@@ -82,6 +82,43 @@ from ..trust import content_hash, load_trust, make_lint_override, save_trust, se
 from ..update_check import check_for_update
 
 
+HANDOFF_REASON_AGENT_REQUIRED = "agent_required"
+HANDOFF_REASON_WORKING_MISSING = "working_missing"
+HANDOFF_REASON_WORKING_STALE = "working_stale"
+HANDOFF_REASON_WORKING_UNMANAGED = "working_unmanaged"
+HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION = "working_local_customization"
+HANDOFF_REASON_WORKING_WRONG_SOURCE = "working_wrong_source"
+HANDOFF_REASON_WORKING_UNREADABLE_SIDECAR = "working_unreadable_sidecar"
+HANDOFF_REASON_WORKING_DRIFT = "working_drift"
+HANDOFF_REASON_PROJECT_NOTE_MISSING = "project_note_missing"
+HANDOFF_REASON_PROJECT_NOTE_STALE = "project_note_stale"
+HANDOFF_REASON_PROJECT_NOTE_UNKNOWN = "project_note_unknown"
+HANDOFF_REASON_HANDOFF_ARTIFACTS = "handoff_artifacts"
+HANDOFF_REASON_CODES = (
+    HANDOFF_REASON_AGENT_REQUIRED,
+    HANDOFF_REASON_WORKING_MISSING,
+    HANDOFF_REASON_WORKING_STALE,
+    HANDOFF_REASON_WORKING_UNMANAGED,
+    HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
+    HANDOFF_REASON_WORKING_WRONG_SOURCE,
+    HANDOFF_REASON_WORKING_UNREADABLE_SIDECAR,
+    HANDOFF_REASON_WORKING_DRIFT,
+    HANDOFF_REASON_PROJECT_NOTE_MISSING,
+    HANDOFF_REASON_PROJECT_NOTE_STALE,
+    HANDOFF_REASON_PROJECT_NOTE_UNKNOWN,
+    HANDOFF_REASON_HANDOFF_ARTIFACTS,
+)
+_WORKING_DRIFT_REASON_CODES = {
+    "local customization": HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
+    "target is not Skillager Working": HANDOFF_REASON_WORKING_WRONG_SOURCE,
+    "unreadable sidecar": HANDOFF_REASON_WORKING_UNREADABLE_SIDECAR,
+}
+_PROJECT_NOTE_REASON_CODES = {
+    "missing": HANDOFF_REASON_PROJECT_NOTE_MISSING,
+    "stale": HANDOFF_REASON_PROJECT_NOTE_STALE,
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -436,6 +473,7 @@ def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             Examples:
               skillager status
               skillager status --json
+              skillager status --agent codex --json
               skillager status --json --full-json
               skillager status --quiet
               skillager status --exit-code
@@ -447,8 +485,9 @@ def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills. Defaults to local/environment/package skills only.")
     p.add_argument("--include-lint-blocked", action="store_true", help="Include lint-blocked skills in diagnostic counts.")
     p.add_argument("--all", action="store_true", help="Ignore the saved setup scope and report all selected skills.")
+    p.add_argument("--agent", choices=["codex", "claude"], help="Check first-party handoff readiness for this agent.")
     p.add_argument("--quiet", action="store_true", help="Print one concise line.")
-    p.add_argument("--exit-code", action="store_true", help="Exit 10 when review is needed. Default exit code is 0.")
+    p.add_argument("--exit-code", action="store_true", help="Exit 10 when review is needed, or 11 when approved skills exist but handoff artifacts need repair.")
     p.add_argument("--ack-migration", action="store_true", help="Acknowledge the current collection ID migration report.")
     p.add_argument("--migration-details", action="store_true", help="Print collection ID migration details for review before acking.")
     p.add_argument("--json", action="store_true", help="Emit status as JSON.")
@@ -1276,52 +1315,263 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def cmd_status(args: argparse.Namespace) -> int:
-    if args.ack_migration:
-        ack_collection_migrations(catalog_root(args))
+def _build_visible_skill_view(
+    state_root: Path,
+    *,
+    catalog_root: Path,
+    project_dir: Path,
+    agent: str | None,
+    paths: list[Path] | None = None,
+    include_packages: bool = True,
+    include_global: bool = False,
+    use_saved_scope: bool = True,
+) -> dict[str, Any]:
     data = build_index(
-        root(args),
-        args.paths or None,
-        include_packages=not args.no_packages,
-        approval_root=catalog_root(args),
-        extra_paths=_active_setup_paths(root(args), args.paths or None),
+        state_root,
+        paths,
+        include_packages=include_packages,
+        approval_root=catalog_root,
+        extra_paths=_active_setup_paths(state_root, paths),
     )
-    extra_skills = select_attached_tag_skills(root(args), catalog_root=catalog_root(args), approval_root=catalog_root(args), include_lint_blocked=True)
+    extra_skills = select_attached_tag_skills(
+        state_root,
+        catalog_root=catalog_root,
+        approval_root=catalog_root,
+        include_lint_blocked=True,
+    )
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
-    saved_scope = _load_status_scope(root(args)) if not args.all else None
+    saved_scope = _load_status_scope(state_root) if use_saved_scope else None
     scope_audience = saved_scope.get("audience") if saved_scope else None
-    include_global = args.include_global
-    if saved_scope:
-        include_global = include_global or bool(saved_scope.get("include_global"))
+    selected_include_global = (include_global or bool(saved_scope.get("include_global"))) if saved_scope else include_global
     skills = select_visible_skills(
         data.get("skills", []),
         audience=scope_audience,
-        include_global=include_global,
+        include_global=selected_include_global,
         include_lint_blocked=True,
     )
-    _save_native_inventory(root(args), _effective_project_skills(root(args), catalog_root=catalog_root(args)))
-    summary = review_summary(skills)
-    materialized = _materialized_project_counts(Path.cwd())
-    exposure = _project_exposure(Path.cwd())
     review_needed = _status_review_needed(skills, saved_scope=saved_scope)
     lint_blocked = [skill for skill in skills if skill.get("trust") == "lint_blocked"]
+    approved = [skill for skill in skills if skill.get("trust") in TRUSTED_STATES]
+    authored_unreviewed = _authored_unreviewed(skills)
+    blocked = [skill for skill in data.get("skills", []) if skill.get("trust") == "blocked"]
+    project_exposure = _project_exposure(project_dir)
+    attached_tags = sorted(load_project_tags(state_root).get("attached_tags", []))
+    materialized_router_tags = sorted(_materialized_router_tags(project_dir, agent=agent)) if agent else []
+    artifacts = _handoff_artifacts(project_dir, agent=agent) if agent else {}
+    materialized_project_counts = _materialized_project_counts(project_dir)
+    unmaterialized_attached_tags = sorted(tag for tag in attached_tags if tag not in set(materialized_router_tags))
+    migration = collection_migration_summary(catalog_root)
+    lookback = _status_lookback_summary(state_root)
+    tagging = _status_tagging_summary(state_root, catalog_root)
+    readiness = _build_readiness(
+        review_needed=review_needed,
+        lint_blocked=lint_blocked,
+        approved=approved,
+        artifacts=artifacts,
+        agent=agent,
+        project_exposure=project_exposure,
+        materialized_project_counts=materialized_project_counts,
+        attached_tags=attached_tags,
+        materialized_router_tags=materialized_router_tags,
+        unmaterialized_attached_tags=unmaterialized_attached_tags,
+    )
+    return {
+        "index": data,
+        "skills": skills,
+        "saved_scope": saved_scope,
+        "review_needed": review_needed,
+        "lint_blocked": lint_blocked,
+        "approved": approved,
+        "authored_unreviewed": authored_unreviewed,
+        "blocked": blocked,
+        "project_exposure": project_exposure,
+        "attached_tags": attached_tags,
+        "materialized_router_tags": materialized_router_tags,
+        "unmaterialized_attached_tags": unmaterialized_attached_tags,
+        "artifacts": artifacts,
+        "materialized_project_counts": materialized_project_counts,
+        "migration": migration,
+        "lookback": lookback,
+        "tagging": tagging,
+        "readiness": readiness,
+    }
+
+
+def _build_readiness(
+    *,
+    review_needed: list[dict[str, Any]],
+    lint_blocked: list[dict[str, Any]],
+    approved: list[dict[str, Any]],
+    artifacts: dict[str, Any],
+    agent: str | None,
+    project_exposure: dict[str, list[dict[str, Any]]],
+    materialized_project_counts: dict[str, int],
+    attached_tags: list[str],
+    materialized_router_tags: list[str],
+    unmaterialized_attached_tags: list[str],
+) -> dict[str, Any]:
+    review_ready = not review_needed and not lint_blocked
+    handoff_ready = _handoff_ready(artifacts) if agent else False
+    handoff_action = _handoff_repair_action(artifacts, agent=agent) if not handoff_ready else None
+    return {
+        "review_ready": review_ready,
+        "handoff_ready": handoff_ready,
+        "ready": review_ready and handoff_ready,
+        "handoff": handoff_action,
+        "exposure": _readiness_exposure(
+            approved=approved,
+            project_exposure=project_exposure,
+            materialized_project_counts=materialized_project_counts,
+            attached_tags=attached_tags,
+            materialized_router_tags=materialized_router_tags,
+            unmaterialized_attached_tags=unmaterialized_attached_tags,
+        ),
+    }
+
+
+def _readiness_exposure(
+    *,
+    approved: list[dict[str, Any]],
+    project_exposure: dict[str, list[dict[str, Any]]],
+    materialized_project_counts: dict[str, int],
+    attached_tags: list[str],
+    materialized_router_tags: list[str],
+    unmaterialized_attached_tags: list[str],
+) -> dict[str, Any]:
+    approved_ids = {skill["id"] for skill in approved}
+    exposed_ids = {skill_id for skill_id in project_exposure if skill_id != WORKING_SKILL_ID}
+    exposed_approved_ids = sorted(approved_ids.intersection(exposed_ids))
+    return {
+        "approved": len(approved_ids),
+        "exposed": len(exposed_approved_ids),
+        "available_on_demand": len(approved_ids.difference(exposed_ids)),
+        "project_materialized": materialized_project_counts,
+        "attached_tags": attached_tags,
+        "materialized_router_tags": materialized_router_tags,
+        "unmaterialized_attached_tags": unmaterialized_attached_tags,
+    }
+
+
+def _handoff_ready(artifacts: dict[str, Any]) -> bool:
+    if not artifacts:
+        return False
+    working = artifacts.get("working_skill") or {}
+    notes = artifacts.get("project_notes") or []
+    return working.get("status") == "present" and bool(notes) and all(note.get("status") == "present" for note in notes)
+
+
+def _handoff_repair_action(artifacts: dict[str, Any], *, agent: str | None) -> dict[str, Any] | None:
+    if not agent:
+        return {
+            "kind": "agent-required",
+            "reason": "agent not specified",
+            "reason_code": HANDOFF_REASON_AGENT_REQUIRED,
+            "message": "Pass --agent codex or --agent claude to check first-party handoff artifacts.",
+            "command": None,
+        }
+    working = artifacts.get("working_skill") or {}
+    working_status = working.get("status")
+    if working_status == "unmanaged":
+        return {
+            "kind": "manual",
+            "reason": "unmanaged working skill",
+            "reason_code": HANDOFF_REASON_WORKING_UNMANAGED,
+            "message": f"Move or remove unmanaged Skillager Working target before refreshing: {working.get('path')}",
+            "command": None,
+        }
+    if working_status == "drift":
+        reason = working.get("reason") or "working skill drift"
+        return {
+            "kind": "manual",
+            "reason": reason,
+            "reason_code": _working_drift_reason_code(reason),
+            "message": f"Review local Skillager Working changes before refreshing: {working.get('path')}",
+            "command": None,
+        }
+    if working_status in {"missing", "stale"}:
+        return _bootstrap_repair_action(agent, f"working skill {working_status}", reason_code=_working_status_reason_code(working_status))
+    notes = artifacts.get("project_notes") or []
+    stale_note = next((note for note in notes if note.get("status") != "present"), None)
+    if stale_note:
+        status = str(stale_note.get("status") or "unknown")
+        return _bootstrap_repair_action(agent, f"project note {status}", reason_code=_project_note_reason_code(status))
+    if _artifacts_need_attention(artifacts):
+        return _bootstrap_repair_action(agent, "handoff artifacts need refresh", reason_code=HANDOFF_REASON_HANDOFF_ARTIFACTS)
+    return None
+
+
+def _working_status_reason_code(status: str | None) -> str:
+    if status == "missing":
+        return HANDOFF_REASON_WORKING_MISSING
+    if status == "stale":
+        return HANDOFF_REASON_WORKING_STALE
+    return HANDOFF_REASON_WORKING_DRIFT
+
+
+def _working_drift_reason_code(reason: str) -> str:
+    return _WORKING_DRIFT_REASON_CODES.get(reason, HANDOFF_REASON_WORKING_DRIFT)
+
+
+def _project_note_reason_code(status: str) -> str:
+    return _PROJECT_NOTE_REASON_CODES.get(status, HANDOFF_REASON_PROJECT_NOTE_UNKNOWN)
+
+
+def _bootstrap_repair_action(agent: str, reason: str, *, reason_code: str) -> dict[str, Any]:
+    command = f"skillager bootstrap --agent {agent}"
+    return {
+        "kind": "bootstrap",
+        "reason": reason,
+        "reason_code": reason_code,
+        "message": f"Run `{command}` to refresh Skillager's first-party project handoff artifacts.",
+        "command": command,
+    }
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    if args.ack_migration:
+        ack_collection_migrations(catalog_root(args))
+    state_root = root(args)
+    approval_root = catalog_root(args)
+    project_dir = (find_project_root() or Path.cwd()).resolve()
+    agent = args.agent or _detect_agent_optional()
+    view = _build_visible_skill_view(
+        state_root,
+        catalog_root=approval_root,
+        project_dir=project_dir,
+        agent=agent,
+        paths=args.paths or None,
+        include_packages=not args.no_packages,
+        include_global=args.include_global,
+        use_saved_scope=not args.all,
+    )
+    data = view["index"]
+    skills = view["skills"]
+    saved_scope = view.get("saved_scope")
+    _save_native_inventory(state_root, _effective_project_skills(state_root, catalog_root=approval_root))
+    summary = review_summary(skills)
+    materialized = view["materialized_project_counts"]
+    exposure = view["project_exposure"]
+    review_needed = view["review_needed"]
+    lint_blocked = view["lint_blocked"]
     scan_summary = _status_scan_summary(skills)
     manifest_lint = _status_manifest_lint_summary(skills)
     lint_warned = [skill for skill in skills if (skill.get("lint") or {}).get("status") == "warned"]
-    approved = [skill for skill in skills if skill.get("trust") in {"reviewed", "trusted", "pinned"}]
+    approved = view["approved"]
     global_approved = [skill for skill in approved if skill.get("trust_reason") == "global-approval"]
-    authored_unreviewed = _authored_unreviewed(skills)
-    blocked = [skill for skill in data.get("skills", []) if skill.get("trust") == "blocked"]
-    lookback_summary = _status_lookback_summary(root(args))
-    collection_summary = _status_collection_summary(root(args), catalog_root(args))
+    authored_unreviewed = view["authored_unreviewed"]
+    blocked = view["blocked"]
+    lookback_summary = view["lookback"]
+    collection_summary = _status_collection_summary(state_root, approval_root)
     collection_inventory = _status_collection_inventory(skills)
-    tagging_summary = _status_tagging_summary(root(args), catalog_root(args))
-    migration_summary = collection_migration_summary(catalog_root(args))
+    tagging_summary = view["tagging"]
+    migration_summary = view["migration"]
     update = check_for_update(cache_root(), current_version=__version__)
+    readiness = view["readiness"]
     status = {
         "indexed": len(data.get("skills", [])),
         "selected": len(skills),
+        "agent": agent,
         "review_needed": len(review_needed),
         "lint_blocked": len(lint_blocked),
         "lint_blocked_ids": [skill["id"] for skill in lint_blocked],
@@ -1338,7 +1588,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         "reviewed_scope_count": saved_scope.get("selected_count") if saved_scope else None,
         "setup_scope_count": saved_scope.get("selected_count") if saved_scope else None,
         "exposure_count": len([skill_id for skill_id in exposure if skill_id != "skillager/working"]),
-        "needs_setup": bool(review_needed or lint_blocked),
+        "readiness": readiness,
+        "needs_setup": not readiness["review_ready"],
         "lookback_pending": lookback_summary["pending"],
         "lookback_summary": lookback_summary,
         "collections": collection_summary,
@@ -1354,6 +1605,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             lookback_summary=lookback_summary,
             collection_summary=collection_summary,
             migration_summary=migration_summary,
+            readiness=readiness,
         ),
     }
     if args.json:
@@ -1363,7 +1615,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(status["message"])
     else:
         _print_status(status)
-    return 10 if args.exit_code and (review_needed or lint_blocked) else 0
+    if args.exit_code:
+        if not readiness["review_ready"]:
+            return 10
+        if agent and not readiness["handoff_ready"] and readiness.get("exposure", {}).get("approved"):
+            return 11
+    return 0
 
 
 def cmd_handoff(args: argparse.Namespace) -> int:
@@ -1547,45 +1804,41 @@ def _print_bootstrap_result(result: dict[str, Any]) -> None:
 
 
 def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, agent: str) -> dict[str, Any]:
-    data = build_index(state_root, include_packages=True, approval_root=catalog_root, extra_paths=_active_setup_paths(state_root))
-    extra_skills = select_attached_tag_skills(state_root, catalog_root=catalog_root, approval_root=catalog_root, include_lint_blocked=True)
-    if extra_skills:
-        data["skills"] = [*data.get("skills", []), *extra_skills]
-    saved_scope = _load_status_scope(state_root)
-    scope_audience = saved_scope.get("audience") if saved_scope else None
-    include_global = bool(saved_scope.get("include_global")) if saved_scope else False
-    skills = select_visible_skills(
-        data.get("skills", []),
-        audience=scope_audience,
-        include_global=include_global,
-        include_lint_blocked=True,
+    view = _build_visible_skill_view(
+        state_root,
+        catalog_root=catalog_root,
+        project_dir=project_dir,
+        agent=agent,
+        include_packages=True,
+        include_global=False,
+        use_saved_scope=True,
     )
-    review_needed = _status_review_needed(skills, saved_scope=saved_scope)
-    lint_blocked = [skill for skill in skills if skill.get("trust") == "lint_blocked"]
-    authored_unreviewed = _authored_unreviewed(skills)
-    attached_tags = load_project_tags(state_root).get("attached_tags", [])
-    materialized_router_tags = _materialized_router_tags(project_dir, agent=agent)
-    migration = collection_migration_summary(catalog_root)
-    lookback = _status_lookback_summary(state_root)
-    artifacts = _handoff_artifacts(project_dir, agent=agent)
-    tagging = _status_tagging_summary(state_root, catalog_root)
+    review_needed = view["review_needed"]
+    lint_blocked = view["lint_blocked"]
+    authored_unreviewed = view["authored_unreviewed"]
+    migration = view["migration"]
+    lookback = view["lookback"]
+    artifacts = view["artifacts"]
+    tagging = view["tagging"]
+    readiness = view["readiness"]
     state = {
-        "setup": {"needed": bool(review_needed), "unreviewed": len(review_needed)},
+        "setup": {"needed": not readiness["review_ready"], "unreviewed": len(review_needed)},
         "lint_blocked": {"count": len(lint_blocked), "ids": [skill["id"] for skill in lint_blocked]},
         "authored_unreviewed": {"count": len(authored_unreviewed), "ids": [skill["id"] for skill in authored_unreviewed]},
         "migration": migration,
         "artifacts": artifacts,
         "lookback": lookback,
         "tagging": tagging,
-        "attached_tags": attached_tags,
-        "materialized_router_tags": sorted(materialized_router_tags),
-        "unmaterialized_attached_tags": sorted(tag for tag in attached_tags if tag not in materialized_router_tags),
+        "attached_tags": view["attached_tags"],
+        "materialized_router_tags": view["materialized_router_tags"],
+        "unmaterialized_attached_tags": view["unmaterialized_attached_tags"],
         "unmaterialized_attached_tags_policy": "diagnostic only; materialize a router only after the user's goal makes that tag relevant",
     }
-    next_step = _handoff_next(state, agent=agent)
+    next_step = _handoff_next(state, agent=agent, readiness=readiness)
     return {
         "schema": "skillager.handoff.v1",
         "agent": agent,
+        "readiness": readiness,
         "state": state,
         "status": next_step["status"],
         "next": next_step,
@@ -1593,11 +1846,15 @@ def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, a
 
 
 def _detect_agent() -> str:
+    return _detect_agent_optional() or "codex"
+
+
+def _detect_agent_optional() -> str | None:
     if os.environ.get("CLAUDE_SESSION_ID"):
         return "claude"
     if os.environ.get("CODEX_SESSION_ID"):
         return "codex"
-    return "codex"
+    return None
 
 
 def _handoff_artifacts(project_dir: Path, *, agent: str) -> dict[str, Any]:
@@ -1666,7 +1923,7 @@ def _materialized_router_tags(project_dir: Path, *, agent: str) -> set[str]:
     return tags
 
 
-def _handoff_next(state: dict[str, Any], *, agent: str) -> dict[str, Any]:
+def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any]) -> dict[str, Any]:
     lint_blocked = state.get("lint_blocked") or {}
     if lint_blocked.get("count"):
         return {
@@ -1699,12 +1956,11 @@ def _handoff_next(state: dict[str, Any], *, agent: str) -> dict[str, Any]:
             "command": "skillager status --ack-migration",
             "next_commands": ["skillager status --ack-migration"],
         }
-    artifacts = state.get("artifacts") or {}
-    working = artifacts.get("working_skill") or {}
-    if working.get("status") == "unmanaged":
+    handoff_action = readiness.get("handoff") or {}
+    if handoff_action.get("kind") == "manual":
         return {
             "status": "manual-artifact-repair-needed",
-            "message": f"Move or remove unmanaged Skillager Working target before refreshing: {working.get('path')}",
+            "message": handoff_action.get("message") or "Repair local Skillager handoff artifacts manually before refreshing.",
             "command": None,
             "next_commands": [],
         }
@@ -1716,12 +1972,13 @@ def _handoff_next(state: dict[str, Any], *, agent: str) -> dict[str, Any]:
             "command": "skillager setup",
             "next_commands": ["skillager setup"],
         }
-    if _artifacts_need_attention(artifacts):
+    if not readiness.get("handoff_ready"):
+        command = handoff_action.get("command") or f"skillager bootstrap --agent {agent}"
         return {
             "status": "artifact-attention-needed",
-            "message": f"Refresh Skillager's project handoff artifacts for {agent}.",
-            "command": "skillager setup",
-            "next_commands": ["skillager setup"],
+            "message": handoff_action.get("message") or f"Refresh Skillager's project handoff artifacts for {agent}.",
+            "command": command,
+            "next_commands": [command],
         }
     lookback = state.get("lookback") or {}
     if lookback.get("pending"):
@@ -1777,9 +2034,44 @@ def _artifacts_need_attention(artifacts: dict[str, Any]) -> bool:
     return working.get("status") != "present"
 
 
+def _readiness_handoff_state(readiness: dict[str, Any]) -> str:
+    if readiness.get("handoff_ready"):
+        return "ready"
+    action = readiness.get("handoff") or {}
+    kind = action.get("kind")
+    reason = action.get("reason")
+    if kind == "agent-required":
+        return "not checked (agent not specified)"
+    if kind == "manual":
+        return f"manual repair needed ({reason})" if reason else "manual repair needed"
+    if kind == "bootstrap":
+        return f"needs repair ({reason})" if reason else "needs repair"
+    return "needs repair"
+
+
+def _readiness_next_action(readiness: dict[str, Any]) -> str | None:
+    if readiness.get("handoff_ready"):
+        return None
+    action = readiness.get("handoff") or {}
+    if action.get("command"):
+        return str(action["command"])
+    if action.get("kind") == "agent-required":
+        return "skillager status --agent <codex|claude>"
+    message = action.get("message")
+    return str(message) if message else None
+
+
 def _print_handoff(handoff: dict[str, Any]) -> None:
     state = handoff["state"]
     print(_style("Skillager handoff complete", "bold"))
+    print()
+    readiness = handoff.get("readiness") or {}
+    exposure = readiness.get("exposure") or {}
+    print("Readiness:")
+    print(f"  Ready: {'yes' if readiness.get('ready') else 'no'}")
+    print(f"  Review: {'ready' if readiness.get('review_ready') else 'needs review'}")
+    print(f"  Handoff: {_readiness_handoff_state(readiness)}")
+    print(f"  Exposure: {exposure.get('exposed', 0)} exposed, {exposure.get('available_on_demand', 0)} available on demand")
     print()
     print("State:")
     setup = state["setup"]
@@ -2221,6 +2513,7 @@ def _status_message(
     lookback_summary: dict[str, Any] | None = None,
     collection_summary: dict[str, Any] | None = None,
     migration_summary: dict[str, Any] | None = None,
+    readiness: dict[str, Any] | None = None,
 ) -> str:
     if lint_blocked:
         return f"Skillager: {len(lint_blocked)} skill(s) are lint-blocked. Run `skillager lint` and fix the source or approve with an audited override."
@@ -2235,6 +2528,14 @@ def _status_message(
         )
     if review_needed:
         return f"Skillager: {len(review_needed)} unreviewed skill(s) need review in the active setup scope. Ask the user to run `skillager setup`."
+    if readiness and not readiness.get("handoff_ready") and (readiness.get("exposure") or {}).get("approved"):
+        handoff = readiness.get("handoff") or {}
+        if handoff.get("kind") == "agent-required":
+            return "Skillager: review is complete. Run `skillager status --agent codex` or `skillager status --agent claude` to check handoff readiness."
+        command = handoff.get("command")
+        if command:
+            return f"Skillager: review is complete, but handoff artifacts need refresh. Run `{command}`."
+        return f"Skillager: review is complete, but handoff artifacts need manual repair. {handoff.get('message', '').strip()}"
     if collection_summary and collection_summary.get("unattached_count"):
         return "Skillager: registered collections are not attached to this project. Run `skillager collection enable <name>` before setup."
     if lookback_summary and lookback_summary.get("pending"):
@@ -2246,6 +2547,15 @@ def _status_message(
 
 def _print_status(status: dict[str, Any]) -> None:
     print(_style("Skillager status", "bold"))
+    readiness = status.get("readiness") or {}
+    exposure = readiness.get("exposure") or {}
+    print(f"  - readiness: {'ready' if readiness.get('ready') else 'not ready'}")
+    print(f"    review: {'ready' if readiness.get('review_ready') else 'needs review'}")
+    print(f"    handoff: {_readiness_handoff_state(readiness)}")
+    next_action = _readiness_next_action(readiness)
+    if next_action:
+        print(f"    next: {next_action}")
+    print(f"    exposure: {exposure.get('exposed', 0)} exposed, {exposure.get('available_on_demand', 0)} available on demand")
     print(f"  - selected skills: {status['selected']}")
     print(f"  - approved: {status['approved']}")
     if status.get("global_approved"):
