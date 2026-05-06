@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -125,6 +126,11 @@ DOCTOR_EXIT_LOOKBACK_PENDING = 15
 SETUP_BOOTSTRAP_REASON_NO_APPROVED = "no_approved_skills"
 SETUP_BOOTSTRAP_REASON_DISABLED = "bootstrap_disabled"
 SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED = "agent_not_specified"
+RECOMMEND_MIN_SCORE = 8  # Below this, recommend exposure none.
+RECOMMEND_STRONG_SCORE = 20  # At/above this, treat as a strong match.
+RECOMMEND_NATIVE_TOP_N = 10  # At most this many strong matches may recommend native exposure.
+RECOMMEND_TAG_BOOST_CAP = 5  # Cap tag size contribution.
+RECOMMEND_TAG_BOOST_PER_MEMBER = 4
 _WORKING_DRIFT_REASON_CODES = {
     "local customization": HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
     "target is not Skillager Working": HANDOFF_REASON_WORKING_WRONG_SOURCE,
@@ -257,6 +263,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="Emit search results as JSON.")
     p.add_argument("--full-json", action="store_true", help="Emit full indexed metadata instead of compact agent-facing search results.")
     p.set_defaults(func=cmd_search)
+
+    p = sub.add_parser(
+        "recommend",
+        help="Build a read-only candidate slate for a user goal.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Search approved metadata for a goal and recommend exposure options without "
+            "approving, tagging, materializing, activating, or emitting skill bodies."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  skillager recommend --goal \"clean dataframe values\" --agent codex --json\n"
+            "  skillager recommend --goal \"GIS workflow\" --agent claude --limit 3"
+        ),
+    )
+    p.add_argument("--goal", required=True, help="User goal or task description to match against approved skill metadata.")
+    p.add_argument("--agent", required=True, choices=["codex", "claude"], help="Agent target for compatibility warnings and concrete commands.")
+    p.add_argument("--limit", type=int, default=5, help="Maximum candidate count. Use 0 for all candidates.")
+    p.add_argument("--include-global", action="store_true", help="Include global native skills. Defaults to project/environment/package and attached collection skills.")
+    p.add_argument("--compatible-only", action="store_true", help="Hide skills explicitly marked incompatible with --agent.")
+    p.add_argument("--json", action="store_true", help="Emit recommendation slate as JSON.")
+    p.set_defaults(func=cmd_recommend)
 
     p = sub.add_parser(
         "show",
@@ -3507,6 +3535,332 @@ def cmd_search(args: argparse.Namespace) -> int:
         for skill in results:
             print(f"{skill['score']}\t{skill['id']}\t{skill['trust']}\t{skill['summary']}")
     return 0
+
+
+def cmd_recommend(args: argparse.Namespace) -> int:
+    if args.limit < 0:
+        raise ValueError("--limit must be 0 or greater")
+    skills = _effective_project_skills(
+        root(args),
+        catalog_root=catalog_root(args),
+        include_blocked=False,
+        include_lint_blocked=False,
+    )
+    if not args.include_global:
+        skills = [skill for skill in skills if skill.get("source", {}).get("type") != "global"]
+    results = search_index(
+        skills,
+        args.goal,
+        include_blocked=False,
+        include_lint_blocked=False,
+        include_untrusted=False,
+    )
+    if args.compatible_only:
+        results = [skill for skill in results if compatibility_problem(skill, args.agent) is None]
+    results = _sort_agent_variant_search(_annotate_agent_variants(results, args.agent), args.agent)
+    attached_tags = set(load_project_tags(root(args)).get("attached_tags", []))
+    candidates = _recommend_candidates(results, goal=args.goal, agent=args.agent, attached_tags=attached_tags)
+    if args.limit:
+        candidates = candidates[: args.limit]
+    payload = {
+        "schema": "skillager.recommend.v1",
+        "goal": args.goal,
+        "agent": args.agent,
+        "candidates": candidates,
+        "commands": _recommend_commands(args.goal, args.agent, candidates),
+        "policy": "read-only metadata recommendation; no approval, tagging, exposure, activation, or trust transfer is performed",
+    }
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        _print_recommend(payload)
+    return 0
+
+
+def _recommend_candidates(
+    results: list[dict[str, Any]],
+    *,
+    goal: str,
+    agent: str,
+    attached_tags: set[str],
+) -> list[dict[str, Any]]:
+    collapsed = _collapse_recommend_duplicate_results(results, agent=agent)
+    skill_candidates = [
+        _recommend_skill_candidate(skill, goal=goal, agent=agent, strong_match_count=_strong_recommend_match_count(collapsed))
+        for skill in collapsed
+    ]
+    tag_candidates = _recommend_tag_candidates(results, goal=goal, agent=agent, attached_tags=attached_tags)
+    candidates = [*skill_candidates, *tag_candidates]
+    return sorted(
+        candidates,
+        key=lambda item: (
+            -int(item.get("score") or 0),
+            _recommend_exposure_rank(str(item.get("recommended_exposure") or "")),
+            str(item.get("kind") or ""),
+            str(item.get("id") or ""),
+        ),
+    )
+
+
+def _collapse_recommend_duplicate_results(results: list[dict[str, Any]], *, agent: str) -> list[dict[str, Any]]:
+    collapsed: list[dict[str, Any]] = []
+    grouped_objects: set[int] = set()
+    for family_key, content_hash_value, group in duplicate_content_group_entries(results):
+        representative = sorted(group, key=lambda skill: _recommend_result_sort_key(skill, agent))[0]
+        item = dict(representative)
+        item["duplicate_content"] = {
+            "family_key": family_key,
+            "content_hash": content_hash_value,
+            "count": len(group),
+            "ids": sorted(str(skill.get("id")) for skill in group if skill.get("id")),
+            "representative_id": representative.get("id"),
+            "policy": "same-content duplicate candidates collapsed; trust remains source-keyed",
+        }
+        collapsed.append(item)
+        grouped_objects.update(id(skill) for skill in group)
+    collapsed.extend(dict(skill) for skill in results if id(skill) not in grouped_objects)
+    return sorted(collapsed, key=lambda skill: _recommend_result_sort_key(skill, agent))
+
+
+def _recommend_result_sort_key(skill: dict[str, Any], agent: str) -> tuple[float, int, tuple[int, int, str], str]:
+    return (
+        -float(skill.get("score") or 0),
+        _visibility_rank_for_cli(skill),
+        _agent_variant_preference_key(skill, agent),
+        str(skill.get("id") or ""),
+    )
+
+
+def _strong_recommend_match_count(skills: list[dict[str, Any]]) -> int:
+    return sum(1 for skill in skills if _strong_recommend_match(skill))
+
+
+def _recommend_skill_candidate(
+    skill: dict[str, Any],
+    *,
+    goal: str,
+    agent: str,
+    strong_match_count: int,
+) -> dict[str, Any]:
+    score = _recommend_score(skill)
+    exposure = skill.get("exposure", "hidden")
+    recommended = _recommend_skill_exposure(skill, score=score, strong_match_count=strong_match_count, agent=agent)
+    command_skill_id = str((skill.get("duplicate_content") or {}).get("representative_id") or skill.get("id"))
+    candidate: dict[str, Any] = {
+        "kind": "group" if skill.get("duplicate_content") else "skill",
+        "id": (skill.get("duplicate_content") or {}).get("family_key") or skill.get("id"),
+        "skill_id": skill.get("id"),
+        "score": score,
+        "recommended_exposure": recommended,
+        "reason": _recommend_reason(skill, recommended=recommended, score=score, strong_match_count=strong_match_count),
+        "summary": skill.get("summary"),
+        "trust": skill.get("trust"),
+        "current_exposure": exposure,
+        "materialized_targets": skill.get("materialized_targets", []),
+        "tags": skill.get("tags", []),
+        "reasons": skill.get("reasons", []),
+        "compatibility": _recommend_compatibility(skill, agent),
+        "commands": _recommend_candidate_commands(command_skill_id, goal=goal, agent=agent, exposure=recommended),
+    }
+    if skill.get("duplicate_content"):
+        candidate["representative_id"] = command_skill_id
+        candidate["duplicate_content"] = skill["duplicate_content"]
+    return candidate
+
+
+def _recommend_tag_candidates(
+    results: list[dict[str, Any]],
+    *,
+    goal: str,
+    agent: str,
+    attached_tags: set[str],
+) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for skill in results:
+        for tag in skill.get("tags") or []:
+            groups[str(tag)].append(skill)
+    candidates: list[dict[str, Any]] = []
+    for tag, group in sorted(groups.items()):
+        if len(group) < 2:
+            continue
+        exposed = any(skill.get("exposure") in {"router", "multiple"} for skill in group)
+        attached = tag in attached_tags
+        score = min(
+            100,
+            round(
+                max(_recommend_score(skill) for skill in group)
+                + min(len(group), RECOMMEND_TAG_BOOST_CAP) * RECOMMEND_TAG_BOOST_PER_MEMBER
+            ),
+        )
+        exposure = "none" if exposed or not attached else "router"
+        member_ids = [str(skill.get("id")) for skill in sorted(group, key=lambda item: _recommend_result_sort_key(item, agent)) if skill.get("id")]
+        candidates.append(
+            {
+                "kind": "tag",
+                "id": tag,
+                "score": score,
+                "recommended_exposure": exposure,
+                "reason": _recommend_tag_reason(tag, group, exposed=exposed, attached=attached),
+                "member_count": len(group),
+                "member_ids": member_ids[:10],
+                "attached": attached,
+                "current_exposure": "router" if exposed else "hidden",
+                "compatibility_warnings": _recommend_group_warnings(group, agent),
+                "commands": {
+                    "inspect": (
+                        f"skillager search {_shell_quote(goal)} --tag {_shell_quote(tag)} "
+                        f"{'--approved-only' if attached else '--trusted-only'} --agent {agent} --json"
+                    ),
+                    "router": None if exposed or not attached else f"skillager materialize --tag {_shell_quote(tag)} --mode router --agent {agent} --scope project",
+                },
+            }
+        )
+    return candidates
+
+
+def _recommend_skill_exposure(skill: dict[str, Any], *, score: int, strong_match_count: int, agent: str) -> str:
+    if skill.get("exposure") in {"native", "stub", "router", "multiple"}:
+        return "none"
+    if compatibility_problem(skill, agent) is not None:
+        return "none"
+    if score < RECOMMEND_MIN_SCORE:
+        return "none"
+    if (
+        strong_match_count
+        and strong_match_count <= RECOMMEND_NATIVE_TOP_N
+        and _strong_recommend_match(skill)
+        and _native_recommend_candidate(skill, agent=agent)
+    ):
+        return "native"
+    return "stub"
+
+
+def _strong_recommend_match(skill: dict[str, Any]) -> bool:
+    if "id:exact" in set(skill.get("reasons") or []):
+        return True
+    if _recommend_score(skill) >= RECOMMEND_STRONG_SCORE:
+        return True
+    return any(str(reason).startswith(("name:", "tags:", "package:", "targets:")) for reason in skill.get("reasons") or [])
+
+
+def _native_recommend_candidate(skill: dict[str, Any], *, agent: str) -> bool:
+    source_type = (skill.get("source") or {}).get("type")
+    if source_type in {"collection", "python-package", "environment"}:
+        return False
+    return compatibility_problem(skill, agent) is None
+
+
+def _recommend_reason(skill: dict[str, Any], *, recommended: str, score: int, strong_match_count: int) -> str:
+    if skill.get("exposure") in {"native", "stub", "router", "multiple"}:
+        return f"already exposed as {skill.get('exposure')}; no new exposure needed"
+    if skill.get("duplicate_content"):
+        return "same-content duplicates collapsed; use the representative if this slate matches the user's goal"
+    if recommended == "native":
+        return f"strong approved metadata match with {strong_match_count} strong candidate(s); native may be appropriate if always relevant"
+    if recommended == "stub":
+        return "approved metadata match; stub keeps the full skill available on demand without loading it every session"
+    return f"weak approved metadata match (score {score}); inspect before changing exposure"
+
+
+def _recommend_tag_reason(tag: str, group: list[dict[str, Any]], *, exposed: bool, attached: bool) -> str:
+    if exposed:
+        return f"tag {tag} already has router exposure in the matching approved set"
+    if not attached:
+        return f"{len(group)} approved matches share tag {tag}, but the tag is not attached to this project"
+    return f"{len(group)} approved matches share tag {tag}; router can expose the group when the task needs it"
+
+
+def _recommend_compatibility(skill: dict[str, Any], agent: str) -> dict[str, Any]:
+    compatibility = skill.get("compatibility") or {}
+    return {
+        "agent": agent,
+        "problem": compatibility_problem(skill, agent),
+        "exclusive_to": compatibility.get("exclusive_to"),
+        "incompatible_with": compatibility.get("incompatible_with", []),
+        "activation_warnings": compatibility_warnings(skill, agent),
+    }
+
+
+def _recommend_group_warnings(group: list[dict[str, Any]], agent: str) -> list[dict[str, Any]]:
+    warnings = []
+    for skill in group:
+        problem = compatibility_problem(skill, agent)
+        activation_warnings = compatibility_warnings(skill, agent)
+        if problem or activation_warnings:
+            warnings.append(
+                {
+                    "skill_id": skill.get("id"),
+                    "problem": problem,
+                    "activation_warnings": activation_warnings,
+                }
+            )
+    return warnings
+
+
+def _recommend_score(skill: dict[str, Any]) -> int:
+    return max(0, min(100, int(round(float(skill.get("score") or 0)))))
+
+
+def _recommend_exposure_rank(exposure: str) -> int:
+    return {"router": 0, "native": 1, "stub": 2, "none": 3}.get(exposure, 4)
+
+
+def _recommend_candidate_commands(
+    skill_id: str,
+    *,
+    goal: str,
+    agent: str,
+    exposure: str,
+) -> dict[str, str | None]:
+    commands: dict[str, str | None] = {
+        "inspect": f"skillager show {_shell_quote(skill_id)} --json",
+        "search": f"skillager search {_shell_quote(goal)} --trusted-only --agent {agent} --json",
+        "stub": None,
+        "native": None,
+        "router": None,
+    }
+    if exposure == "stub":
+        commands["stub"] = f"skillager materialize {_shell_quote(skill_id)} --mode stub --agent {agent} --scope project"
+    elif exposure == "native":
+        commands["native"] = f"skillager materialize {_shell_quote(skill_id)} --mode native --agent {agent} --scope project"
+    return commands
+
+
+def _recommend_commands(goal: str, agent: str, candidates: list[dict[str, Any]]) -> dict[str, str | None]:
+    commands: dict[str, str | None] = {
+        "inspect": f"skillager search {_shell_quote(goal)} --trusted-only --agent {agent} --json",
+        "inventory": f"skillager list --summary-json --agent {agent}",
+        "router": None,
+        "stub": None,
+        "native": None,
+    }
+    # Top-level materialize shortcuts point at the first ranked candidate that can supply each exposure mode.
+    for candidate in candidates:
+        candidate_commands = candidate.get("commands") or {}
+        for key in ("router", "stub", "native"):
+            if commands.get(key) is None and candidate_commands.get(key):
+                commands[key] = str(candidate_commands[key])
+    return commands
+
+
+def _print_recommend(payload: dict[str, Any]) -> None:
+    print(_style("Skillager recommend", "bold"))
+    print(f"  goal: {payload['goal']}")
+    print(f"  agent: {payload['agent']}")
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        print("  no approved candidates matched")
+        return
+    for candidate in candidates:
+        print(
+            f"  - {candidate.get('kind')} {candidate.get('id')}: "
+            f"score={candidate.get('score')} recommend={candidate.get('recommended_exposure')}"
+        )
+        print(f"    {candidate.get('reason')}")
+
+
+def _shell_quote(value: str) -> str:
+    return shlex.quote(value)
 
 
 def _compact_search_result(skill: dict[str, Any], *, agent: str | None = None) -> dict[str, Any]:
