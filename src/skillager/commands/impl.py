@@ -45,7 +45,17 @@ from ..collections import (
 from ..families import agent_variant_family_key, canonical_agent_variant_slug
 from ..index import build_index, find_skill, load_index
 from ..lookback import build_lookback, record_feedback, render_lookback
-from ..materialize import AGENT_NOTE, TRUSTED_STATES, WORKING_SKILL_ID, agent_note_paths, materialize_skills, materialize_working_skill
+from ..materialize import (
+    AGENT_NOTE,
+    TRUSTED_STATES,
+    WORKING_REASON_LOCAL_CUSTOMIZATION,
+    WORKING_REASON_UNMANAGED,
+    WORKING_SKILL_ID,
+    agent_note_paths,
+    ensure_agent_notes,
+    materialize_skills,
+    materialize_working_skill,
+)
 from ..materialize import materialize_router
 from ..materialize import target_dir, working_source_hash
 from ..manifest import init_manifests
@@ -124,6 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_setup_parser(sub)
     add_status_parser(sub)
     add_handoff_parser(sub)
+    add_bootstrap_parser(sub)
     add_collection_parser(sub)
     add_tag_parser(sub)
     add_project_parser(sub)
@@ -471,6 +482,37 @@ def add_handoff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     p.add_argument("--agent", choices=["codex", "claude"], help="Agent target. Defaults to the detected agent or codex.")
     p.add_argument("--json", action="store_true", help="Emit handoff data as JSON.")
     p.set_defaults(func=cmd_handoff)
+
+
+def add_bootstrap_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "bootstrap",
+        help="Install or refresh Skillager's first-party project handoff artifacts.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent(
+            """\
+            Install or refresh Skillager Working and the project handoff note for
+            a selected agent. Bootstrap is first-party plumbing only: it does not
+            approve, activate, or expose third-party skills.
+            """
+        ),
+        epilog=textwrap.dedent(
+            """\
+            Examples:
+              skillager bootstrap --agent codex
+              skillager bootstrap --agent claude
+              skillager bootstrap --all-agents
+              skillager bootstrap --agent codex --dry-run --json
+            """
+        ),
+    )
+    target = p.add_mutually_exclusive_group(required=True)
+    target.add_argument("--agent", action="append", choices=["codex", "claude"], help="Agent target. Repeat to target multiple agents.")
+    target.add_argument("--all-agents", action="store_true", help="Target both codex and claude.")
+    p.add_argument("--dry-run", action="store_true", help="Report first-party artifacts that would be written without writing files.")
+    p.add_argument("--force", action="store_true", help="Overwrite managed local customizations or unmanaged Skillager Working targets.")
+    p.add_argument("--json", action="store_true", help="Emit bootstrap results as JSON.")
+    p.set_defaults(func=cmd_bootstrap)
 
 
 def add_collection_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -1333,6 +1375,175 @@ def cmd_handoff(args: argparse.Namespace) -> int:
     else:
         _print_handoff(handoff)
     return 0
+
+
+def cmd_bootstrap(args: argparse.Namespace) -> int:
+    agents = _bootstrap_agents(args)
+    project_dir = (find_project_root() or Path.cwd()).resolve()
+    note_before = _bootstrap_note_statuses(project_dir, agents=agents)
+    working_results = _bootstrap_working_results(args, agents=agents, project_dir=project_dir)
+    artifacts = [_bootstrap_working_artifact(item) for item in working_results]
+    note_agents = _bootstrap_note_agents(working_results)
+    artifacts.extend(
+        _bootstrap_note_artifacts(
+            project_dir,
+            agents=agents,
+            note_agents=note_agents,
+            before=note_before,
+            dry_run=args.dry_run,
+        )
+    )
+    result = {
+        "schema": "skillager.bootstrap.v1",
+        "project": str(project_dir),
+        "agents": agents,
+        "dry_run": args.dry_run,
+        "artifacts": artifacts,
+        "summary": _bootstrap_summary(artifacts),
+    }
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        _print_bootstrap_result(result)
+    return 11 if _bootstrap_has_local_blocker(artifacts) else 0
+
+
+def _bootstrap_agents(args: argparse.Namespace) -> list[str]:
+    if args.all_agents:
+        return ["codex", "claude"]
+    return sorted(dict.fromkeys(args.agent or []))
+
+
+def _bootstrap_note_statuses(project_dir: Path, *, agents: list[str]) -> dict[str, dict[str, Any]]:
+    statuses: dict[str, dict[str, Any]] = {}
+    for agent in agents:
+        for path in agent_note_paths(project_dir, agents=[agent]):
+            statuses[str(path)] = _handoff_note_status(path)
+    return statuses
+
+
+def _bootstrap_working_results(args: argparse.Namespace, *, agents: list[str], project_dir: Path) -> list[dict[str, Any]]:
+    # Bootstrap writes project notes itself so note state stays per-agent in the result.
+    return materialize_working_skill(
+        agents=agents,
+        scope="project",
+        project_dir=project_dir,
+        dry_run=args.dry_run,
+        force=args.force,
+        include_notes=False,
+    )
+
+
+def _bootstrap_working_artifact(item: dict[str, Any]) -> dict[str, Any]:
+    reason = item.get("reason")
+    result = {
+        "kind": "working_skill",
+        "agent": item.get("agent"),
+        "scope": item.get("scope"),
+        "target": item.get("target"),
+        "status": item.get("status"),
+        "reason": reason,
+        "skill_id": item.get("skill_id"),
+        "blocked_by_local_state": reason in {WORKING_REASON_LOCAL_CUSTOMIZATION, WORKING_REASON_UNMANAGED},
+        "local_customization_blocked": reason == WORKING_REASON_LOCAL_CUSTOMIZATION,
+        "unmanaged_artifact_blocked": reason == WORKING_REASON_UNMANAGED,
+    }
+    return result
+
+
+def _bootstrap_note_agents(working_results: list[dict[str, Any]]) -> list[str]:
+    agents = []
+    for item in working_results:
+        status = item.get("status")
+        reason = item.get("reason")
+        if status in {"materialized", "would_write"} or (status == "skipped" and reason == "already up to date"):
+            agent = item.get("agent")
+            if isinstance(agent, str):
+                agents.append(agent)
+    return sorted(dict.fromkeys(agents))
+
+
+def _bootstrap_note_artifacts(
+    project_dir: Path,
+    *,
+    agents: list[str],
+    note_agents: list[str],
+    before: dict[str, dict[str, Any]],
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    if note_agents and not dry_run:
+        ensure_agent_notes(project_dir, agents=note_agents)
+    enabled = set(note_agents)
+    artifacts: list[dict[str, Any]] = []
+    for agent in agents:
+        for path in agent_note_paths(project_dir, agents=[agent]):
+            prior = before.get(str(path)) or _handoff_note_status(path)
+            status = prior.get("status")
+            if agent not in enabled:
+                artifacts.append(_bootstrap_note_artifact(agent, path, "skipped", "working skill not ready"))
+            elif status == "present":
+                artifacts.append(_bootstrap_note_artifact(agent, path, "skipped", "already up to date"))
+            elif dry_run:
+                artifacts.append(_bootstrap_note_artifact(agent, path, "would_write", f"currently {status}"))
+            else:
+                after = _handoff_note_status(path)
+                if after.get("status") == "present":
+                    artifacts.append(_bootstrap_note_artifact(agent, path, "materialized", None))
+                else:
+                    artifacts.append(_bootstrap_note_artifact(agent, path, "skipped", f"still {after.get('status', 'unknown')}"))
+    return artifacts
+
+
+def _bootstrap_note_artifact(agent: str, path: Path, status: str, reason: str | None) -> dict[str, Any]:
+    return {
+        "kind": "project_note",
+        "agent": agent,
+        "scope": "project",
+        "target": str(path),
+        "status": status,
+        "reason": reason,
+        "blocked_by_local_state": False,
+        "local_customization_blocked": False,
+        "unmanaged_artifact_blocked": False,
+    }
+
+
+def _bootstrap_summary(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+    by_status = Counter(str(item.get("status") or "unknown") for item in artifacts)
+    return {
+        "total": len(artifacts),
+        "by_status": dict(sorted(by_status.items())),
+        "local_blockers": sum(1 for item in artifacts if item.get("blocked_by_local_state")),
+    }
+
+
+def _bootstrap_has_local_blocker(artifacts: list[dict[str, Any]]) -> bool:
+    return any(item.get("blocked_by_local_state") for item in artifacts)
+
+
+def _print_bootstrap_result(result: dict[str, Any]) -> None:
+    print(_style("Skillager bootstrap", "bold"))
+    print(f"  project: {result['project']}")
+    print(f"  agents: {', '.join(result.get('agents') or [])}")
+    for item in result.get("artifacts", []):
+        line = f"  - {item.get('agent')} {item.get('kind')}: {item.get('status')}"
+        if item.get("target"):
+            line += f" {item['target']}"
+        if item.get("reason"):
+            line += f" ({item['reason']})"
+        print(line)
+    summary = result.get("summary") or {}
+    artifacts = result.get("artifacts") or []
+    ready = sum(
+        1
+        for item in artifacts
+        if item.get("status") == "materialized"
+        or (item.get("status") == "skipped" and item.get("reason") == "already up to date")
+    )
+    print(f"Ready: {ready} of {len(artifacts)} artifacts current.")
+    if summary.get("local_blockers"):
+        print()
+        print("Local artifact repair needed. Re-run with --force only if you want Skillager to overwrite the listed local target(s).")
 
 
 def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, agent: str) -> dict[str, Any]:

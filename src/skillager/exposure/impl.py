@@ -16,6 +16,8 @@ MATERIALIZED_SCHEMA = "skillager.materialized.v1"
 TRUSTED_STATES = {"reviewed", "trusted", "pinned"}
 ROUTER_SCHEMA = "skillager.router.v1"
 WORKING_SKILL_ID = "skillager/working"
+WORKING_REASON_LOCAL_CUSTOMIZATION = "target has local customizations"
+WORKING_REASON_UNMANAGED = "target exists without Skillager provenance"
 AGENT_NOTE = (
     "Run `skillager handoff` at session start. Follow its Next item, use only reviewed/materialized "
     "Skillager-managed skills, ask before setup or approval changes, and report curation/exposure changes."
@@ -128,6 +130,7 @@ def materialize_working_skill(
     project_dir: Path | None = None,
     dry_run: bool = False,
     force: bool = False,
+    include_notes: bool = True,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for agent in agents:
@@ -137,7 +140,7 @@ def materialize_working_skill(
             results.append(materialize_working_skill_one(target=target, agent=agent, scope=scope, dry_run=dry_run, force=force))
         except OSError as exc:
             results.append(_result(skill, target, "skipped", str(exc), agent=agent, scope=scope))
-    if scope == "project" and not dry_run and any(item["status"] == "materialized" for item in results):
+    if include_notes and scope == "project" and not dry_run and any(item["status"] == "materialized" for item in results):
         ensure_agent_notes((project_dir or Path.cwd()).resolve(), agents=agents)
     return results
 
@@ -155,9 +158,9 @@ def materialize_working_skill_one(
         sidecar = target / "skillager.materialized.yaml"
         if target.exists():
             if _is_customized(sidecar, target) and not force:
-                return _result(skill, target, "skipped", "target has local customizations", agent=agent, scope=scope)
+                return _result(skill, target, "skipped", WORKING_REASON_LOCAL_CUSTOMIZATION, agent=agent, scope=scope)
             if not force and (target / "SKILL.md").exists() and not sidecar.exists():
-                return _result(skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
+                return _result(skill, target, "skipped", WORKING_REASON_UNMANAGED, agent=agent, scope=scope)
             if not force and _source_hash_matches(sidecar, skill.get("content_hash")):
                 return _result(skill, target, "skipped", "already up to date", agent=agent, scope=scope)
         if dry_run:
