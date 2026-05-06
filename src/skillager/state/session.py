@@ -219,6 +219,46 @@ def record_materialize_events(
     return records
 
 
+def record_doctor_event(
+    state_root: Path,
+    *,
+    result: dict[str, Any],
+    fix_result: dict[str, Any] | None = None,
+    agent: str | None = None,
+    no_record: bool = False,
+) -> dict[str, Any] | None:
+    if no_record:
+        return None
+    meta = ensure_session(state_root, agent=agent or result.get("agent"))
+    if not meta:
+        return None
+    readiness = result.get("readiness") or {}
+    exposure = readiness.get("exposure") or {}
+    state = result.get("state") or {}
+    payload = {
+        "agent": meta.get("agent"),
+        "external_session_id": meta.get("external_session_id"),
+        "external_conversation_id": meta.get("external_conversation_id"),
+        "command": "doctor",
+        "fix": bool(fix_result and fix_result.get("requested")),
+        "fix_applied": bool(fix_result and fix_result.get("applied")),
+        "fix_reason_code": (fix_result or {}).get("reason_code"),
+        "status": result.get("status"),
+        "readiness_status": _doctor_readiness_status(readiness),
+        "review_ready": bool(readiness.get("review_ready")),
+        "handoff_ready": bool(readiness.get("handoff_ready")),
+        "ready": bool(readiness.get("ready")),
+        "next_action_code": _doctor_next_action_code(result),
+        "counts": {
+            "review_needed": int(((state.get("review") or {}).get("needed")) or 0),
+            "lint_blocked": int(((state.get("lint_blocked") or {}).get("count")) or 0),
+            "approved_hidden": int(exposure.get("available_on_demand") or 0),
+            "exposed": int(exposure.get("exposed") or 0),
+        },
+    }
+    return append_event(state_root, meta["session_id"], "doctor_run", payload)
+
+
 def record_skill_event(
     state_root: Path,
     event: str,
@@ -247,6 +287,25 @@ def record_skill_event(
         "query": query,
     }
     return append_event(state_root, meta["session_id"], event, payload)
+
+
+def _doctor_readiness_status(readiness: dict[str, Any]) -> str:
+    if readiness.get("ready"):
+        return "ready"
+    if not readiness.get("review_ready"):
+        return "review-needed"
+    if not readiness.get("handoff_ready"):
+        return "handoff-not-ready"
+    return "inconsistent"
+
+
+def _doctor_next_action_code(result: dict[str, Any]) -> str | None:
+    handoff = ((result.get("readiness") or {}).get("handoff") or {})
+    reason_code = handoff.get("reason_code")
+    if reason_code:
+        return str(reason_code)
+    status = result.get("status")
+    return str(status) if status else None
 
 
 def read_events(state_root: Path, session_id: str) -> list[dict[str, Any]]:

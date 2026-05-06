@@ -38,6 +38,7 @@ exclude = ["skillager/docs/MANIFEST_HARDENING_PLAN.md"]
 [tool.hatch.build.targets.wheel.force-include]
 ".agents/skills" = "skillager/.agents/skills"
 "docs" = "skillager/docs"
+"examples" = "skillager/examples"
 
 [tool.hatch.build.targets.sdist]
 include = [

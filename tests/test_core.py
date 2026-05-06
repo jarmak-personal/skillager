@@ -85,6 +85,14 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertEqual(skill.activation, "suggested")
         self.assertEqual(skill.targets["python_packages"][0]["name"], "skillager")
 
+    def test_permission_allowlist_examples_exclude_mutating_doctor_fix(self) -> None:
+        for name in ("codex", "claude"):
+            data = json.loads((Path("examples") / f"{name}-allowlist.json").read_text(encoding="utf-8"))
+            self.assertIn(f"skillager doctor --agent {name} --json", data["read_only_commands"])
+            self.assertIn("skillager doctor --fix", data["deliberately_excluded"])
+            self.assertNotIn("skillager doctor --fix", data["read_only_commands"])
+            self.assertIn("skillager recommend --goal <goal> --agent", " ".join(data["read_only_commands"]))
+
     def test_canonical_agent_variant_slug_strips_repeated_suffixes(self) -> None:
         self.assertEqual(canonical_agent_variant_slug("foo-codex-claude"), "foo")
         self.assertEqual(canonical_agent_variant_slug("foo-claude-skill-codex"), "foo")
@@ -101,7 +109,8 @@ class SkillagerCoreTests(unittest.TestCase):
     def test_working_skill_has_session_query_cadence(self) -> None:
         text = render_working_skill("codex")
         self.assertIn("Run `skillager handoff --agent codex` once", text)
-        self.assertIn("re-run `skillager handoff` before making approval-dependent decisions", text)
+        self.assertIn("run `skillager doctor` before guessing", text)
+        self.assertIn("Re-run handoff after repairs", text)
         self.assertIn("Do not search Skillager on every user message", text)
         self.assertIn("You are unsure how to approach the task", text)
         self.assertIn("until the task changes", text)
@@ -115,6 +124,7 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertIn("Use routers for broad recurring tags", text)
         self.assertIn("Tags are agent-maintained curation for approved skills", text)
         self.assertIn("skillager tag add <tag> <skill-id>", text)
+        self.assertIn('skillager recommend --goal "<user goal>" --agent codex --json', text)
         self.assertIn("Consider 5-20 plausible approved skills or skill groups", text)
         self.assertIn("confidence score from 0-100", text)
         self.assertIn("workflow suite such as ideation, review, debugging, release", text)
@@ -539,6 +549,8 @@ assert MINIMAL_MANIFEST_YAML.strip()
             names = set(wheel.namelist())
         self.assertIn("skillager/docs/USER_GUIDE.md", names)
         self.assertIn("skillager/docs/AGENT_CLI_GUIDE.md", names)
+        self.assertIn("skillager/examples/codex-allowlist.json", names)
+        self.assertIn("skillager/examples/claude-allowlist.json", names)
         self.assertNotIn("skillager/docs/MANIFEST_HARDENING_PLAN.md", names)
 
     def test_sdist_includes_repo_skill_and_excludes_planning_doc(self) -> None:

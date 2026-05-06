@@ -21,12 +21,12 @@ To make a collection available to the current project, enable it:
 
 ```bash
 skillager collection enable community
-skillager setup --source collection
+skillager setup --source collection --agent codex
 ```
 
 `collection enable` creates or updates a reusable catalog tag with the collection's visible skills and attaches that tag to the current project. Blocked and lint-blocked skills are not added by the default enable flow. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path; `--yolo` is the same trusted-source shortcut with a blunter name. For untrusted repositories, use the normal review flow.
 
-`setup --source collection` reviews collection skills attached to the current project. Registered collections that have not been enabled or attached stay as catalog inventory.
+`setup --source collection --agent <agent>` reviews collection skills attached to the current project and refreshes that agent's first-party handoff artifacts after approval. Registered collections that have not been enabled or attached stay as catalog inventory. If review is complete but handoff still reports missing or stale artifacts, run `skillager doctor --agent <agent>` for the exact repair command.
 
 Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager lint` or `skillager collection show <skill-id> --include-lint-blocked` to inspect them without printing hostile manifest contents.
 

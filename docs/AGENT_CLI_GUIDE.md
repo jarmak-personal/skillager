@@ -8,7 +8,7 @@ Projects may expose a first-party `skillager-working` skill. Treat it as the boo
 
 - Start with `skillager handoff` once per session.
 - If handoff reports lookback pending, ask the user whether to review `skillager lookback` before changing shared exposure. Do not apply recommendations without user approval. Active-session lookback signals are collection-in-progress and should not interrupt first handoff.
-- If Skillager state may have changed mid-session, re-run `skillager handoff` before making trust-dependent decisions.
+- If Skillager state seems off mid-session, run `skillager doctor` before guessing. Re-run handoff after repairs if readiness changes.
 - Do not run `skillager setup`, `review`, `trust`, or `block` unless the user asked for setup or approval changes.
 - Do not run `skillager materialize` until you have asked what the user plans to do and can justify the narrow router, stub, or native exposure.
 - You may add already-approved skills to tags, attach relevant tags, and materialize scoped router/stub/native exposure after the user states their task. Report what changed.
@@ -27,12 +27,14 @@ These commands do not expose full skill bodies. In a project, normal `list`, `se
 
 ```bash
 skillager handoff --json
+skillager doctor --json
 skillager status --json
 skillager lint --json
 skillager list --summary-json --agent codex
 skillager list --json
 skillager list --no-packages --json
 skillager search "<query>" --json
+skillager recommend --goal "<user goal>" --agent codex --json
 skillager show <skill-id> --json
 skillager review --summary --json
 skillager search "<user goal>" --trusted-only --json
@@ -92,7 +94,7 @@ After the user approves skills, setup installs or refreshes the `skillager-worki
 - a router skill for a broad attached tag
 - nothing, if the existing project handoff is enough
 
-Before changing tags or exposure, build a scored slate from approved metadata. Consider 5-20 plausible approved skills or skill groups when enough relevant options exist. A group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation. Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task. Include adjacent options the user may reasonably want, such as a brainstorm/research suite for ideation or a review/debugging suite for validation. If fewer than five relevant approved candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
+Before changing tags or exposure, run `skillager recommend --goal "<user goal>" --agent codex --json` to build a scored slate from approved metadata. Consider 5-20 plausible approved skills or skill groups when enough relevant options exist. A group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation. Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task. Include adjacent options the user may reasonably want, such as a brainstorm/research suite for ideation or a review/debugging suite for validation. If fewer than five relevant approved candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
 
 Add relevant approved skills to a focused tag when a project or session theme emerges. `tag add` can use registered collection skill IDs or approved IDs from the current project inventory, including auto-discovered child repositories:
 
@@ -131,7 +133,7 @@ At lookback time, prefer aggregate recommendations over single-session instinct.
 
 Lookback may include `observed_overlaps`. Treat these as behavioral hints, not decisions. They mean skills repeatedly co-occurred in searches or sessions. Ask the user whether to pin a winner, keep the skills route-only, stub commands, block old skills, or ignore the overlap.
 
-Search records compact local telemetry for lookback by default: query hash, short query preview, top result IDs, and filters. It does not record skill bodies, chat transcripts, or command output. Use `skillager search ... --no-session-record` for one-off searches that should not affect lookback.
+Search and doctor record compact local telemetry for lookback by default: query hashes or doctor readiness status, short metadata summaries, counts, action codes, and filters. They do not record skill bodies, chat transcripts, or command output. Use `skillager search ... --no-session-record` or `skillager doctor ... --no-session-record` for one-off diagnostics that should not affect lookback.
 
 ## User-Gated Commands
 

@@ -20,7 +20,8 @@ WORKING_REASON_LOCAL_CUSTOMIZATION = "target has local customizations"
 WORKING_REASON_UNMANAGED = "target exists without Skillager provenance"
 AGENT_NOTE = (
     "Run `skillager handoff` at session start. Follow its Next item, use only reviewed/materialized "
-    "Skillager-managed skills, ask before setup or approval changes, and report curation/exposure changes."
+    "Skillager-managed skills, ask before setup or approval changes, run `skillager doctor` if state seems off, "
+    "and report curation/exposure changes."
 )
 AGENT_NOTE_SECTION = f"## Skillager\n{AGENT_NOTE}\n"
 LEGACY_AGENT_NOTES = (
@@ -185,7 +186,7 @@ This skill is a protocol for using Skillager safely. It does not approve third-p
 2. Follow the `Next:` item. If handoff reports setup or migration review is needed, ask the user to run the suggested command from the project directory before using Skillager-managed skills.
 3. If handoff reports stale or missing project artifacts, ask the user before refreshing them. Do not overwrite unmanaged artifacts unless the user explicitly approves the exact repair.
 4. If handoff reports lookback pending, ask whether the user wants to review `skillager lookback` before changing shared exposure. Do not apply recommendations without user approval. Active-session lookback signals are only collection-in-progress.
-5. If Skillager state may have changed mid-session, re-run `skillager handoff` before making approval-dependent decisions.
+5. If Skillager state seems off mid-session, run `skillager doctor` before guessing. Re-run handoff after repairs if readiness changes.
 6. If handoff is ready, ask what the user plans to do in this repo before curating tags or materializing additional skills.
 
 ## Query Cadence
@@ -206,10 +207,12 @@ These commands are safe because they do not reveal full skill bodies:
 
 ```bash
 skillager handoff --agent {agent} --json
+skillager doctor --agent {agent} --json
 skillager status --json
 skillager list --summary-json --agent {agent}
 skillager list --json
-skillager search "<user goal>" --trusted-only --json
+skillager search "<user goal>" --trusted-only --agent {agent} --json
+skillager recommend --goal "<user goal>" --agent {agent} --json
 skillager show <skill-id> --json
 skillager tag show <tag> --json
 skillager project tags --json
@@ -221,6 +224,7 @@ Use these to decide which approved skills are relevant.
 
 Before curating tags or exposure for a new task, build a scored slate from approved metadata:
 
+- Start with `skillager recommend --goal "<user goal>" --agent {agent} --json`.
 - Consider 5-20 plausible approved skills or skill groups when enough relevant options exist.
 - A skill group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation.
 - Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task.

@@ -5,7 +5,7 @@ Skillager is a CLI gate between discovered skills and agent-native skill directo
 The normal loop is:
 
 ```text
-status -> setup --agent <agent> -> restart agent -> handoff -> describe goal -> agent curates tags/exposure -> lookback
+setup --agent <agent> -> restart agent -> handoff -> describe goal
 ```
 
 ## First Run In A Project
@@ -13,17 +13,16 @@ status -> setup --agent <agent> -> restart agent -> handoff -> describe goal -> 
 Run this from the directory where you will start Codex or Claude:
 
 ```bash
-skillager status
 skillager setup --agent codex
 ```
-
-`status` is safe for agents. It refreshes metadata and reports whether review is needed. It does not print skill bodies, approve skills, or materialize skills.
 
 Use `--agent claude` instead for Claude projects. `setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything. When setup applies review changes with `--agent` or `--all-agents`, it also refreshes the first-party handoff artifacts unless `--no-bootstrap` is passed.
 
 At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent starts with `skillager handoff` and can use approved metadata to add useful skills to tags, attach project-relevant tags, and expose narrow native skills, stubs, a compact router skill for a tag, or nothing.
 
 Setup does not materialize every approved skill by default. Approval means a skill is safe to consider; tagging and exposure are reversible project ergonomics based on what you are doing.
+
+Run `skillager doctor --agent codex` when the state seems off or the agent is stuck. `doctor` does not approve skills or expose third-party skills; it reports the exact setup, bootstrap, lint, migration, or lookback command to run. Use `skillager status` when you want a broader metadata report. Both commands avoid printing skill bodies.
 
 ## Trust States
 
@@ -72,7 +71,9 @@ skillager setup --details
 skillager setup --summary-json
 skillager setup --source project --accept-low --agent codex --summary-json
 skillager bootstrap --agent codex
+skillager doctor --agent codex
 skillager list --summary-json --agent codex
+skillager recommend --goal "spatial workflow" --agent codex --json
 skillager setup --source collection --trust-all
 skillager setup --source collection --yolo
 skillager setup --source collection --trust-all --project-only
@@ -91,7 +92,7 @@ skillager materialize --all-reviewed --agent claude --scope project
 skillager materialize <skill-id> --mode stub --agent codex --scope project
 ```
 
-Use `--json` when another program needs stable output. `status --json` and `search --json` are compact for agent use; pass `--full-json` for verbose debugging. Use `setup --summary-json` for setup automation that only needs counts, IDs, summary buckets, and action results.
+Use `--json` when another program needs stable output. `status --json`, `handoff --json`, `doctor --json`, and `search --json` are compact for agent use; pass `--full-json` for verbose debugging. Use `recommend --goal "<goal>" --agent <agent> --json` when an agent needs a read-only candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `setup --summary-json` for setup automation that only needs counts, IDs, summary buckets, and action results.
 
 For a project-local automation smoke flow:
 
@@ -127,6 +128,8 @@ Use `--mode stub` for skills you want visible by name without loading the full s
 `skillager manifest init <path>` can add a minimal structured `skillager.yaml` to existing skill directories. It records audience and activation metadata only; identity and searchable prose remain derived from `SKILL.md` and path/source provenance. If it writes sidecars for skills already reviewed, run `skillager setup` again so the new content hashes are reviewed.
 
 ## Lookback
+
+Lookback is an asynchronous review loop, not a required first-run step. You can ignore it until `handoff`, `status`, or `doctor` reports pending evidence.
 
 Track a session when the agent exposes a session ID:
 

@@ -13,7 +13,6 @@ install package -> discover skills -> approve safety -> agent uses approved meta
 ```bash
 uv tool install skillager
 cd my-project
-skillager status
 skillager setup --agent codex
 ```
 
@@ -28,7 +27,9 @@ python -m skillager setup --agent codex
 
 Use `--agent claude` instead if this project is for Claude. `setup` is the approval gate. It discovers skills in the current project and environment, scans them, asks what audience you care about, and never trusts a skill unless you approve it. When review changes are applied with an agent target, setup also refreshes Skillager's first-party handoff artifacts.
 
-After setup, restart Codex or Claude in the same directory and tell it what you are doing. Skillager installs a tiny project handoff so the agent knows to run `skillager handoff` once, use approved metadata, and avoid loading unapproved skill bodies.
+After setup, restart Codex or Claude in the same directory and tell it what you are doing. Skillager installs a tiny project handoff so the agent knows to run `skillager handoff` once, use approved metadata, and avoid loading unapproved skill bodies. If the handoff state looks wrong, run `skillager doctor --agent codex` for the exact next command.
+
+For agent permission prompts, Skillager ships example read-only allowlists in [`examples/codex-allowlist.json`](examples/codex-allowlist.json) and [`examples/claude-allowlist.json`](examples/claude-allowlist.json). They include metadata-only commands such as `status --json`, `handoff --json`, `doctor --json`, `list --summary-json`, `search --trusted-only --json`, `recommend --json`, `show --json`, and `tag show --json`; mutating flags such as `doctor --fix` are deliberately excluded.
 
 ## The Problem
 

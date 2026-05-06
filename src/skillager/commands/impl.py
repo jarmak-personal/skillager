@@ -78,6 +78,7 @@ from ..session import (
     end_session,
     prune_sessions,
     read_events,
+    record_doctor_event,
     record_materialize_events,
     record_search_event,
     record_skill_event,
@@ -573,6 +574,7 @@ def add_doctor_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--fix", action="store_true", help="Repair first-party bootstrap artifacts when that is the selected next action. Requires --agent to write.")
     p.add_argument("--no-packages", action="store_true", help="Skip installed package skill discovery.")
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills in diagnostics.")
+    p.add_argument("--no-session-record", action="store_true", help="Do not record a compact local doctor event for lookback telemetry.")
     p.add_argument("--json", action="store_true", help="Emit doctor results as JSON.")
     p.set_defaults(func=cmd_doctor)
 
@@ -1857,6 +1859,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         include_packages=not args.no_packages,
         include_global=args.include_global,
     )
+    observed_result = result
+    fix_result: dict[str, Any] | None = None
     if args.fix:
         fix_result = _doctor_apply_fix(result, project_dir=project_dir, agent=args.agent)
         if fix_result.get("applied"):
@@ -1869,6 +1873,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 include_global=args.include_global,
             )
         result["fix"] = fix_result
+    record_doctor_event(
+        state_root,
+        result=observed_result,
+        fix_result=fix_result,
+        agent=agent,
+        no_record=args.no_session_record,
+    )
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
