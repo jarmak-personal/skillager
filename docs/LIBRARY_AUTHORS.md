@@ -137,7 +137,7 @@ From a fresh project with your package installed:
 ```bash
 skillager setup --fresh
 skillager review --package your-package --summary
-skillager materialize --agent codex --scope project
+skillager materialize <your-package-skill-id> --agent codex --scope project
 ```
 
 Interactive setup installs Skillager's bootstrap skill and may optionally materialize a narrow native set. Use the explicit `materialize` command when testing that a package-provided skill copies correctly with its supporting files.

@@ -43,7 +43,6 @@ def materialize_skills(
     force: bool = False,
     reviewed_only: bool = True,
     project_dir: Path | None = None,
-    include_working: bool = True,
     allow_incompatible: bool = False,
 ) -> list[dict[str, Any]]:
     if mode not in {"native", "stub"}:
@@ -72,9 +71,6 @@ def materialize_skills(
                     results.append(materialize_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force))
             except OSError as exc:
                 results.append(_result(skill, target, "skipped", str(exc), agent=agent, scope=scope))
-    if include_working and scope == "project" and not dry_run and any(item["status"] == "materialized" for item in results):
-        ensure_agent_notes((project_dir or Path.cwd()).resolve(), agents=agents)
-        results.extend(materialize_working_skill(agents=agents, scope=scope, project_dir=project_dir, force=force))
     return results
 
 
@@ -117,9 +113,6 @@ def materialize_router(
             )
         except OSError as exc:
             results.append(_result(router_skill, target, "skipped", str(exc), agent=agent, scope=scope))
-    if scope == "project" and not dry_run and any(item["status"] == "materialized" for item in results):
-        ensure_agent_notes((project_dir or Path.cwd()).resolve(), agents=agents)
-        results.extend(materialize_working_skill(agents=agents, scope=scope, project_dir=project_dir, force=force))
     return results
 
 

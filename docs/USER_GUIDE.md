@@ -86,8 +86,8 @@ skillager block <skill-id>
 skillager tag add gis vibespatial/gis-domain
 skillager project attach-tag gis
 skillager materialize --tag gis --mode router --agent codex --scope project
-skillager materialize --agent codex --scope project
-skillager materialize --agent claude --scope project
+skillager materialize --all-reviewed --agent codex --scope project
+skillager materialize --all-reviewed --agent claude --scope project
 skillager materialize <skill-id> --mode stub --agent codex --scope project
 ```
 
@@ -120,7 +120,7 @@ Tags are reusable curation. Users can curate them manually, and agents can maint
 
 `skillager status` checks PyPI for Skillager updates at most once per day and prints `uv tool upgrade skillager` when a newer release is available. Network failures are silent. Set `SKILLAGER_NO_UPDATE_CHECK=1` to disable this check.
 
-Use `skillager bootstrap --agent <agent>` when review is already complete but handoff artifacts are missing or stale. Use `skillager materialize` directly when you already know a reviewed skill or tag should be exposed to the agent.
+Use `skillager bootstrap --agent <agent>` when review is already complete but handoff artifacts are missing or stale. Use `skillager materialize` directly when you already know a reviewed skill or tag should be exposed to the agent. `materialize` requires explicit skill IDs, `--tag`, or `--all-reviewed`; it does not install or repair Skillager Working or project handoff notes.
 
 Use `--mode stub` for skills you want visible by name without loading the full skill body into every session. A stub contains only the skill summary and an activation command; the full body still comes through Skillager's approval gate. After setup, Skillager prints numbered approved-but-hidden stub candidates so you can say “please stub 1, 5, 8.”
 

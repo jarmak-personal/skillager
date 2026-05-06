@@ -58,6 +58,8 @@ An approved skill does not have to be loaded into the agent. It can stay in Skil
 
 This keeps the default context small while still giving agents a deterministic path to approved skills.
 
+`skillager materialize` only writes reviewed skill exposure. It requires explicit skill IDs, `--tag`, or `--all-reviewed`; use `skillager bootstrap --agent <agent>` to install or repair Skillager's first-party handoff artifacts.
+
 ## For Library Authors
 
 If you maintain a Python library, Skillager gives you a way to ship agent-facing guidance with the package itself. Users can discover those skills after install, review them locally, and expose all, or just the ones relevant to their project.
@@ -139,6 +141,7 @@ The next `skillager handoff` can tell the agent that lookback is pending. Then t
 - [Library author guide](docs/LIBRARY_AUTHORS.md)
 - [Safety model](docs/SAFETY_MODEL.md)
 - [Release runbook](docs/RELEASE.md)
+- [Release notes](docs/RELEASE_NOTES.md)
 - [Security policy](SECURITY.md)
 
 External contributions are not being accepted yet while the early API and workflow settle.

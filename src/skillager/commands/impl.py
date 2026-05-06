@@ -800,18 +800,18 @@ def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentPars
             Native materialization copies the full skill directory and writes
             provenance. Stub materialization writes a tiny native handle that
             tells the agent how to activate the full reviewed body through
-            Skillager on demand. Project materialization also installs or refreshes Skillager Working,
-            writes a one-line handoff note to existing AGENTS.md/CLAUDE.md files,
-            or creates the right default file for the selected agent. Customized
-            local copies are not overwritten unless --force is used.
+            Skillager on demand. Materialization does not install or repair
+            Skillager Working or project handoff notes; use `skillager bootstrap`
+            or `skillager doctor --fix` for first-party handoff artifacts.
+            Customized local copies are not overwritten unless --force is used.
             """
         ),
         epilog=textwrap.dedent(
             """\
             Examples:
-              skillager materialize --agent codex --scope project
-              skillager materialize --agent claude --scope project
-              skillager materialize --all-agents --scope project
+              skillager materialize --all-reviewed --agent codex --scope project
+              skillager materialize --all-reviewed --agent claude --scope project
+              skillager materialize --all-reviewed --all-agents --scope project
               skillager materialize fastapi/fastapi --agent codex
               skillager materialize --tag gis --mode router --agent codex
               skillager materialize fastapi/fastapi --mode stub --agent codex
@@ -831,6 +831,7 @@ def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentPars
     p.add_argument("--all-agents", action="store_true", help="Target both codex and claude.")
     p.add_argument("--scope", choices=["project", "global"], default="project", help="Materialize into project .agents or global agent skill directory.")
     p.add_argument("--include-unreviewed", action="store_true", help="Allow discovered skills to be materialized.")
+    p.add_argument("--all-reviewed", action="store_true", help="Materialize every reviewed/trusted/pinned skill selected by filters.")
     p.add_argument("--allow-incompatible", action="store_true", help="Allow native/stub materialization even when skill metadata explicitly excludes the selected agent.")
     p.add_argument("--dry-run", action="store_true", help="Report target paths without writing files.")
     p.add_argument("--force", action="store_true", help="Overwrite existing Skillager-managed customized targets.")
@@ -4259,6 +4260,9 @@ def _review_extra_skills(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 def cmd_materialize(args: argparse.Namespace) -> int:
     mode = args.mode
+    if mode == "router" and not args.tag:
+        raise ValueError("--mode router requires --tag")
+    _require_materialize_selection(args)
     agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
     agent_notes_ready_before = _agent_notes_ready(Path.cwd(), agents=agents) if args.scope == "project" else False
     materialized_targets_before = _materialized_target_paths(Path.cwd(), agents=agents) if args.scope == "project" else set()
@@ -4275,8 +4279,6 @@ def cmd_materialize(args: argparse.Namespace) -> int:
             project_dir=Path.cwd(),
         )
     else:
-        if mode == "router":
-            raise ValueError("--mode router requires --tag")
         if args.tag:
             _require_attached_tag(root(args), args.tag)
         tag_skill_ids = {skill["id"] for skill in _select_project_tag_skills(root(args), catalog_root(args), args.tag)} if args.tag else None
@@ -4333,6 +4335,17 @@ def cmd_materialize(args: argparse.Namespace) -> int:
             ):
                 _print_agent_next_steps(results)
     return 0
+
+
+def _require_materialize_selection(args: argparse.Namespace) -> None:
+    if args.tag or args.skill_ids or args.all_reviewed:
+        if args.all_reviewed and args.include_unreviewed:
+            raise ValueError("--all-reviewed cannot be combined with --include-unreviewed")
+        return
+    raise ValueError(
+        "materialize requires explicit skill IDs, --tag, or --all-reviewed. "
+        "To refresh first-party handoff artifacts, run skillager bootstrap --agent <agent>."
+    )
 
 
 def _require_materialize_matches(
@@ -4413,8 +4426,6 @@ def _should_print_agent_next_steps(
     changed = [item for item in results if item.get("status") == "materialized" and item.get("skill_id") and item.get("skill_id") != "skillager/working"]
     if not changed:
         return False
-    if not agent_notes_ready_before:
-        return True
     materialized_targets_before = materialized_targets_before or set()
     for item in changed:
         target = item.get("target")
@@ -4425,7 +4436,8 @@ def _should_print_agent_next_steps(
                 return True
         except OSError:
             return True
-    return False
+    # If no new target appeared, only print restart guidance for a fresh project.
+    return not agent_notes_ready_before and not materialized_targets_before
 
 
 def cmd_manifest_init(args: argparse.Namespace) -> int:
@@ -5184,7 +5196,6 @@ def _materialize_reviewed_for_project(
             agents=agents,
             scope="project",
             project_dir=Path.cwd(),
-            include_working=False,
         )
         for item in native_results:
             line = f"{item['skill_id']}: {item['status']}"

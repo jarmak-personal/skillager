@@ -37,6 +37,29 @@ class SkillagerBootstrapTests(unittest.TestCase):
             self.assertIn("codex project_note: materialized", output.getvalue())
             self.assertIn("Ready: 2 of 2 artifacts current.", output.getvalue())
 
+    def test_bootstrap_refreshes_legacy_status_project_agent_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            legacy = (
+                "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
+                "ask the user to run `skillager setup` if review is needed."
+            )
+            (root / "AGENTS.md").write_text(
+                f"Existing project notes.\n## Skillager \n\n{legacy}\nOther notes stay.\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(root / ".skillager"), "SKILLAGER_CATALOG_STATE_DIR": str(root / ".skillager"), "NO_COLOR": "1"}),
+                chdir(root),
+                redirect_stdout(StringIO()),
+            ):
+                self.assertEqual(main(["bootstrap", "--agent", "codex"]), 0)
+            text = (root / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertEqual(text.count("## Skillager"), 1)
+            self.assertIn("skillager handoff", text)
+            self.assertNotIn("skillager status", text)
+            self.assertIn("Other notes stay.", text)
+
     def test_bootstrap_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

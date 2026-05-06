@@ -766,6 +766,8 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
                 saved_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved_scope["selected_count"], 49)
+                self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+                self.assertFalse((root / "AGENTS.md").exists())
                 router = root / ".agents" / "skills" / "skillager-gis" / "SKILL.md"
                 router_text = router.read_text(encoding="utf-8")
                 self.assertIn("community/gis-domain", router_text)

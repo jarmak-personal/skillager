@@ -85,14 +85,13 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assert_body_not_exposed(materialize)
             materialized = {item["skill_id"]: item for item in materialize.json()}
             self.assertEqual(materialized["project/gis-domain"]["status"], "materialized")
-            self.assertEqual(materialized["skillager/working"]["status"], "materialized")
 
             stub = project / ".agents" / "skills" / "project-gis-domain" / "SKILL.md"
             working = project / ".agents" / "skills" / "skillager-working" / "SKILL.md"
             note = project / "AGENTS.md"
             self.assertTrue(stub.exists())
-            self.assertTrue(working.exists())
-            self.assertTrue(note.exists())
+            self.assertFalse(working.exists())
+            self.assertFalse(note.exists())
             stub_text = stub.read_text(encoding="utf-8")
             self.assertNotIn(BODY_SENTINEL, stub_text)
             self.assertIn("skillager activate project/gis-domain --from-stub project-gis-domain", stub_text)

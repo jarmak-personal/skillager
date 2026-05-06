@@ -600,6 +600,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
                     self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 0)
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
+                    self.assertEqual(main(["bootstrap", "--agent", "codex"]), 0)
                     self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "router", "--agent", "codex", "--scope", "project"]), 0)
 
                 output = StringIO()
