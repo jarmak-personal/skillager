@@ -138,7 +138,8 @@ Search records compact local telemetry for lookback by default: query hash, shor
 These commands change approval state or expose full instructions:
 
 ```bash
-skillager setup
+skillager setup --agent codex
+skillager setup --agent claude
 skillager setup --source collection --trust-all
 skillager setup --source collection --yolo
 skillager review <skill-id> --trust-selected reviewed
@@ -179,6 +180,8 @@ Tell the user exactly what happened and ask them to run setup:
 ```text
 Skillager reports new or changed skills. Please run `skillager setup` from this project directory before I use Skillager-managed skills.
 ```
+
+When you know your agent target, prefer `skillager setup --agent codex` or `skillager setup --agent claude` so setup can refresh the first-party handoff artifacts after review.
 
 If handoff or status reports authored-but-unreviewed skills, tell the user that self-authored skills still need review before activation. For a clearly self-authored low-risk skill, Skillager may print a paste-ready `skillager trust <id> --state reviewed` hint; otherwise ask the user to review with `skillager review`.
 

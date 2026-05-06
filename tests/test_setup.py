@@ -154,6 +154,132 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(trust_by_id["project/safe"], "reviewed")
             self.assertEqual(trust_by_id["project/risky"], "discovered")
 
+    def test_setup_accept_low_with_agent_bootstraps_handoff_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-packages", "--summary-json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["approved"], 1)
+            self.assertTrue(data["bootstrap"]["performed"])
+            self.assertTrue(data["bootstrap"]["handoff_ready"])
+            self.assertEqual(data["bootstrap"]["agents"], ["codex"])
+            self.assertEqual(data["bootstrap"]["summary"]["by_status"], {"materialized": 2})
+            self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+            self.assertIn("skillager handoff", (root / "AGENTS.md").read_text(encoding="utf-8"))
+            status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
+            self.assertEqual(status_scope["agents"], ["codex"])
+
+    def test_setup_accept_low_no_bootstrap_reports_handoff_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages", "--summary-json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["approved"], 1)
+            self.assertFalse(data["bootstrap"]["performed"])
+            self.assertEqual(data["bootstrap"]["reason"], "disabled by --no-bootstrap")
+            self.assertEqual(data["bootstrap"]["reason_code"], "bootstrap_disabled")
+            self.assertFalse(data["bootstrap"]["handoff_ready"])
+            self.assertEqual(data["bootstrap"]["next_commands"], ["skillager bootstrap --agent codex"])
+            self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+            self.assertFalse((root / "AGENTS.md").exists())
+            status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
+            self.assertEqual(status_scope["agents"], ["codex"])
+            self.assertEqual(status_scope["selected_count"], 1)
+
+    def test_setup_accept_low_no_bootstrap_human_output_skips_generic_next_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages"]), 0)
+            text = output.getvalue()
+            self.assertIn("Handoff not ready: run skillager bootstrap --agent codex", text)
+            self.assertNotIn("Next step: tell your agent what you plan to do", text)
+            status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
+            self.assertEqual(status_scope["agents"], ["codex"])
+
+    def test_setup_accept_low_without_agent_does_not_silently_bootstrap_codex(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages", "--summary-json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["approved"], 1)
+            self.assertFalse(data["bootstrap"]["performed"])
+            self.assertEqual(data["bootstrap"]["reason"], "agent not specified")
+            self.assertEqual(data["bootstrap"]["reason_code"], "agent_not_specified")
+            self.assertEqual(data["bootstrap"]["next_commands"], ["skillager bootstrap --agent codex", "skillager bootstrap --agent claude"])
+            self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+
+    def test_setup_all_agents_bootstraps_both_handoff_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--all-agents", "--no-packages", "--summary-json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertTrue(data["bootstrap"]["handoff_ready"])
+            self.assertEqual(data["bootstrap"]["agents"], ["codex", "claude"])
+            self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+            self.assertTrue((root / ".claude" / "skills" / "skillager-working" / "SKILL.md").exists())
+            self.assertIn("skillager handoff", (root / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertIn("skillager handoff", (root / "CLAUDE.md").read_text(encoding="utf-8"))
+
     def test_setup_explicit_path_inventory_remains_available_afterward(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -572,6 +698,34 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-api-example" / "SKILL.md").exists())
+
+    def test_interactive_setup_no_bootstrap_still_allows_native_materialization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "gis-domain"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            stdin = TtyStringIO("2\ny\ny\ny\n")
+            stdout = TtyStringIO()
+            with (
+                patch("sys.stdin", stdin),
+                patch("sys.stdout", stdout),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                self.assertEqual(main(["setup", "--audience", "user", "--no-packages", "--agent", "codex", "--no-bootstrap"]), 0)
+            text = stdout.getvalue()
+            self.assertIn("Handoff not ready: run skillager bootstrap --agent codex", text)
+            self.assertIn("Native skill selection", text)
+            self.assertIn("project/gis-domain: materialized", text)
+            self.assertIn("Skillager-managed native skills from the native skill directory", text)
+            self.assertNotIn("Project handoff note:", text)
+            self.assertTrue((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
+            self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+            self.assertFalse((root / "AGENTS.md").exists())
 
     def test_interactive_setup_native_selection_filters_wrong_agent_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

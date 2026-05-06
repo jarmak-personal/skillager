@@ -115,6 +115,9 @@ DOCTOR_EXIT_LINT_BLOCKED = 12
 DOCTOR_EXIT_MIGRATION_NEEDED = 13
 DOCTOR_EXIT_MANUAL_REPAIR = 14
 DOCTOR_EXIT_LOOKBACK_PENDING = 15
+SETUP_BOOTSTRAP_REASON_NO_APPROVED = "no_approved_skills"
+SETUP_BOOTSTRAP_REASON_DISABLED = "bootstrap_disabled"
+SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED = "agent_not_specified"
 _WORKING_DRIFT_REASON_CODES = {
     "local customization": HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
     "target is not Skillager Working": HANDOFF_REASON_WORKING_WRONG_SOURCE,
@@ -431,6 +434,7 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
               skillager setup --fresh
               skillager setup --fresh-all
               skillager setup --source project --accept-low
+              skillager setup --source project --accept-low --agent codex
               skillager setup --include-global
               skillager setup --package pandas --trust-selected reviewed
               skillager setup --block-high
@@ -452,6 +456,10 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     p.add_argument("--fresh-all", action="store_true", help="Clear project-local trust and matching reusable global approvals for the selected setup scope before review.")
     add_review_filters(p)
     add_review_actions(p)
+    target = p.add_mutually_exclusive_group()
+    target.add_argument("--agent", action="append", choices=["codex", "claude"], help="Bootstrap this agent's first-party project handoff artifacts after setup. Repeat to target multiple agents.")
+    target.add_argument("--all-agents", action="store_true", help="Bootstrap first-party project handoff artifacts for both Codex and Claude after setup.")
+    p.add_argument("--no-bootstrap", action="store_true", help="Review setup scope without writing first-party handoff artifacts.")
     p.add_argument("--details", action="store_true", help="Print every selected skill. Default output is compact.")
     p.add_argument("--non-interactive", action="store_true", help="Print report only; do not prompt for choices.")
     p.add_argument("--json", action="store_true", help="Emit setup report as JSON.")
@@ -1240,6 +1248,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     args.yolo = bool(args.yolo or args.trust_all)
     if args.json and args.summary_json:
         raise ValueError("--json and --summary-json cannot be combined")
+    action_requested = _setup_action_requested(args)
+    setup_agents = _bootstrap_agents(args)
+    project_dir = (find_project_root() or Path.cwd()).resolve()
     audience = args.audience
     if _should_prompt_setup_audience(args):
         audience = _prompt_setup_audience(root(args), args, catalog_root=catalog_root(args))
@@ -1271,6 +1282,18 @@ def cmd_setup(args: argparse.Namespace) -> int:
         global_scope=not args.project_only,
     )
     _remember_setup_paths(root(args), args.paths or None)
+    if args.summary_json or args.json:
+        bootstrap = _setup_bootstrap_after_review(
+            args,
+            report,
+            project_dir=project_dir,
+            agents=setup_agents,
+            allow_prompt=False,
+        )
+        if bootstrap is not None:
+            report["bootstrap"] = bootstrap
+            if _setup_bootstrap_saves_scope(bootstrap):
+                _save_status_scope(root(args), report["selected"], audience=audience, include_global=args.include_global, agents=list(bootstrap.get("agents") or setup_agents), paths=args.paths or None)
     if args.summary_json:
         print(json.dumps(_compact_setup_report(report), indent=2, sort_keys=True))
     elif args.json:
@@ -1300,7 +1323,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if not report["selected"]:
             _print_empty_setup_guidance(args)
         _print_out_of_scope_collections(root(args), catalog_root(args), action_requested=bool(args.yolo or args.accept_low or args.trust_selected or args.block_high or args.override_lint))
-        action_requested = any((args.accept_low, args.yolo, args.trust_selected, args.block_high, args.override_lint))
         if not action_requested and not args.non_interactive:
             _interactive_setup(
                 root(args),
@@ -1310,13 +1332,34 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 catalog_root=catalog_root(args),
                 global_scope=not args.project_only,
                 paths=args.paths or None,
+                agents=setup_agents,
+                no_bootstrap=args.no_bootstrap,
             )
         elif not action_requested:
             print()
             _print_setup_next_steps(report["selected"])
         elif report["action"].get("changed"):
             print()
-            print("Next step: tell your agent what you plan to do; it can inspect approved metadata with `skillager search --trusted-only --json`, tag relevant approved skills, and expose a narrow router, stub, native skill, or no new exposure.")
+            bootstrap = _setup_bootstrap_after_review(
+                args,
+                report,
+                project_dir=project_dir,
+                agents=setup_agents,
+                allow_prompt=not args.non_interactive and sys.stdin.isatty() and sys.stdout.isatty(),
+            )
+            if bootstrap is not None:
+                report["bootstrap"] = bootstrap
+                bootstrap_agents = list(bootstrap.get("agents") or setup_agents)
+                if bootstrap.get("performed"):
+                    _print_setup_bootstrap_result(bootstrap)
+                elif bootstrap.get("reason_code") in {SETUP_BOOTSTRAP_REASON_DISABLED, SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED}:
+                    _print_setup_bootstrap_reminder(bootstrap)
+                if _setup_bootstrap_saves_scope(bootstrap):
+                    _save_status_scope(root(args), report["selected"], audience=audience, include_global=args.include_global, agents=bootstrap_agents, paths=args.paths or None)
+                if bootstrap.get("performed") and bootstrap.get("handoff_ready"):
+                    _print_agent_next_steps(list(bootstrap.get("artifacts") or []))
+            if bootstrap is None or not _setup_already_printed_specific_guidance(bootstrap):
+                print("Next step: tell your agent what you plan to do; it can inspect approved metadata with `skillager search --trusted-only --json`, tag relevant approved skills, and expose a narrow router, stub, native skill, or no new exposure.")
     return 0
 
 
@@ -1335,7 +1378,7 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
     review_needed = [skill for skill in selected if skill.get("trust") == "discovered"]
     lint_blocked = [skill for skill in selected if skill.get("trust") == "lint_blocked"]
     approved = [skill for skill in selected if skill.get("trust") in {"reviewed", "trusted", "pinned"}]
-    return {
+    compact = {
         "indexed": report.get("indexed", 0),
         "selected": len(selected),
         "approved": len(approved),
@@ -1352,6 +1395,104 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
         "review_needed_ids": [skill.get("id") for skill in review_needed],
         "lint_blocked_ids": [skill.get("id") for skill in lint_blocked],
     }
+    if "bootstrap" in report:
+        compact["bootstrap"] = report["bootstrap"]
+    return compact
+
+
+def _setup_action_requested(args: argparse.Namespace) -> bool:
+    return any((args.accept_low, args.yolo, args.trust_selected, args.block_high, args.override_lint))
+
+
+def _setup_bootstrap_after_review(
+    args: argparse.Namespace,
+    report: dict[str, Any],
+    *,
+    project_dir: Path,
+    agents: list[str],
+    allow_prompt: bool,
+) -> dict[str, Any] | None:
+    if not _setup_bootstrap_relevant(args, report):
+        return None
+    approved = [skill for skill in report.get("selected", []) if skill.get("trust") in TRUSTED_STATES]
+    if not approved:
+        return _setup_bootstrap_payload(
+            project_dir=project_dir,
+            agents=agents,
+            reason="no approved skills in setup scope",
+            reason_code=SETUP_BOOTSTRAP_REASON_NO_APPROVED,
+        )
+    if args.no_bootstrap:
+        return _setup_bootstrap_payload(
+            project_dir=project_dir,
+            agents=agents,
+            reason="disabled by --no-bootstrap",
+            reason_code=SETUP_BOOTSTRAP_REASON_DISABLED,
+        )
+    if not agents and allow_prompt:
+        agents = _choose_materialize_agents()
+    if not agents:
+        return _setup_bootstrap_payload(
+            project_dir=project_dir,
+            agents=agents,
+            reason="agent not specified",
+            reason_code=SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED,
+        )
+    bootstrap = _perform_bootstrap(agents=agents, project_dir=project_dir, dry_run=False, force=False)
+    return _setup_bootstrap_payload(project_dir=project_dir, agents=agents, bootstrap=bootstrap)
+
+
+def _setup_bootstrap_relevant(args: argparse.Namespace, report: dict[str, Any]) -> bool:
+    if args.agent or args.all_agents or args.no_bootstrap:
+        return True
+    return bool(_setup_action_requested(args) and (report.get("action") or {}).get("changed"))
+
+
+def _setup_bootstrap_payload(
+    *,
+    project_dir: Path,
+    agents: list[str],
+    bootstrap: dict[str, Any] | None = None,
+    reason: str | None = None,
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    artifacts = list((bootstrap or {}).get("artifacts") or [])
+    handoff_ready = _setup_handoff_ready(project_dir, agents=agents)
+    next_commands = [] if handoff_ready else _setup_bootstrap_next_commands(agents)
+    return {
+        "performed": bootstrap is not None,
+        "reason": reason,
+        "reason_code": reason_code,
+        "agents": agents,
+        "handoff_ready": handoff_ready,
+        "next_commands": next_commands,
+        "artifacts": artifacts,
+        "summary": (bootstrap or {}).get("summary") or _bootstrap_summary(artifacts),
+    }
+
+
+def _setup_bootstrap_saves_scope(bootstrap: dict[str, Any]) -> bool:
+    if bootstrap.get("performed"):
+        return bool(bootstrap.get("handoff_ready"))
+    return bootstrap.get("reason_code") == SETUP_BOOTSTRAP_REASON_DISABLED and bool(bootstrap.get("agents"))
+
+
+def _setup_already_printed_specific_guidance(bootstrap: dict[str, Any]) -> bool:
+    if bootstrap.get("performed"):
+        return True
+    return bootstrap.get("reason_code") in {SETUP_BOOTSTRAP_REASON_DISABLED, SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED}
+
+
+def _setup_handoff_ready(project_dir: Path, *, agents: list[str]) -> bool:
+    return bool(agents) and all(_handoff_ready(_handoff_artifacts(project_dir, agent=agent)) for agent in agents)
+
+
+def _setup_bootstrap_next_commands(agents: list[str]) -> list[str]:
+    if agents == ["codex", "claude"]:
+        return ["skillager bootstrap --all-agents"]
+    if agents:
+        return [f"skillager bootstrap --agent {agent}" for agent in agents]
+    return ["skillager bootstrap --agent codex", "skillager bootstrap --agent claude"]
 
 
 def _build_visible_skill_view(
@@ -1793,11 +1934,13 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
         )
     if view["review_needed"]:
         count = len(view["review_needed"])
+        command, next_commands = _doctor_setup_next(agent)
         return _doctor_issue(
             "review-needed",
             DOCTOR_EXIT_REVIEW_NEEDED,
             f"{count} unreviewed skill(s) need review in the active setup scope.",
-            _doctor_setup_command(),
+            command,
+            next_commands=next_commands,
         )
     if not readiness.get("handoff_ready") and (readiness.get("exposure") or {}).get("approved"):
         if handoff_action.get("kind") == "agent-required":
@@ -1844,8 +1987,11 @@ def _doctor_issue(
     }
 
 
-def _doctor_setup_command() -> str:
-    return "skillager setup"
+def _doctor_setup_next(agent: str | None) -> tuple[str | None, list[str]]:
+    if agent:
+        command = f"skillager setup --agent {agent}"
+        return command, [command]
+    return None, ["skillager setup --agent codex", "skillager setup --agent claude"]
 
 
 def _doctor_apply_fix(result: dict[str, Any], *, project_dir: Path, agent: str | None) -> dict[str, Any]:
@@ -2258,11 +2404,12 @@ def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any
         }
     setup = state.get("setup") or {}
     if setup.get("needed"):
+        command = f"skillager setup --agent {agent}"
         return {
             "status": "setup-needed",
-            "message": "Ask the user to run `skillager setup` from this project directory before using Skillager-managed skills.",
-            "command": "skillager setup",
-            "next_commands": ["skillager setup"],
+            "message": f"Ask the user to run `{command}` from this project directory before using Skillager-managed skills.",
+            "command": command,
+            "next_commands": [command],
         }
     if not readiness.get("handoff_ready"):
         command = handoff_action.get("command") or f"skillager bootstrap --agent {agent}"
@@ -4263,7 +4410,7 @@ def _should_print_agent_next_steps(
     agent_notes_ready_before: bool = False,
     materialized_targets_before: set[Path] | None = None,
 ) -> bool:
-    changed = [item for item in results if item.get("status") == "materialized" and item.get("skill_id") != "skillager/working"]
+    changed = [item for item in results if item.get("status") == "materialized" and item.get("skill_id") and item.get("skill_id") != "skillager/working"]
     if not changed:
         return False
     if not agent_notes_ready_before:
@@ -4683,6 +4830,43 @@ def _print_setup_next_steps(skills: list[dict[str, Any]]) -> None:
     print("  - Show full list: skillager setup --details")
 
 
+def _print_setup_bootstrap_result(result: dict[str, Any]) -> None:
+    print(_style("Skillager bootstrap", "bold"))
+    for item in result.get("artifacts", []):
+        line = _setup_bootstrap_artifact_line(item)
+        if line:
+            print(line)
+    if result.get("handoff_ready"):
+        print("Handoff ready.")
+    else:
+        _print_setup_bootstrap_reminder(result)
+
+
+def _setup_bootstrap_artifact_line(item: dict[str, Any]) -> str | None:
+    kind = item.get("kind")
+    if kind == "working_skill":
+        line = f"{item.get('skill_id')}: {item.get('status')}"
+    elif kind == "project_note":
+        line = f"{item.get('agent')} project note: {item.get('status')}"
+    else:
+        return None
+    if item.get("target"):
+        line += f" {item['target']}"
+    if item.get("reason"):
+        line += f" ({item['reason']})"
+    return line
+
+
+def _print_setup_bootstrap_reminder(result: dict[str, Any]) -> None:
+    commands = result.get("next_commands") or []
+    if len(commands) == 1:
+        print(f"Handoff not ready: run {commands[0]}")
+    elif commands:
+        print("Handoff not ready. Run one of:")
+        for command in commands:
+            print(f"  - {command}")
+
+
 def _interactive_setup(
     state_root: Path,
     skills: list[dict[str, Any]],
@@ -4692,6 +4876,8 @@ def _interactive_setup(
     catalog_root: Path | None = None,
     global_scope: bool = True,
     paths: list[Path] | None = None,
+    agents: list[str] | None = None,
+    no_bootstrap: bool = False,
 ) -> None:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print()
@@ -4713,11 +4899,12 @@ def _interactive_setup(
                 print("No approved skills in this setup selection.")
                 return
             print()
-            results = _materialize_reviewed_for_project(approved, state_root=state_root, catalog_root=catalog_root, prompt_prefix="Review complete. ")
+            results = _materialize_reviewed_for_project(approved, state_root=state_root, catalog_root=catalog_root, prompt_prefix="Review complete. ", agents=agents, no_bootstrap=no_bootstrap)
             if results is not None:
-                _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=_materialized_agents(results), paths=paths)
+                result_agents = _setup_result_agents(results)
+                _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=result_agents, paths=paths)
                 print("Setup complete.")
-                _print_setup_completion_summary(selected, results, agents=_materialized_agents(results))
+                _print_setup_completion_summary(selected, results, agents=result_agents)
                 _print_agent_next_steps(results)
             else:
                 print("Setup complete; no skills materialized.")
@@ -4756,11 +4943,12 @@ def _interactive_setup(
                 _print_action_result(apply_review_action(state_root, high, block_high=True))
         elif choice == "4":
             reviewed = _approved_skills(selected)
-            results = _materialize_reviewed_for_project(reviewed, state_root=state_root, catalog_root=catalog_root)
+            results = _materialize_reviewed_for_project(reviewed, state_root=state_root, catalog_root=catalog_root, agents=agents, no_bootstrap=no_bootstrap)
             if results is not None:
-                _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=_materialized_agents(results), paths=paths)
+                result_agents = _setup_result_agents(results)
+                _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=result_agents, paths=paths)
                 print("Setup complete.")
-                _print_setup_completion_summary(selected, results, agents=_materialized_agents(results))
+                _print_setup_completion_summary(selected, results, agents=result_agents)
                 _print_agent_next_steps(results)
                 return
         elif choice == "5" or choice.lower() in {"q", "quit", "exit"}:
@@ -4955,27 +5143,40 @@ def _materialize_reviewed_for_project(
     state_root: Path,
     catalog_root: Path | None,
     prompt_prefix: str = "",
+    agents: list[str] | None = None,
+    no_bootstrap: bool = False,
 ) -> list[dict[str, Any]] | None:
     if not skills:
         print("No reviewed/trusted/pinned skills are ready for project setup.")
         print("Approve low-risk skills first with setup option 2, or review warned/high-risk skills with option 1.")
         return None
-    agents = _choose_materialize_agents()
+    agents = list(agents or [])
+    if not agents:
+        agents = _choose_materialize_agents()
     if not agents:
         return None
-    target_label = " and ".join(agent.title() for agent in agents)
-    if not _confirm(f"{prompt_prefix}Install Skillager working skill for {target_label} project scope?"):
-        return None
-    results = materialize_working_skill(agents=agents, scope="project", project_dir=Path.cwd())
-    for item in results:
-        line = f"{item['skill_id']}: {item['status']}"
-        if item.get("target"):
-            line += f" {item['target']}"
-        if item.get("reason"):
-            line += f" ({item['reason']})"
-        print(line)
-    if not any(item.get("status") == "materialized" for item in results):
-        return None
+    results: list[dict[str, Any]] = []
+    if no_bootstrap:
+        _print_setup_bootstrap_reminder(
+            _setup_bootstrap_payload(
+                project_dir=Path.cwd().resolve(),
+                agents=agents,
+                reason="disabled by --no-bootstrap",
+                reason_code=SETUP_BOOTSTRAP_REASON_DISABLED,
+            )
+        )
+    else:
+        target_label = " and ".join(agent.title() for agent in agents)
+        if not _confirm(f"{prompt_prefix}Install Skillager working skill for {target_label} project scope?"):
+            return None
+        bootstrap = _perform_bootstrap(agents=agents, project_dir=Path.cwd().resolve(), dry_run=False, force=False)
+        results = list(bootstrap["artifacts"])
+        for item in results:
+            line = _setup_bootstrap_artifact_line(item)
+            if line:
+                print(line)
+        if _bootstrap_has_local_blocker(results) or not _setup_handoff_ready(Path.cwd().resolve(), agents=agents):
+            return None
     native = _choose_native_project_skills(skills, agents=agents)
     if native:
         native_results = materialize_skills(
@@ -4994,7 +5195,7 @@ def _materialize_reviewed_for_project(
             print(line)
         results.extend(native_results)
     _print_router_suggestions(state_root, catalog_root=catalog_root, agents=agents)
-    return results
+    return results or None
 
 
 def _print_router_suggestions(state_root: Path, *, catalog_root: Path | None, agents: list[str]) -> None:
@@ -5028,7 +5229,7 @@ def _print_setup_completion_summary(
     exposed_ids = {
         item.get("skill_id")
         for item in results
-        if item.get("status") in {"materialized", "already_native"} and item.get("skill_id") != "skillager/working"
+        if item.get("status") in {"materialized", "already_native"} and item.get("skill_id") and item.get("skill_id") != "skillager/working"
     }
     hidden = [skill for skill in approved if skill["id"] not in exposed_ids]
     if not approved:
@@ -5189,9 +5390,10 @@ def _print_agent_next_steps(results: list[dict[str, Any]]) -> None:
     project_dir = _materialized_project_dir_from_bases(target_bases)
     agents = sorted(
         agent
-        for agent in {item.get("agent") for item in results if item.get("status") == "materialized" and item.get("agent")}
+        for agent in {item.get("agent") for item in results if _agent_next_step_artifact_current(item) and item.get("agent")}
         if isinstance(agent, str)
     )
+    first_party_handoff = _first_party_handoff_current(results)
     print()
     print(_style("Next step", "bold"))
     if len(target_bases) == 1:
@@ -5202,16 +5404,34 @@ def _print_agent_next_steps(results: list[dict[str, Any]]) -> None:
             print(f"    - {target_base}")
     if project_dir:
         print(f"  - Restart {_agent_label(agents)} in this directory: {project_dir}")
-        notes = agent_note_paths(project_dir, agents=agents)
-        if len(notes) == 1:
-            print(f"  - Project handoff note: {notes[0]}")
-        else:
-            print("  - Project handoff notes:")
-            for note in notes:
-                print(f"    - {note}")
+        if first_party_handoff:
+            notes = agent_note_paths(project_dir, agents=agents)
+            if len(notes) == 1:
+                print(f"  - Project handoff note: {notes[0]}")
+            else:
+                print("  - Project handoff notes:")
+                for note in notes:
+                    print(f"    - {note}")
     else:
         print(f"  - Restart {_agent_label(agents)} in the directory where you ran Skillager.")
-    print("  - The agent will discover Skillager-managed skills from the project note and native skill directory.")
+    if first_party_handoff:
+        print("  - The agent will discover Skillager-managed skills from the project note and native skill directory.")
+    else:
+        print("  - The agent will discover Skillager-managed native skills from the native skill directory.")
+
+
+def _agent_next_step_artifact_current(item: dict[str, Any]) -> bool:
+    if item.get("status") == "materialized":
+        return True
+    return item.get("kind") in {"working_skill", "project_note"} and item.get("status") == "skipped" and item.get("reason") == "already up to date"
+
+
+def _first_party_handoff_current(results: list[dict[str, Any]]) -> bool:
+    return any(
+        (item.get("kind") in {"working_skill", "project_note"} or item.get("skill_id") == WORKING_SKILL_ID)
+        and _agent_next_step_artifact_current(item)
+        for item in results
+    )
 
 
 def _agent_label(agents: list[str]) -> str:
@@ -5232,6 +5452,14 @@ def _materialized_agents(results: list[dict[str, Any]]) -> list[str]:
     )
 
 
+def _setup_result_agents(results: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        agent
+        for agent in {item.get("agent") for item in results if item.get("agent")}
+        if isinstance(agent, str)
+    )
+
+
 def _common_audience(skills: list[dict[str, Any]]) -> str | None:
     audiences = {skill.get("audience_guess", {}).get("audience") for skill in skills}
     audiences.discard(None)
@@ -5242,7 +5470,7 @@ def _common_audience(skills: list[dict[str, Any]]) -> str | None:
 
 
 def _materialized_target_bases(results: list[dict[str, Any]]) -> list[Path]:
-    targets = [Path(item["target"]) for item in results if item.get("target") and item.get("status") == "materialized"]
+    targets = [Path(item["target"]) for item in results if item.get("target") and _agent_next_step_artifact_current(item) and item.get("kind") != "project_note"]
     if not targets:
         return []
     return sorted({target.parent for target in targets})

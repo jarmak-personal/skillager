@@ -93,8 +93,30 @@ class SkillagerDoctorTests(unittest.TestCase):
                     self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--json"]), 10)
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "review-needed")
-            self.assertEqual(data["next"]["command"], "skillager setup")
+            self.assertEqual(data["next"]["command"], "skillager setup --agent codex")
             self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+
+    def test_doctor_unreviewed_skill_without_agent_lists_setup_agent_choices(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["doctor", "--no-packages", "--json"]), 10)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["status"], "review-needed")
+            self.assertIsNone(data["next"]["command"])
+            self.assertEqual(data["next"]["next_commands"], ["skillager setup --agent codex", "skillager setup --agent claude"])
+            self.assertNotIn("skillager setup\"", json.dumps(data["next"]))
 
     def test_doctor_missing_working_skill_exits_eleven_and_suggests_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,7 +5,7 @@ Skillager is a CLI gate between discovered skills and agent-native skill directo
 The normal loop is:
 
 ```text
-status -> setup -> restart agent -> handoff -> describe goal -> agent curates tags/exposure -> lookback
+status -> setup --agent <agent> -> restart agent -> handoff -> describe goal -> agent curates tags/exposure -> lookback
 ```
 
 ## First Run In A Project
@@ -14,12 +14,12 @@ Run this from the directory where you will start Codex or Claude:
 
 ```bash
 skillager status
-skillager setup
+skillager setup --agent codex
 ```
 
 `status` is safe for agents. It refreshes metadata and reports whether review is needed. It does not print skill bodies, approve skills, or materialize skills.
 
-`setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything.
+Use `--agent claude` instead for Claude projects. `setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything. When setup applies review changes with `--agent` or `--all-agents`, it also refreshes the first-party handoff artifacts unless `--no-bootstrap` is passed.
 
 At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent starts with `skillager handoff` and can use approved metadata to add useful skills to tags, attach project-relevant tags, and expose narrow native skills, stubs, a compact router skill for a tag, or nothing.
 
@@ -65,10 +65,13 @@ The override is tied to the current content hash and finding identities. Content
 
 ```bash
 skillager status
+skillager setup --agent codex
 skillager setup --fresh
 skillager setup --fresh-all
 skillager setup --details
 skillager setup --summary-json
+skillager setup --source project --accept-low --agent codex --summary-json
+skillager bootstrap --agent codex
 skillager list --summary-json --agent codex
 skillager setup --source collection --trust-all
 skillager setup --source collection --yolo
@@ -95,9 +98,11 @@ For a project-local automation smoke flow:
 <!-- skillager-test fixture=basic_project -->
 ```bash
 skillager status --no-packages --json
-skillager setup --source project --accept-low --no-packages --summary-json
+skillager setup --source project --accept-low --agent codex --no-packages --summary-json
 skillager search "spatial" --trusted-only --no-session-record --json
 ```
+
+The setup summary JSON includes a compact `bootstrap` object when setup attempted or skipped first-party handoff refresh. Automation can check `bootstrap.handoff_ready` and follow `bootstrap.next_commands` without parsing human text.
 
 Skillager does not require git. In a plain directory, it treats the current directory as the project root. Project state is user-local at `${XDG_STATE_HOME:-~/.local/state}/skillager/projects/<sha256(project_path)>/`, or `SKILLAGER_STATE_DIR` when explicitly set. Reusable catalog state is separate at `${XDG_CONFIG_HOME:-~/.config}/skillager/`, or `SKILLAGER_CATALOG_STATE_DIR` / `--catalog-state-dir` when explicitly set.
 
@@ -115,7 +120,7 @@ Tags are reusable curation. Users can curate them manually, and agents can maint
 
 `skillager status` checks PyPI for Skillager updates at most once per day and prints `uv tool upgrade skillager` when a newer release is available. Network failures are silent. Set `SKILLAGER_NO_UPDATE_CHECK=1` to disable this check.
 
-Use `skillager materialize` directly when you already know a reviewed skill or tag should be exposed to the agent. Project materialization also refreshes the `skillager-working` bootstrap skill.
+Use `skillager bootstrap --agent <agent>` when review is already complete but handoff artifacts are missing or stale. Use `skillager materialize` directly when you already know a reviewed skill or tag should be exposed to the agent.
 
 Use `--mode stub` for skills you want visible by name without loading the full skill body into every session. A stub contains only the skill summary and an activation command; the full body still comes through Skillager's approval gate. After setup, Skillager prints numbered approved-but-hidden stub candidates so you can say “please stub 1, 5, 8.”
 

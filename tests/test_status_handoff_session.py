@@ -400,7 +400,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             text = output.getvalue()
             self.assertIn("Setup: needed, 1 unreviewed skill(s)", text)
             self.assertIn("Working skill: missing", text)
-            self.assertIn("skillager setup", text)
+            self.assertIn("skillager setup --agent codex", text)
 
     def test_handoff_ready_when_working_skill_and_note_are_current(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -477,7 +477,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             handoff = json.loads(output.getvalue())
             self.assertEqual(handoff["status"], "setup-needed")
             self.assertEqual(handoff["state"]["setup"]["unreviewed"], 1)
-            self.assertIn("skillager setup", handoff["next"]["next_commands"])
+            self.assertIn("skillager setup --agent codex", handoff["next"]["next_commands"])
 
     def test_handoff_reports_stale_working_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -14,7 +14,7 @@ install package -> discover skills -> approve safety -> agent uses approved meta
 uv tool install skillager
 cd my-project
 skillager status
-skillager setup
+skillager setup --agent codex
 ```
 
 No uv:
@@ -23,10 +23,10 @@ No uv:
 pipx install skillager
 # or
 python -m pip install --user skillager
-python -m skillager setup
+python -m skillager setup --agent codex
 ```
 
-`setup` is the approval gate. It discovers skills in the current project and environment, scans them, asks what audience you care about, and never trusts a skill unless you approve it.
+Use `--agent claude` instead if this project is for Claude. `setup` is the approval gate. It discovers skills in the current project and environment, scans them, asks what audience you care about, and never trusts a skill unless you approve it. When review changes are applied with an agent target, setup also refreshes Skillager's first-party handoff artifacts.
 
 After setup, restart Codex or Claude in the same directory and tell it what you are doing. Skillager installs a tiny project handoff so the agent knows to run `skillager handoff` once, use approved metadata, and avoid loading unapproved skill bodies.
 
@@ -119,7 +119,7 @@ Skill repositories are collections. Collections are inventory; tags are curation
 ```bash
 skillager collection add ~/skills/workflows --name workflows
 skillager collection enable workflows
-skillager setup
+skillager setup --agent codex
 skillager materialize --tag workflows --mode router --agent codex --scope project
 ```
 
