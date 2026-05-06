@@ -17,6 +17,13 @@ def agent_variant_family_key(skill: Mapping[str, Any]) -> str:
     return f"{prefix}/{slug}"
 
 
+def duplicate_content_family_key(skill: Mapping[str, Any]) -> str:
+    skill_id = str(skill.get("id") or "")
+    slug = skill_id.rsplit("/", 1)[-1] if skill_id else ""
+    slug = canonical_agent_variant_slug(slug or skill_id)
+    return slug or agent_variant_family_key(skill)
+
+
 def canonical_agent_variant_slug(value: str) -> str:
     slug = value.strip().lower()
     suffixes = (

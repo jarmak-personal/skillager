@@ -479,6 +479,33 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertEqual(handoff["state"]["setup"]["unreviewed"], 1)
             self.assertIn("skillager setup --agent codex", handoff["next"]["next_commands"])
 
+    def test_handoff_explains_same_content_duplicate_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            project_skill = root / ".skills" / "mapping"
+            package_skill = root / ".venv" / "lib" / "python3.13" / "site-packages" / "demo_pkg" / ".skills" / "mapping"
+            project_skill.mkdir(parents=True)
+            package_skill.mkdir(parents=True)
+            body = "# Mapping\n\nUse GIS domain concepts.\n"
+            (project_skill / "SKILL.md").write_text(body, encoding="utf-8")
+            (package_skill / "SKILL.md").write_text(body, encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages", "--summary-json"]), 0)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+            handoff = json.loads(output.getvalue())
+            self.assertEqual(handoff["status"], "setup-needed")
+            self.assertIn("source-key approval", handoff["next"]["message"])
+            self.assertEqual(handoff["state"]["duplicate_content"]["review_needed_ids"], ["demo-pkg/mapping"])
+
     def test_handoff_reports_stale_working_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

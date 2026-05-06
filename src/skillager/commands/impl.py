@@ -61,7 +61,14 @@ from ..materialize import target_dir, working_source_hash
 from ..manifest import init_manifests
 from ..paths import cache_root, catalog_state_root, find_project_root, legacy_project_state_root, state_root
 from ..render import render_skill
-from ..review import apply_review_action, review_summary, setup_environment
+from ..review import (
+    annotate_duplicate_content,
+    apply_review_action,
+    duplicate_content_group_entries,
+    duplicate_content_summary,
+    review_summary,
+    setup_environment,
+)
 from ..scan import scan_path
 from ..search import search as search_index
 from ..selection import select_visible_skills
@@ -1531,6 +1538,7 @@ def _build_visible_skill_view(
         include_global=selected_include_global,
         include_lint_blocked=True,
     )
+    skills = annotate_duplicate_content(skills)
     review_needed = _status_review_needed(skills, saved_scope=saved_scope)
     lint_blocked = [skill for skill in skills if skill.get("trust") == "lint_blocked"]
     approved = [skill for skill in skills if skill.get("trust") in TRUSTED_STATES]
@@ -1575,6 +1583,7 @@ def _build_visible_skill_view(
         "migration": migration,
         "lookback": lookback,
         "tagging": tagging,
+        "duplicate_content": duplicate_content_summary(skills),
         "readiness": readiness,
     }
 
@@ -1747,6 +1756,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     collection_inventory = _status_collection_inventory(skills)
     tagging_summary = view["tagging"]
     migration_summary = view["migration"]
+    duplicate_content = view["duplicate_content"]
     update = check_for_update(cache_root(), current_version=__version__)
     readiness = view["readiness"]
     status = {
@@ -1776,6 +1786,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         "collections": collection_summary,
         "collection_inventory": collection_inventory,
         "tagging": tagging_summary,
+        "duplicate_content": duplicate_content,
         "collection_migrations": migration_summary,
         "migration_details": args.migration_details,
         "update": update,
@@ -1786,6 +1797,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             lookback_summary=lookback_summary,
             collection_summary=collection_summary,
             migration_summary=migration_summary,
+            duplicate_content=duplicate_content,
             readiness=readiness,
         ),
     }
@@ -1888,6 +1900,7 @@ def _doctor_state(view: dict[str, Any]) -> dict[str, Any]:
         "migration": view["migration"],
         "artifacts": view["artifacts"],
         "lookback": view["lookback"],
+        "duplicate_content": view["duplicate_content"],
     }
 
 
@@ -1936,10 +1949,14 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
     if view["review_needed"]:
         count = len(view["review_needed"])
         command, next_commands = _doctor_setup_next(agent)
+        duplicate_review = int((view.get("duplicate_content") or {}).get("review_needed") or 0)
+        message = f"{count} unreviewed skill(s) need review in the active setup scope."
+        if duplicate_review:
+            message += f" {duplicate_review} are same-content duplicate(s) that need source-key approval."
         return _doctor_issue(
             "review-needed",
             DOCTOR_EXIT_REVIEW_NEEDED,
-            f"{count} unreviewed skill(s) need review in the active setup scope.",
+            message,
             command,
             next_commands=next_commands,
         )
@@ -2268,6 +2285,7 @@ def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, a
         "artifacts": artifacts,
         "lookback": lookback,
         "tagging": tagging,
+        "duplicate_content": view["duplicate_content"],
         "attached_tags": view["attached_tags"],
         "materialized_router_tags": view["materialized_router_tags"],
         "unmaterialized_attached_tags": view["unmaterialized_attached_tags"],
@@ -2406,9 +2424,13 @@ def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any
     setup = state.get("setup") or {}
     if setup.get("needed"):
         command = f"skillager setup --agent {agent}"
+        duplicate_review = int((state.get("duplicate_content") or {}).get("review_needed") or 0)
+        message = f"Ask the user to run `{command}` from this project directory before using Skillager-managed skills."
+        if duplicate_review:
+            message += f" {duplicate_review} same-content duplicate(s) already match approved content and need source-key approval."
         return {
             "status": "setup-needed",
-            "message": f"Ask the user to run `{command}` from this project directory before using Skillager-managed skills.",
+            "message": message,
             "command": command,
             "next_commands": [command],
         }
@@ -2552,6 +2574,12 @@ def _print_handoff(handoff: dict[str, Any]) -> None:
         f"{', '.join(state['unmaterialized_attached_tags']) if state['unmaterialized_attached_tags'] else 'none'}"
     )
     tagging = state.get("tagging") or {}
+    duplicate_content = state.get("duplicate_content") or {}
+    if duplicate_content.get("review_needed"):
+        print(
+            "  Duplicate approved content: "
+            f"{duplicate_content.get('review_needed', 0)} source-key approval(s)"
+        )
     if tagging.get("mixed_trust_tag_count"):
         names = ", ".join(
             f"{item['tag']}={item['review_needed']} unreviewed"
@@ -2953,6 +2981,7 @@ def _status_message(
     lookback_summary: dict[str, Any] | None = None,
     collection_summary: dict[str, Any] | None = None,
     migration_summary: dict[str, Any] | None = None,
+    duplicate_content: dict[str, Any] | None = None,
     readiness: dict[str, Any] | None = None,
 ) -> str:
     if lint_blocked:
@@ -2967,6 +2996,13 @@ def _status_message(
             "Run `skillager status --ack-migration` after reviewing."
         )
     if review_needed:
+        duplicate_review = int((duplicate_content or {}).get("review_needed") or 0)
+        if duplicate_review:
+            return (
+                f"Skillager: {len(review_needed)} unreviewed skill(s) need review in the active setup scope; "
+                f"{duplicate_review} same-content duplicate(s) already match approved content and need source-key approval. "
+                "Ask the user to run `skillager setup`."
+            )
         return f"Skillager: {len(review_needed)} unreviewed skill(s) need review in the active setup scope. Ask the user to run `skillager setup`."
     if readiness and not readiness.get("handoff_ready") and (readiness.get("exposure") or {}).get("approved"):
         handoff = readiness.get("handoff") or {}
@@ -3012,6 +3048,7 @@ def _print_status(status: dict[str, Any]) -> None:
     print(f"  - review needed: {status['review_needed']}")
     if status.get("lint_blocked"):
         print(f"  - lint blocked: {status['lint_blocked']} (run `skillager lint`)")
+    _print_duplicate_content_status(status.get("duplicate_content") or {}, indent="  - ")
     manifest_lint = status.get("manifest_lint") or {}
     if manifest_lint.get("warned"):
         print(f"  - manifest lint warned: {manifest_lint['warned']}")
@@ -3103,6 +3140,25 @@ def _print_status(status: dict[str, Any]) -> None:
         print(f"  - scan risk: {risk_bits}")
     print()
     print(status["message"])
+
+
+def _print_duplicate_content_status(duplicate_content: dict[str, Any], *, indent: str = "") -> None:
+    review_needed = int(duplicate_content.get("review_needed") or 0)
+    if not review_needed:
+        return
+    groups = int(duplicate_content.get("approved_overlap_groups") or 0)
+    print(f"{indent}duplicate approved content: {review_needed} source-key approval(s) across {groups} group(s)")
+    relevant_groups = [
+        group
+        for group in (duplicate_content.get("groups_detail") or [])
+        if group.get("source_key_approval_required")
+    ]
+    for group in relevant_groups[:3]:
+        review_ids = ", ".join(group.get("review_needed_ids") or [])
+        approved_ids = ", ".join(group.get("approved_ids") or [])
+        print(f"    {review_ids} matches approved {approved_ids}")
+    if len(relevant_groups) > 3:
+        print(f"    ... {len(relevant_groups) - 3} more duplicate group(s)")
 
 
 def _print_migration_details(migrations: dict[str, Any]) -> None:
@@ -4217,6 +4273,13 @@ def cmd_review(args: argparse.Namespace) -> int:
         include_lint_blocked=args.include_lint_blocked or args.override_lint,
         include_global=args.include_global,
     )
+    duplicate_context = select_visible_skills(
+        data.get("skills", []),
+        include_blocked=args.include_blocked,
+        include_lint_blocked=args.include_lint_blocked or args.override_lint,
+        include_global=args.include_global,
+    )
+    skills = annotate_duplicate_content(skills, context=duplicate_context)
     summary = review_summary(skills)
     action = apply_review_action(
         root(args),
@@ -4246,6 +4309,13 @@ def cmd_review(args: argparse.Namespace) -> int:
             include_lint_blocked=True,
             include_global=args.include_global,
         )
+        duplicate_context = select_visible_skills(
+            data.get("skills", []),
+            include_blocked=args.include_blocked or args.block_high,
+            include_lint_blocked=True,
+            include_global=args.include_global,
+        )
+        skills = annotate_duplicate_content(skills, context=duplicate_context)
         summary = review_summary(skills)
     if args.json:
         print(json.dumps({"selected": skills, "summary": summary, "action": action}, indent=2, sort_keys=True))
@@ -4616,10 +4686,16 @@ def _print_review_report(
     if summary.get("by_trust"):
         trust_bits = ", ".join(_trust_count(state, count) for state, count in sorted(summary["by_trust"].items()))
         print(f"  - trust: {trust_bits}")
+    _print_review_duplicate_summary(summary)
     if action.get("changed"):
         print(_style("Changed:", "bold"))
         for item in action["changed"]:
-            print(f"  - {item['skill_id']}: {_trust_label(item['state'])}")
+            line = f"  - {item['skill_id']}: {_trust_label(item['state'])}"
+            duplicate = item.get("duplicate_of_reviewed") or {}
+            approved_ids = duplicate.get("approved_ids") or []
+            if approved_ids:
+                line += f" (same content as approved {', '.join(approved_ids)})"
+            print(line)
     if action.get("skipped"):
         print(_style("Skipped:", "bold"))
         for item in action["skipped"]:
@@ -4665,11 +4741,22 @@ def _print_review_report_rich(
         table.add_row("audience", ", ".join(f"{audience}={count}" for audience, count in sorted(summary["by_audience"].items())))
     if summary.get("by_trust"):
         table.add_row("trust", ", ".join(_trust_count(state, count) for state, count in sorted(summary["by_trust"].items())))
+    duplicate = (summary.get("duplicate_content") or {})
+    if duplicate.get("review_needed"):
+        table.add_row(
+            "duplicate approved content",
+            f"{duplicate.get('review_needed', 0)} source-key approval(s) across {duplicate.get('approved_overlap_groups', 0)} group(s)",
+        )
     console.print(table)
     if action.get("changed") or action.get("skipped"):
         lines = []
         for item in action.get("changed", []):
-            lines.append(f"[green]{item['skill_id']}[/green]: {item['state']}")
+            suffix = ""
+            duplicate = item.get("duplicate_of_reviewed") or {}
+            approved_ids = duplicate.get("approved_ids") or []
+            if approved_ids:
+                suffix = f" (same content as approved {', '.join(approved_ids)})"
+            lines.append(f"[green]{item['skill_id']}[/green]: {item['state']}{suffix}")
         for item in action.get("skipped", []):
             lines.append(f"[yellow]{item['skill_id']}[/yellow]: skipped ({item['reason']})")
         console.print(Panel("\n".join(lines), title="Review action", border_style="cyan"))
@@ -4693,6 +4780,17 @@ def _print_review_report_rich(
             _first_sentence(skill.get("summary") or ""),
         )
     console.print(skill_table)
+
+
+def _print_review_duplicate_summary(summary: dict[str, Any]) -> None:
+    duplicate = summary.get("duplicate_content") or {}
+    if not duplicate.get("review_needed"):
+        return
+    print(
+        "  - duplicate approved content: "
+        f"{duplicate.get('review_needed', 0)} source-key approval(s), "
+        f"groups={duplicate.get('approved_overlap_groups', 0)}"
+    )
 
 
 def _print_lint_blocked(skills: list[dict[str, Any]]) -> None:
@@ -4790,6 +4888,9 @@ def _print_ready_for_approval(skills: list[dict[str, Any]], *, limit: int = 12) 
         print(f"    audience: {_audience_label(skill)}")
         if skill.get("summary"):
             _print_wrapped("    used for: ", _first_sentence(skill["summary"]), width=_output_width(), max_chars=140)
+        duplicate = skill.get("duplicate_of_reviewed") or {}
+        if duplicate.get("approved_ids"):
+            print(f"    duplicate of approved: {', '.join(duplicate['approved_ids'])}")
         _print_wrapped("    file: ", skill.get("entrypoint", "<unknown>"), width=_output_width(), break_long_words=True)
     if len(ready) > limit:
         print(f"  ... {len(ready) - limit} more low-risk skill(s); choose option 1 or run skillager setup --details to inspect all.")
@@ -4803,10 +4904,14 @@ def _print_ready_for_approval_rich(skills: list[dict[str, Any]], *, limit: int =
     table.add_column("Used for", overflow="fold")
     table.add_column("File", overflow="fold")
     for skill in skills[:limit]:
+        detail = _truncate(_first_sentence(skill.get("summary") or ""), 140)
+        duplicate = skill.get("duplicate_of_reviewed") or {}
+        if duplicate.get("approved_ids"):
+            detail = f"{detail} Same content as approved {', '.join(duplicate['approved_ids'])}.".strip()
         table.add_row(
             skill["id"],
             _audience_label(skill),
-            _truncate(_first_sentence(skill.get("summary") or ""), 140),
+            detail,
             skill.get("entrypoint", "<unknown>"),
         )
     console.print(table)
@@ -4973,7 +5078,7 @@ def _current_selected_skills(state_root: Path, selected_ids: list[str], *, catal
     by_id = {skill["id"]: skill for skill in load_index(state_root, approval_root=catalog_root).get("skills", [])}
     for skill in select_attached_tag_skills(state_root, catalog_root=catalog_root, approval_root=catalog_root, include_lint_blocked=True):
         by_id[skill["id"]] = skill
-    return [by_id[skill_id] for skill_id in selected_ids if skill_id in by_id]
+    return annotate_duplicate_content([by_id[skill_id] for skill_id in selected_ids if skill_id in by_id])
 
 
 def _unreviewed_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -5067,10 +5172,18 @@ def _interactive_review_skills(
 
 
 def _review_family_items(skills: list[dict[str, Any]], *, agent: str | None) -> list[list[dict[str, Any]]]:
+    items: list[list[dict[str, Any]]] = []
+    grouped_objects: set[int] = set()
+    for _, _, group in duplicate_content_group_entries(skills):
+        ordered = sorted(group, key=lambda skill: _agent_variant_preference_key(skill, agent))
+        items.append(ordered)
+        grouped_objects.update(id(skill) for skill in group)
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for skill in skills:
+        if id(skill) in grouped_objects:
+            continue
         groups[_agent_variant_family_key(skill)].append(skill)
-    items = [sorted(group, key=lambda skill: _agent_variant_preference_key(skill, agent)) for group in groups.values()]
+    items.extend(sorted(group, key=lambda skill: _agent_variant_preference_key(skill, agent)) for group in groups.values())
     return sorted(items, key=lambda group: _review_family_sort_key(group, agent))
 
 
@@ -5103,6 +5216,8 @@ def _interactive_review_family(
     print()
     print(_style(f"Review family {index} of {total}", "bold"))
     print(f"  family: {_agent_variant_family_key(preferred)} ({len(ordered)} variants)")
+    if _same_content_cross_source_group(ordered):
+        print("  duplicate content: same content appears under multiple source keys; approval records each source.")
     print(f"  preferred for {agent or 'this agent'}: {preferred['id']}")
     print(f"  risks: {risk_text}")
     for skill in ordered:
@@ -5143,6 +5258,15 @@ def _print_review_family_variant(skill: dict[str, Any], *, preferred: dict[str, 
         _print_wrapped("          ", _finding_detail(finding, group_risk=risk), width=_output_width())
     if len(findings) > 2:
         print(f"      ... {len(findings) - 2} more findings")
+
+
+def _same_content_cross_source_group(group: list[dict[str, Any]]) -> bool:
+    if len(group) <= 1:
+        return False
+    content_hashes = {skill.get("content_hash") for skill in group}
+    if len(content_hashes) != 1:
+        return False
+    return len({_agent_variant_family_key(skill) for skill in group}) > 1
 
 
 def _risk_sort_key(risk: str) -> tuple[int, str]:

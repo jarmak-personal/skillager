@@ -528,6 +528,103 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             self.assertEqual(results[0]["source"]["type"], "project")
             self.assertEqual(results[0]["exposure"], "native")
 
+    def test_status_reports_package_duplicate_of_reviewed_project_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            project_skill = root / ".skills" / "mapping"
+            package_skill = root / ".venv" / "lib" / "python3.13" / "site-packages" / "demo_pkg" / ".skills" / "mapping"
+            project_skill.mkdir(parents=True)
+            package_skill.mkdir(parents=True)
+            body = "# Mapping\n\nUse GIS domain concepts.\n"
+            (project_skill / "SKILL.md").write_text(body, encoding="utf-8")
+            (package_skill / "SKILL.md").write_text(body, encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages", "--summary-json"]), 0)
+                json_output = StringIO()
+                with redirect_stdout(json_output):
+                    self.assertEqual(main(["status", "--json"]), 0)
+                human_output = StringIO()
+                with redirect_stdout(human_output):
+                    self.assertEqual(main(["status"]), 0)
+
+            payload = json.loads(json_output.getvalue())
+            duplicate = payload["duplicate_content"]
+            self.assertEqual(duplicate["review_needed"], 1)
+            self.assertEqual(duplicate["review_needed_ids"], ["demo-pkg/mapping"])
+            self.assertEqual(duplicate["groups_detail"][0]["approved_ids"], ["project/mapping"])
+            self.assertTrue(duplicate["groups_detail"][0]["source_key_approval_required"])
+            self.assertNotIn("Use GIS domain concepts", json_output.getvalue())
+            self.assertIn("duplicate approved content", human_output.getvalue())
+
+    def test_changed_package_content_still_requires_review_without_duplicate_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            project_skill = root / ".skills" / "mapping"
+            package_skill = root / ".venv" / "lib" / "python3.13" / "site-packages" / "demo_pkg" / ".skills" / "mapping"
+            project_skill.mkdir(parents=True)
+            package_skill.mkdir(parents=True)
+            (project_skill / "SKILL.md").write_text("# Mapping\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (package_skill / "SKILL.md").write_text("# Mapping\n\nUse different GIS domain concepts.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages", "--summary-json"]), 0)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["status", "--json"]), 0)
+
+            payload = json.loads(output.getvalue())
+            self.assertEqual(payload["review_needed"], 1)
+            self.assertEqual(payload["duplicate_content"]["review_needed"], 0)
+            self.assertEqual(payload["duplicate_content"]["groups"], 0)
+
+    def test_review_output_explains_source_key_duplicate_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            project_skill = root / ".skills" / "mapping"
+            package_skill = root / ".venv" / "lib" / "python3.13" / "site-packages" / "demo_pkg" / ".skills" / "mapping"
+            project_skill.mkdir(parents=True)
+            package_skill.mkdir(parents=True)
+            body = "# Mapping\n\nUse GIS domain concepts.\n"
+            (project_skill / "SKILL.md").write_text(body, encoding="utf-8")
+            (package_skill / "SKILL.md").write_text(body, encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages", "--summary-json"]), 0)
+                    self.assertEqual(main(["index"]), 0)
+                review_output = StringIO()
+                with redirect_stdout(review_output):
+                    self.assertEqual(main(["review", "--summary"]), 0)
+                specific_output = StringIO()
+                with redirect_stdout(specific_output):
+                    self.assertEqual(main(["review", "demo-pkg/mapping", "--summary"]), 0)
+                action_output = StringIO()
+                with redirect_stdout(action_output):
+                    self.assertEqual(main(["review", "demo-pkg/mapping", "--trust-selected", "reviewed"]), 0)
+
+            self.assertIn("duplicate approved content", review_output.getvalue())
+            self.assertIn("demo-pkg/mapping", review_output.getvalue())
+            self.assertIn("duplicate approved content", specific_output.getvalue())
+            self.assertIn("same content as approved project/mapping", action_output.getvalue())
+
     def test_search_hides_global_skills_unless_requested(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"

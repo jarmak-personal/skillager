@@ -96,6 +96,33 @@ class SkillagerDoctorTests(unittest.TestCase):
             self.assertEqual(data["next"]["command"], "skillager setup --agent codex")
             self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
 
+    def test_doctor_explains_same_content_duplicate_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            project_skill = root / ".skills" / "mapping"
+            package_skill = root / ".venv" / "lib" / "python3.13" / "site-packages" / "demo_pkg" / ".skills" / "mapping"
+            project_skill.mkdir(parents=True)
+            package_skill.mkdir(parents=True)
+            body = "# Mapping\n\nUse GIS domain concepts.\n"
+            (project_skill / "SKILL.md").write_text(body, encoding="utf-8")
+            (package_skill / "SKILL.md").write_text(body, encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages", "--summary-json"]), 0)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["doctor", "--agent", "codex", "--json"]), 10)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["status"], "review-needed")
+            self.assertIn("source-key approval", data["message"])
+            self.assertEqual(data["state"]["duplicate_content"]["review_needed_ids"], ["demo-pkg/mapping"])
+
     def test_doctor_unreviewed_skill_without_agent_lists_setup_agent_choices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -786,6 +786,38 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(by_id["project/gis-domain"], "reviewed")
             self.assertEqual(by_id["project/gis-domain-vibespatial-claude"], "reviewed")
 
+    def test_interactive_setup_review_groups_same_content_source_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            project_skill = root / ".skills" / "gis-domain"
+            package_skill = root / ".venv" / "lib" / "python3.13" / "site-packages" / "demo_pkg" / ".skills" / "gis-domain"
+            project_skill.mkdir(parents=True)
+            package_skill.mkdir(parents=True)
+            body = "# GIS Domain\n\nUse GIS domain concepts.\n"
+            (project_skill / "SKILL.md").write_text(body, encoding="utf-8")
+            (package_skill / "SKILL.md").write_text(body, encoding="utf-8")
+            stdin = TtyStringIO("1\ny\nn\n")
+            stdout = TtyStringIO()
+            with (
+                patch("sys.stdin", stdin),
+                patch("sys.stdout", stdout),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                self.assertEqual(main(["setup", "--audience", "user", "--agent", "codex", "--no-bootstrap"]), 0)
+            text = stdout.getvalue()
+            self.assertIn("Review family 1 of 1", text)
+            self.assertIn("duplicate content: same content appears under multiple source keys", text)
+            self.assertIn("variant: demo-pkg/gis-domain", text)
+            self.assertNotIn("Review skill 2", text)
+            data = load_index(state, approval_root=state)
+            by_id = {skill["id"]: skill["trust"] for skill in data["skills"]}
+            self.assertEqual(by_id["project/gis-domain"], "reviewed")
+            self.assertEqual(by_id["demo-pkg/gis-domain"], "reviewed")
+
     def test_interactive_setup_review_keeps_single_cross_agent_variant_visible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
