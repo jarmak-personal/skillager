@@ -16,6 +16,17 @@ from skillager.materialize import materialize_skills
 from skillager.trust import content_hash, set_trust
 
 
+def write_manifest(skill_dir: Path, audience: str) -> None:
+    skill_dir.joinpath("skillager.yaml").write_text(
+        "schema: skillager.skill.v1\n"
+        "audience:\n"
+        f"  - {audience}\n"
+        "activation:\n"
+        "  default: manual\n",
+        encoding="utf-8",
+    )
+
+
 class SkillagerMaterializeTests(unittest.TestCase):
 
     def test_materialize_index_mode_is_removed(self) -> None:
@@ -27,7 +38,38 @@ class SkillagerMaterializeTests(unittest.TestCase):
         self.assertIn("invalid choice", stderr.getvalue())
         self.assertIn("'index'", stderr.getvalue())
 
-    def test_materialize_writes_project_agent_note(self) -> None:
+    def test_materialize_requires_explicit_selection_or_all_reviewed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            stderr = StringIO()
+            with (
+                redirect_stderr(stderr),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                self.assertEqual(main(["materialize", "--agent", "codex"]), 2)
+            self.assertIn("materialize requires explicit skill IDs, --tag, or --all-reviewed", stderr.getvalue())
+            self.assertIn("skillager bootstrap --agent <agent>", stderr.getvalue())
+
+    def test_materialize_rejects_all_reviewed_include_unreviewed_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            stderr = StringIO()
+            with (
+                redirect_stderr(stderr),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                self.assertEqual(main(["materialize", "--all-reviewed", "--include-unreviewed", "--agent", "codex"]), 2)
+            self.assertIn("--all-reviewed cannot be combined with --include-unreviewed", stderr.getvalue())
+
+    def test_materialize_does_not_write_first_party_handoff_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -41,38 +83,13 @@ class SkillagerMaterializeTests(unittest.TestCase):
                     repeat = StringIO()
                     with redirect_stdout(repeat):
                         self.assertEqual(main(["materialize", "project/demo", "--agent", "codex"]), 0)
-            note = root / "AGENTS.md"
-            text = note.read_text(encoding="utf-8")
-            self.assertIn("## Skillager", text)
-            self.assertIn("skillager handoff", text)
-            self.assertEqual(text.count("## Skillager"), 1)
+            self.assertFalse((root / "AGENTS.md").exists())
+            self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+            self.assertTrue((root / ".agents" / "skills" / "project-demo" / "SKILL.md").exists())
             self.assertIn("project/demo: materialized", repeat.getvalue())
             self.assertNotIn("Next step", repeat.getvalue())
 
-    def test_materialize_refreshes_legacy_status_project_agent_note(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            state = root / ".skillager"
-            skill_dir = root / ".skills" / "demo"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
-            (root / "AGENTS.md").write_text(
-                "Existing project notes.\n"
-                "## Skillager\n"
-                "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
-                "ask the user to run `skillager setup` if review is needed.\n",
-                encoding="utf-8",
-            )
-            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
-                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
-                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
-                    self.assertEqual(main(["materialize", "project/demo", "--agent", "codex"]), 0)
-            text = (root / "AGENTS.md").read_text(encoding="utf-8")
-            self.assertEqual(text.count("## Skillager"), 1)
-            self.assertIn("skillager handoff", text)
-            self.assertNotIn("skillager status", text)
-
-    def test_materialize_refreshes_drifted_legacy_status_project_agent_note(self) -> None:
+    def test_materialize_does_not_repair_existing_project_agent_note(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -92,33 +109,32 @@ class SkillagerMaterializeTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
                     self.assertEqual(main(["materialize", "project/demo", "--agent", "codex"]), 0)
             text = (root / "AGENTS.md").read_text(encoding="utf-8")
-            self.assertEqual(text.count("## Skillager"), 1)
-            self.assertIn("skillager handoff", text)
-            self.assertNotIn("skillager status", text)
+            self.assertIn("skillager status", text)
+            self.assertNotIn("skillager handoff", text)
             self.assertIn("Other notes stay.", text)
 
-    def test_materialize_refreshes_headerless_legacy_status_project_agent_note(self) -> None:
+    def test_materialize_all_reviewed_materializes_selected_filter_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
-            skill_dir = root / ".skills" / "demo"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
-            (root / "AGENTS.md").write_text(
-                "Existing project notes.\n"
-                "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
-                "ask the user to run `skillager setup` if review is needed.\n",
-                encoding="utf-8",
-            )
+            user_skill = root / ".skills" / "gis-domain"
+            dev_skill = root / ".skills" / "commit"
+            user_skill.mkdir(parents=True)
+            dev_skill.mkdir(parents=True)
+            (user_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (dev_skill / "SKILL.md").write_text("# Commit\n\nUse commit workflow guidance.\n", encoding="utf-8")
+            write_manifest(user_skill, "user")
+            write_manifest(dev_skill, "dev")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
-                    self.assertEqual(main(["materialize", "project/demo", "--agent", "codex"]), 0)
-            text = (root / "AGENTS.md").read_text(encoding="utf-8")
-            self.assertEqual(text.count("## Skillager"), 1)
-            self.assertIn("Existing project notes.", text)
-            self.assertIn("skillager handoff", text)
-            self.assertNotIn("skillager status", text)
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        self.assertEqual(main(["materialize", "--all-reviewed", "--audience", "user", "--agent", "codex"]), 0)
+            self.assertIn("project/gis-domain: materialized", output.getvalue())
+            self.assertNotIn("project/commit: materialized", output.getvalue())
+            self.assertTrue((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
+            self.assertFalse((root / ".agents" / "skills" / "project-commit" / "SKILL.md").exists())
 
     def test_materialize_prints_next_steps_for_new_skill_in_existing_skillager_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -155,7 +171,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
         self.assertIn("project/demo: materialized /tmp/demo", text)
         self.assertNotIn("already up to date", text)
 
-    def test_materialize_uses_existing_agent_instruction_files(self) -> None:
+    def test_materialize_leaves_existing_agent_instruction_files_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -168,10 +184,10 @@ class SkillagerMaterializeTests(unittest.TestCase):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
                     self.assertEqual(main(["materialize", "project/demo", "--agent", "codex"]), 0)
-            self.assertIn("## Skillager", (root / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertEqual((root / "AGENTS.md").read_text(encoding="utf-8"), "# Agents\n")
             self.assertNotIn("## Skillager", (root / "CLAUDE.md").read_text(encoding="utf-8"))
 
-    def test_materialize_updates_both_agent_instruction_files_when_both_agents_targeted(self) -> None:
+    def test_materialize_all_agents_leaves_agent_instruction_files_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -184,10 +200,10 @@ class SkillagerMaterializeTests(unittest.TestCase):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
                     self.assertEqual(main(["materialize", "project/demo", "--agent", "codex", "--agent", "claude"]), 0)
-            self.assertIn("## Skillager", (root / "AGENTS.md").read_text(encoding="utf-8"))
-            self.assertIn("## Skillager", (root / "CLAUDE.md").read_text(encoding="utf-8"))
+            self.assertEqual((root / "AGENTS.md").read_text(encoding="utf-8"), "# Agents\n")
+            self.assertEqual((root / "CLAUDE.md").read_text(encoding="utf-8"), "# Claude\n")
 
-    def test_materialize_creates_claude_note_for_claude_only_project(self) -> None:
+    def test_materialize_claude_only_does_not_create_handoff_note(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -201,8 +217,8 @@ class SkillagerMaterializeTests(unittest.TestCase):
                     with redirect_stdout(output):
                         self.assertEqual(main(["materialize", "project/demo", "--agent", "claude"]), 0)
             self.assertFalse((root / "AGENTS.md").exists())
-            self.assertIn("## Skillager", (root / "CLAUDE.md").read_text(encoding="utf-8"))
-            self.assertIn(str(root / "CLAUDE.md"), output.getvalue())
+            self.assertFalse((root / "CLAUDE.md").exists())
+            self.assertIn("project/demo: materialized", output.getvalue())
             self.assertNotIn(str(root / "AGENTS.md"), output.getvalue())
 
     def test_materialize_missing_skill_id_fails_clearly(self) -> None:
@@ -381,7 +397,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
                 },
             ]
             with patch("pathlib.Path.home", return_value=root), chdir(root):
-                results = materialize_skills(skills, agents=["codex"], scope="project", include_working=False, project_dir=root)
+                results = materialize_skills(skills, agents=["codex"], scope="project", project_dir=root)
             self.assertEqual([item["status"] for item in results], ["materialized", "materialized"])
             base = root / ".agents" / "skills"
             self.assertTrue((base / "project-a-b" / "SKILL.md").exists())

@@ -21,12 +21,12 @@ To make a collection available to the current project, enable it:
 
 ```bash
 skillager collection enable community
-skillager setup --source collection
+skillager setup --source collection --agent codex
 ```
 
 `collection enable` creates or updates a reusable catalog tag with the collection's visible skills and attaches that tag to the current project. Blocked and lint-blocked skills are not added by the default enable flow. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path; `--yolo` is the same trusted-source shortcut with a blunter name. For untrusted repositories, use the normal review flow.
 
-`setup --source collection` reviews collection skills attached to the current project. Registered collections that have not been enabled or attached stay as catalog inventory.
+`setup --source collection --agent <agent>` reviews collection skills attached to the current project and refreshes that agent's first-party handoff artifacts after approval. Registered collections that have not been enabled or attached stay as catalog inventory. If review is complete but handoff still reports missing or stale artifacts, run `skillager doctor --agent <agent>` for the exact repair command.
 
 Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager lint` or `skillager collection show <skill-id> --include-lint-blocked` to inspect them without printing hostile manifest contents.
 
@@ -60,12 +60,12 @@ When a project attaches a tag from an external catalog location, Skillager recor
 
 After review, keep most large-repository skills searchable behind Skillager. Materialize only a small native set that is always relevant to the project, use stub mode for approved commands that should be visible by name, or use router mode for a curated tag when the agent needs broad access without loading every skill. Agents may update tags and scoped exposure after you tell them what you are working on; they should report the changes they made.
 
-Once a tag is attached, its reviewed skills are part of effective project inventory. Agents can use normal project commands instead of collection-specific commands:
+Once a tag is attached, its available skills are part of effective project inventory. Agents can use normal project commands instead of collection-specific commands:
 
 ```bash
-skillager search "mapping workflow" --trusted-only --json
+skillager search "mapping workflow" --json
 skillager show community/gis-domain --json
-skillager list --json
+skillager list --summary-json --agent codex
 ```
 
 `skillager collection search/show` remains useful for catalog management and debugging. Use `--include-lint-blocked` only when diagnosing rejected collection entries.
@@ -78,7 +78,7 @@ For large tags, prefer router mode:
 skillager materialize --tag gis --mode router --agent codex --scope project
 ```
 
-This writes one compact native router skill. The router includes approved skill IDs and author summaries, then tells the agent to activate a specific skill through Skillager when needed.
+This writes one compact native router skill. The router includes available skill IDs and author summaries, then tells the agent to activate a specific skill through Skillager when needed.
 
 For personal command collections where the names themselves are useful, expose selected commands as stubs:
 

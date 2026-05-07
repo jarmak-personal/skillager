@@ -1,0 +1,31 @@
+{
+  "schema": "skillager.permission-allowlist.v1",
+  "agent": "claude",
+  "purpose": "Recommended metadata-only Skillager commands for Claude permission allowlists.",
+  "read_only_commands": [
+    "skillager status --json",
+    "skillager handoff --agent claude --json",
+    "skillager list --summary-json --agent claude",
+    "skillager search <query> --agent claude --json",
+    "skillager show <skill-id> --json",
+    "skillager tag show <tag> --json"
+  ],
+  "deliberately_excluded": [
+    "skillager doctor",
+    "skillager doctor --fix",
+    "skillager setup",
+    "skillager review",
+    "skillager trust",
+    "skillager block",
+    "skillager activate",
+    "skillager show --content",
+    "skillager materialize",
+    "skillager tag add",
+    "skillager project attach-tag"
+  ],
+  "notes": [
+    "Adapt these command patterns to the permission format your Claude environment uses.",
+    "The listed commands do not approve skills, expose skills, or print skill bodies.",
+    "Search may record compact local session telemetry unless --no-session-record is added."
+  ]
+}

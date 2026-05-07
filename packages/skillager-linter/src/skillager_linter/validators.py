@@ -50,7 +50,7 @@ def validate_skill_metadata(
             root=root.resolve(),
             entrypoint=entrypoint,
             manifest_path=None,
-            audience=("user",),
+            audience=(),
             activation="manual",
             compatibility=normalize_compatibility(None, text=text, root=root),
             targets={},
@@ -132,7 +132,7 @@ def find_manifest(root: Path) -> Path | None:
 
 def _identity_from_skill_md(root: Path, text: str) -> tuple[str, str]:
     frontmatter = _frontmatter(text)
-    heading = frontmatter.get("name") or _first_heading(text) or root.name.replace("-", " ").replace("_", " ").title()
+    heading = frontmatter.get("name") or _first_top_level_heading(text) or root.name.replace("-", " ").replace("_", " ").title()
     summary = frontmatter.get("description") or _first_sentence(text, heading)
     return heading, summary
 
@@ -401,11 +401,13 @@ def _targets(value: Any) -> dict[str, Any]:
     return {"python_packages": result}
 
 
-def _first_heading(text: str) -> str | None:
+def _first_top_level_heading(text: str) -> str | None:
     for line in _body_without_frontmatter(text).splitlines():
         stripped = line.strip()
-        if stripped.startswith("#"):
-            return stripped.lstrip("#").strip()
+        if stripped.startswith("# ") and not stripped.startswith("##"):
+            heading = stripped[2:].strip()
+            if heading:
+                return heading
     return None
 
 

@@ -4,15 +4,25 @@ import hashlib
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
 def find_project_root(start: Path | None = None) -> Path | None:
     current = (start or Path.cwd()).resolve()
     for path in (current, *current.parents):
+        if path != current and path in _unsafe_project_parent_roots():
+            break
         if (path / ".git").exists() or (path / "pyproject.toml").exists():
             return path
     return current
+
+
+def _unsafe_project_parent_roots() -> set[Path]:
+    roots = {Path(tempfile.gettempdir()).resolve()}
+    cache_home = os.environ.get("XDG_CACHE_HOME")
+    roots.add(Path(cache_home).expanduser().resolve() if cache_home else (Path.home() / ".cache").resolve())
+    return roots
 
 
 def state_root(start: Path | None = None) -> Path:

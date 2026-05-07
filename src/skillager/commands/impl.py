@@ -20,12 +20,14 @@ from rich.table import Table
 
 from .. import __version__
 from ..authored import record_authored_skill
+from ..audience import AUDIENCE_OTHER, audience_bucket, audience_bucket_label, declared_audiences
 from ..compatibility import compatibility_problem, compatibility_warnings
 from ..collections import (
     ack_collection_migrations,
     add_collection,
     add_tag_skill,
     attach_project_tag,
+    clear_project_tags,
     collection_migration_summary,
     create_tag,
     detach_project_tag,
@@ -45,21 +47,40 @@ from ..collections import (
 from ..families import agent_variant_family_key, canonical_agent_variant_slug
 from ..index import build_index, find_skill, load_index
 from ..lookback import build_lookback, record_feedback, render_lookback
-from ..materialize import AGENT_NOTE, TRUSTED_STATES, WORKING_SKILL_ID, agent_note_paths, materialize_skills, materialize_working_skill
+from ..materialize import (
+    AGENT_NOTE,
+    TRUSTED_STATES,
+    WORKING_REASON_LOCAL_CUSTOMIZATION,
+    WORKING_REASON_UNMANAGED,
+    WORKING_SKILL_ID,
+    agent_note_paths,
+    ensure_agent_notes,
+    materialize_skills,
+    materialize_working_skill,
+)
 from ..materialize import materialize_router
 from ..materialize import target_dir, working_source_hash
 from ..manifest import init_manifests
 from ..paths import cache_root, catalog_state_root, find_project_root, legacy_project_state_root, state_root
 from ..render import render_skill
-from ..review import apply_review_action, review_summary, setup_environment
+from ..review import (
+    annotate_duplicate_content,
+    apply_review_action,
+    duplicate_content_group_entries,
+    duplicate_content_summary,
+    review_summary,
+    setup_environment,
+)
 from ..scan import scan_path
 from ..search import search as search_index
 from ..selection import select_visible_skills
 from ..session import (
     current_session,
+    clear_sessions,
     end_session,
     prune_sessions,
     read_events,
+    record_doctor_event,
     record_materialize_events,
     record_search_event,
     record_skill_event,
@@ -70,6 +91,53 @@ from ..session import (
 from ..simple_yaml import YamlError, load_mapping
 from ..trust import content_hash, load_trust, make_lint_override, save_trust, set_trust
 from ..update_check import check_for_update
+
+
+HANDOFF_REASON_AGENT_REQUIRED = "agent_required"
+HANDOFF_REASON_WORKING_MISSING = "working_missing"
+HANDOFF_REASON_WORKING_STALE = "working_stale"
+HANDOFF_REASON_WORKING_UNMANAGED = "working_unmanaged"
+HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION = "working_local_customization"
+HANDOFF_REASON_WORKING_WRONG_SOURCE = "working_wrong_source"
+HANDOFF_REASON_WORKING_UNREADABLE_SIDECAR = "working_unreadable_sidecar"
+HANDOFF_REASON_WORKING_DRIFT = "working_drift"
+HANDOFF_REASON_PROJECT_NOTE_MISSING = "project_note_missing"
+HANDOFF_REASON_PROJECT_NOTE_STALE = "project_note_stale"
+HANDOFF_REASON_PROJECT_NOTE_UNKNOWN = "project_note_unknown"
+HANDOFF_REASON_HANDOFF_ARTIFACTS = "handoff_artifacts"
+HANDOFF_REASON_CODES = (
+    HANDOFF_REASON_AGENT_REQUIRED,
+    HANDOFF_REASON_WORKING_MISSING,
+    HANDOFF_REASON_WORKING_STALE,
+    HANDOFF_REASON_WORKING_UNMANAGED,
+    HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
+    HANDOFF_REASON_WORKING_WRONG_SOURCE,
+    HANDOFF_REASON_WORKING_UNREADABLE_SIDECAR,
+    HANDOFF_REASON_WORKING_DRIFT,
+    HANDOFF_REASON_PROJECT_NOTE_MISSING,
+    HANDOFF_REASON_PROJECT_NOTE_STALE,
+    HANDOFF_REASON_PROJECT_NOTE_UNKNOWN,
+    HANDOFF_REASON_HANDOFF_ARTIFACTS,
+)
+DOCTOR_EXIT_READY = 0
+DOCTOR_EXIT_REVIEW_NEEDED = 10
+DOCTOR_EXIT_BOOTSTRAP_REPAIR = 11
+DOCTOR_EXIT_LINT_BLOCKED = 12
+DOCTOR_EXIT_MIGRATION_NEEDED = 13
+DOCTOR_EXIT_MANUAL_REPAIR = 14
+DOCTOR_EXIT_LOOKBACK_PENDING = 15
+SETUP_BOOTSTRAP_REASON_NO_APPROVED = "no_approved_skills"
+SETUP_BOOTSTRAP_REASON_DISABLED = "bootstrap_disabled"
+SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED = "agent_not_specified"
+_WORKING_DRIFT_REASON_CODES = {
+    "local customization": HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
+    "target is not Skillager Working": HANDOFF_REASON_WORKING_WRONG_SOURCE,
+    "unreadable sidecar": HANDOFF_REASON_WORKING_UNREADABLE_SIDECAR,
+}
+_PROJECT_NOTE_REASON_CODES = {
+    "missing": HANDOFF_REASON_PROJECT_NOTE_MISSING,
+    "stale": HANDOFF_REASON_PROJECT_NOTE_STALE,
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,24 +161,23 @@ def build_parser() -> argparse.ArgumentParser:
             Skillager is a pure CLI registry and materialization tool for agent skills.
 
             Agent-safe default workflow:
-              1. skillager status
-              2. skillager setup
-              3. Ask the user what they plan to do in the repo
-              4. Inspect approved metadata with search/list/show
-              5. Tag approved skills and expose a narrow router, stub, native skill, or no new exposure
-              6. skillager lookback --agent codex --external-session-id <id>
+              1. skillager handoff
+              2. Ask the user what they plan to do in the repo
+              3. Inspect available metadata with search/list/show
+              4. Tag available skills and expose a narrow router, stub, native skill, or no new exposure
+              5. Ask before `skillager lookback --agent codex --external-session-id <id>`
 
             Important rules:
-              - Do not activate or materialize unreviewed skills unless the user explicitly asks.
-              - Agents should start with `skillager status`; it is metadata-only and safe.
-              - Agents should ask the user to run `skillager setup` when status reports review needed.
+              - Do not activate or materialize unavailable skills unless the user explicitly asks.
+              - Agents should start with `skillager handoff`; it is metadata-only and safe.
+              - Agents should ask the user to run `skillager setup` when handoff reports pending owner review.
               - Prefer project scope inside repos so users can inspect and customize local copies.
               - Use --json when another program or agent needs stable machine-readable output.
 
             Agent command contract:
-              status/search/list/show without --content are safe metadata commands.
+              handoff/status/search/list/show without --content are safe metadata commands.
               setup/review/trust/block change approval state and need user intent.
-              tag/project/materialize may curate or expose only already-approved skills; report changes.
+              tag/project/materialize may curate or expose only available skills; report changes.
               activate/show --content reveal skill bodies and require prior approval.
             """
         ),
@@ -123,7 +190,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_setup_parser(sub)
     add_status_parser(sub)
+    add_doctor_parser(sub)
     add_handoff_parser(sub)
+    add_bootstrap_parser(sub)
     add_collection_parser(sub)
     add_tag_parser(sub)
     add_project_parser(sub)
@@ -146,32 +215,29 @@ def build_parser() -> argparse.ArgumentParser:
         "list",
         help="List effective project skill metadata.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="List effective project skills, including attached collection-tag skills. Blocked skills are hidden unless requested.",
-        epilog="Examples:\n  skillager list\n  skillager list --summary-json --agent codex\n  skillager list --no-packages --json\n  skillager list --include-global\n  skillager list --trust reviewed\n  skillager list --source python-package --json",
+        description="List available effective project skills, including attached collection-tag skills.",
+        epilog="Examples:\n  skillager list\n  skillager list --summary-json --agent codex\n  skillager list --no-packages --json\n  skillager list --include-global\n  skillager list --source python-package --json\n  skillager list --json --full-json",
     )
     p.add_argument("--source")
-    p.add_argument("--trust")
     p.add_argument("--activation")
     p.add_argument("--audience")
     p.add_argument("--package")
     p.add_argument("--agent", choices=["codex", "claude"], help="Annotate duplicate native variants with this agent's preference. Does not hide alternatives.")
     p.add_argument("--no-packages", action="store_true", help="Hide installed package skills from the listing.")
     p.add_argument("--include-global", action="store_true", help="Include already-installed global native skills. Defaults to local/project/package inventory.")
-    p.add_argument("--include-blocked", action="store_true", help="Include blocked skills in output.")
-    p.add_argument("--include-lint-blocked", action="store_true", help="Include lint-blocked skills in diagnostic output.")
     p.add_argument("--json", action="store_true", help="Emit listed skills as JSON.")
     p.add_argument("--summary-json", action="store_true", help="Emit compact inventory counts, all listed skill IDs, and duplicate variant hints.")
+    p.add_argument("--full-json", action="store_true", help="Emit full indexed metadata, including review diagnostics.")
     p.set_defaults(func=cmd_list)
 
     p = sub.add_parser(
         "search",
         help="Search effective project skill metadata.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Search compact effective project skill metadata. Search does not activate or materialize skills.",
+        description="Search compact available project skill metadata. Search does not activate or materialize skills.",
         epilog=(
             "Examples:\n"
             "  skillager search dataframe\n"
-            "  skillager search testing --trusted-only\n"
             "  skillager search pandas --json\n"
             "  skillager search pandas --json --limit 20\n"
             "  skillager search pandas --json --full-json"
@@ -179,11 +245,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("query")
     p.add_argument("--tag", help="Search skills in a curated tag.")
-    p.add_argument("--include-blocked", action="store_true", help="Include blocked skills in search results.")
-    p.add_argument("--include-lint-blocked", action="store_true", help="Include lint-blocked skills in diagnostic search results.")
     p.add_argument("--include-global", action="store_true", help="Include global native skills. Defaults to project/environment/package and attached collection skills.")
-    p.add_argument("--trusted-only", action="store_true", help="Return only reviewed/trusted/pinned skills.")
-    p.add_argument("--approved-only", action="store_true", help="Alias for --trusted-only; when used with --tag, requires the tag to be attached to this project.")
     p.add_argument("--agent", choices=["codex", "claude"], help="Include compatibility warnings for this agent.")
     p.add_argument("--compatible-only", action="store_true", help="Hide skills explicitly marked incompatible with --agent. Skills without metadata are assumed compatible.")
     p.add_argument("--limit", type=int, default=10, help="Maximum search results to return. Use 0 for no limit.")
@@ -196,26 +258,26 @@ def build_parser() -> argparse.ArgumentParser:
         "show",
         help="Show skill metadata.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Show one effective project skill's metadata. Use --content only when the skill has already been reviewed or the user asks.",
+        description="Show one available project skill's metadata. Use --content only when the user asks for the full body.",
         epilog="Examples:\n  skillager show fastapi/fastapi\n  skillager show fastapi/fastapi --json\n  skillager show fastapi/fastapi --content",
     )
     p.add_argument("skill_id")
-    p.add_argument("--content", action="store_true", help="Show full SKILL.md content. Avoid for unapproved skills.")
-    p.add_argument("--include-lint-blocked", action="store_true", help="Allow showing lint findings for a lint-blocked skill.")
+    p.add_argument("--content", action="store_true", help="Show full SKILL.md content for an available skill.")
     p.add_argument("--activate", action="store_true", help="Record this show as an activation event.")
     p.add_argument("--json", action="store_true", help="Emit skill metadata/content as JSON.")
+    p.add_argument("--full-json", action="store_true", help="Emit full indexed metadata, including review diagnostics.")
     p.set_defaults(func=cmd_show)
 
     p = sub.add_parser(
         "activate",
         help="Emit full skill content.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Emit full skill content to stdout. Activation requires reviewed/trusted/pinned status unless --force is used.",
+        description="Emit full skill content to stdout. Activation requires an available skill unless an explicit owner override is used.",
         epilog="Examples:\n  skillager activate fastapi/fastapi\n  skillager activate fastapi/fastapi --from-stub fastapi-fastapi\n  skillager activate fastapi/fastapi --format codex\n  skillager activate fastapi/fastapi --agent codex --external-session-id <id>",
     )
     p.add_argument("skill_id")
     p.add_argument("--format", choices=["markdown", "codex", "claude", "json"], default="markdown")
-    p.add_argument("--force", action="store_true", help="Allow activation despite unreviewed/high-risk status. Use only with explicit user approval.")
+    p.add_argument("--force", action="store_true", help="Allow activation despite review state. Use only with explicit user approval.")
     p.add_argument("--allow-incompatible", action="store_true", help="Allow activation even when skill metadata explicitly excludes this agent.")
     p.add_argument("--from-router", help="Router skill slug, e.g. skillager-gis. Refuses skills outside the attached router tag.")
     p.add_argument("--from-stub", help="Stub skill slug, e.g. fastapi-fastapi. Refuses activation unless that stub is materialized in this project.")
@@ -373,8 +435,9 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
             Examples:
               skillager setup
               skillager setup --fresh
-              skillager setup --fresh-all
+              skillager setup --fresh-project
               skillager setup --source project --accept-low
+              skillager setup --source project --accept-low --agent codex
               skillager setup --include-global
               skillager setup --package pandas --trust-selected reviewed
               skillager setup --block-high
@@ -393,9 +456,17 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     p.add_argument("--no-packages", action="store_true", help="Skip installed package skill discovery.")
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills in setup review. Defaults to local/environment/package skills only.")
     p.add_argument("--fresh", action="store_true", help="Clear prior project-local trust decisions for the selected setup scope before review. Does not revoke reusable global approvals or delete materialized skill files.")
-    p.add_argument("--fresh-all", action="store_true", help="Clear project-local trust and matching reusable global approvals for the selected setup scope before review.")
+    p.add_argument(
+        "--fresh-project",
+        action="store_true",
+        help="Reset this project's Skillager state before setup. Clears project trust decisions, tags, sessions, and saved setup scope; keeps reusable global approvals, global catalog entries, and materialized skill files.",
+    )
     add_review_filters(p)
     add_review_actions(p)
+    target = p.add_mutually_exclusive_group()
+    target.add_argument("--agent", action="append", choices=["codex", "claude"], help="Bootstrap this agent's first-party project handoff artifacts after setup. Repeat to target multiple agents.")
+    target.add_argument("--all-agents", action="store_true", help="Bootstrap first-party project handoff artifacts for both Codex and Claude after setup.")
+    p.add_argument("--no-bootstrap", action="store_true", help="Review setup scope without writing first-party handoff artifacts.")
     p.add_argument("--details", action="store_true", help="Print every selected skill. Default output is compact.")
     p.add_argument("--non-interactive", action="store_true", help="Print report only; do not prompt for choices.")
     p.add_argument("--json", action="store_true", help="Emit setup report as JSON.")
@@ -406,14 +477,14 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
 def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "status",
-        help="Agent-safe check for new or unreviewed skills.",
+        help="Check Skillager availability and handoff readiness.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
-            Check whether the current project/environment has new or unreviewed
-            skills. This command rebuilds compact metadata and scanner results,
-            but does not activate skills, emit skill bodies, approve anything, or
-            materialize anything.
+            Check Skillager availability for the current project/environment.
+            Compact JSON is available-only for agents. Full JSON is intended for
+            explicit owner diagnostics. This command does not activate skills,
+            emit skill bodies, approve anything, or materialize anything.
 
             Agents can run this at session start from a project with a Skillager
             handoff note. If review is needed, ask the user to run `skillager setup`.
@@ -425,6 +496,7 @@ def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             Examples:
               skillager status
               skillager status --json
+              skillager status --agent codex --json
               skillager status --json --full-json
               skillager status --quiet
               skillager status --exit-code
@@ -436,13 +508,46 @@ def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills. Defaults to local/environment/package skills only.")
     p.add_argument("--include-lint-blocked", action="store_true", help="Include lint-blocked skills in diagnostic counts.")
     p.add_argument("--all", action="store_true", help="Ignore the saved setup scope and report all selected skills.")
+    p.add_argument("--agent", choices=["codex", "claude"], help="Check first-party handoff readiness for this agent.")
     p.add_argument("--quiet", action="store_true", help="Print one concise line.")
-    p.add_argument("--exit-code", action="store_true", help="Exit 10 when review is needed. Default exit code is 0.")
+    p.add_argument("--exit-code", action="store_true", help="Exit 10 when review is needed, or 11 when approved skills exist but handoff artifacts need repair.")
     p.add_argument("--ack-migration", action="store_true", help="Acknowledge the current collection ID migration report.")
     p.add_argument("--migration-details", action="store_true", help="Print collection ID migration details for review before acking.")
     p.add_argument("--json", action="store_true", help="Emit status as JSON.")
-    p.add_argument("--full-json", action="store_true", help="Include verbose scope baseline details in JSON output.")
+    p.add_argument("--full-json", action="store_true", help="Include verbose scope baseline and review diagnostic details in JSON output.")
     p.set_defaults(func=cmd_status)
+
+
+def add_doctor_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "doctor",
+        help="Diagnose Skillager readiness and print exact next commands.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent(
+            """\
+            Diagnose the current project readiness without approving skills,
+            activating skills, or exposing third-party content. Doctor rebuilds
+            metadata, reports review and handoff readiness, and chooses one exact
+            next action. With --fix, doctor may repair first-party bootstrap
+            artifacts only.
+            """
+        ),
+        epilog=textwrap.dedent(
+            """\
+            Examples:
+              skillager doctor --agent codex
+              skillager doctor --agent claude --json
+              skillager doctor --agent codex --fix
+            """
+        ),
+    )
+    p.add_argument("--agent", choices=["codex", "claude"], help="Agent target for handoff readiness and bootstrap repairs.")
+    p.add_argument("--fix", action="store_true", help="Repair first-party bootstrap artifacts when that is the selected next action. Requires --agent to write.")
+    p.add_argument("--no-packages", action="store_true", help="Skip installed package skill discovery.")
+    p.add_argument("--include-global", action="store_true", help="Include already-installed global skills in diagnostics.")
+    p.add_argument("--no-session-record", action="store_true", help="Do not record a compact local doctor event for lookback telemetry.")
+    p.add_argument("--json", action="store_true", help="Emit doctor results as JSON.")
+    p.set_defaults(func=cmd_doctor)
 
 
 def add_handoff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -471,6 +576,37 @@ def add_handoff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     p.add_argument("--agent", choices=["codex", "claude"], help="Agent target. Defaults to the detected agent or codex.")
     p.add_argument("--json", action="store_true", help="Emit handoff data as JSON.")
     p.set_defaults(func=cmd_handoff)
+
+
+def add_bootstrap_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "bootstrap",
+        help="Install or refresh Skillager's first-party project handoff artifacts.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent(
+            """\
+            Install or refresh Skillager Working and the project handoff note for
+            a selected agent. Bootstrap is first-party plumbing only: it does not
+            approve, activate, or expose third-party skills.
+            """
+        ),
+        epilog=textwrap.dedent(
+            """\
+            Examples:
+              skillager bootstrap --agent codex
+              skillager bootstrap --agent claude
+              skillager bootstrap --all-agents
+              skillager bootstrap --agent codex --dry-run --json
+            """
+        ),
+    )
+    target = p.add_mutually_exclusive_group(required=True)
+    target.add_argument("--agent", action="append", choices=["codex", "claude"], help="Agent target. Repeat to target multiple agents.")
+    target.add_argument("--all-agents", action="store_true", help="Target both codex and claude.")
+    p.add_argument("--dry-run", action="store_true", help="Report first-party artifacts that would be written without writing files.")
+    p.add_argument("--force", action="store_true", help="Overwrite managed local customizations or unmanaged Skillager Working targets.")
+    p.add_argument("--json", action="store_true", help="Emit bootstrap results as JSON.")
+    p.set_defaults(func=cmd_bootstrap)
 
 
 def add_collection_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -569,6 +705,7 @@ def add_tag_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
     show.add_argument("tag")
     show.add_argument("--include-lint-blocked", action="store_true")
     show.add_argument("--json", action="store_true")
+    show.add_argument("--full-json", action="store_true", help="Emit full indexed metadata, including review diagnostics.")
     show.set_defaults(func=cmd_tag_show)
 
 
@@ -662,28 +799,28 @@ def add_review_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "materialize",
-        help="Copy reviewed skills into agent-native skill directories.",
+        help="Copy available skills into agent-native skill directories.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
-            Copy reviewed/trusted/pinned skill directories into Codex or Claude native
+            Copy available skill directories into Codex or Claude native
             skill directories. This is how Skillager presents skills to agents.
 
             Native materialization copies the full skill directory and writes
             provenance. Stub materialization writes a tiny native handle that
-            tells the agent how to activate the full reviewed body through
-            Skillager on demand. Project materialization also installs or refreshes Skillager Working,
-            writes a one-line handoff note to existing AGENTS.md/CLAUDE.md files,
-            or creates the right default file for the selected agent. Customized
-            local copies are not overwritten unless --force is used.
+            tells the agent how to activate the full available body through
+            Skillager on demand. Materialization does not install or repair
+            Skillager Working or project handoff notes; use `skillager bootstrap`
+            or `skillager doctor --fix` for first-party handoff artifacts.
+            Customized local copies are not overwritten unless --force is used.
             """
         ),
         epilog=textwrap.dedent(
             """\
             Examples:
-              skillager materialize --agent codex --scope project
-              skillager materialize --agent claude --scope project
-              skillager materialize --all-agents --scope project
+              skillager materialize --all-reviewed --agent codex --scope project
+              skillager materialize --all-reviewed --agent claude --scope project
+              skillager materialize --all-reviewed --all-agents --scope project
               skillager materialize fastapi/fastapi --agent codex
               skillager materialize --tag gis --mode router --agent codex
               skillager materialize fastapi/fastapi --mode stub --agent codex
@@ -703,6 +840,7 @@ def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentPars
     p.add_argument("--all-agents", action="store_true", help="Target both codex and claude.")
     p.add_argument("--scope", choices=["project", "global"], default="project", help="Materialize into project .agents or global agent skill directory.")
     p.add_argument("--include-unreviewed", action="store_true", help="Allow discovered skills to be materialized.")
+    p.add_argument("--all-reviewed", action="store_true", help="Materialize every available skill selected by filters.")
     p.add_argument("--allow-incompatible", action="store_true", help="Allow native/stub materialization even when skill metadata explicitly excludes the selected agent.")
     p.add_argument("--dry-run", action="store_true", help="Report target paths without writing files.")
     p.add_argument("--force", action="store_true", help="Overwrite existing Skillager-managed customized targets.")
@@ -713,7 +851,7 @@ def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentPars
 
 def add_review_filters(parser: argparse.ArgumentParser, *, include_lint_flag: bool = True) -> None:
     parser.add_argument("--source", help="Filter by source type, e.g. project, global, environment, python-package.")
-    parser.add_argument("--audience", help="Filter by audience.")
+    parser.add_argument("--audience", help="Filter by declared audience: user, dev, or other/everything_else for undeclared skills.")
     parser.add_argument("--package", help="Filter by package name.")
     parser.add_argument("--activation", help="Filter by activation mode.")
     parser.add_argument("--include-blocked", action="store_true", help="Include blocked skills in the selection.")
@@ -936,23 +1074,23 @@ def cmd_tag_list(args: argparse.Namespace) -> int:
 
 
 def cmd_tag_show(args: argparse.Namespace) -> int:
-    skills = _select_project_tag_skills(
+    all_skills = _select_project_tag_skills(
         root(args),
         catalog_root(args),
         args.tag,
         include_lint_blocked=args.include_lint_blocked,
     )
-    summary = _tag_trust_summary(
-        args.tag,
-        _select_project_tag_skills(root(args), catalog_root(args), args.tag, include_blocked=True, include_lint_blocked=True),
-    )
+    skills = _available_skills(all_skills)
+    full_summary = _tag_trust_summary(args.tag, _select_project_tag_skills(root(args), catalog_root(args), args.tag, include_blocked=True, include_lint_blocked=True))
+    summary = full_summary if args.full_json else _tag_available_summary(full_summary)
     if args.json:
-        print(json.dumps({"tag": args.tag, "summary": summary, "skills": skills}, indent=2, sort_keys=True))
+        visible_skills = skills if args.full_json else [_compact_skill_metadata(skill) for skill in skills]
+        print(json.dumps({"tag": args.tag, "summary": summary, "skills": visible_skills}, indent=2, sort_keys=True))
     else:
-        print(_tag_summary_line(summary))
-        _print_tag_review_warning(summary)
+        print(_tag_available_summary_line(summary))
+        _print_tag_owner_review_note(full_summary)
         for skill in skills:
-            print(f"{skill['id']}\t{skill['trust']}\t{skill['summary']}")
+            print(f"{skill['id']}\t{skill['summary']}")
     return 0
 
 
@@ -960,7 +1098,7 @@ def cmd_project_attach_tag(args: argparse.Namespace) -> int:
     data = attach_project_tag(root(args), args.tag, catalog_root=catalog_root(args))
     print(f"{args.tag}: attached")
     print(f"attached tags: {', '.join(data.get('attached_tags', [])) or '-'}")
-    _print_tag_review_warning(_tag_trust_summary(args.tag, _select_project_tag_skills(root(args), catalog_root(args), args.tag, include_lint_blocked=True)))
+    _print_tag_owner_review_note(_tag_trust_summary(args.tag, _select_project_tag_skills(root(args), catalog_root(args), args.tag, include_lint_blocked=True)))
     return 0
 
 
@@ -976,7 +1114,7 @@ def cmd_project_tags(args: argparse.Namespace) -> int:
     summaries = _tag_trust_summaries(root(args), catalog_root(args), data.get("attached_tags", []))
     if args.json:
         payload = dict(data)
-        payload["tag_summaries"] = summaries
+        payload["tag_summaries"] = [_tag_available_summary(summary) for summary in summaries]
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         for summary in summaries:
@@ -1120,6 +1258,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
     args.yolo = bool(args.yolo or args.trust_all)
     if args.json and args.summary_json:
         raise ValueError("--json and --summary-json cannot be combined")
+    action_requested = _setup_action_requested(args)
+    setup_agents = _bootstrap_agents(args)
+    project_dir = (find_project_root() or Path.cwd()).resolve()
+    fresh_project_reset = _clear_fresh_project_state(root(args)) if args.fresh_project else None
+    if fresh_project_reset is not None:
+        fresh_project_reset["retained_global_state"] = _fresh_project_retained_global_state(catalog_root(args), project_dir)
     audience = args.audience
     if _should_prompt_setup_audience(args):
         audience = _prompt_setup_audience(root(args), args, catalog_root=catalog_root(args))
@@ -1140,7 +1284,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         include_lint_blocked=True,
         include_global=args.include_global,
         fresh=args.fresh,
-        fresh_all=args.fresh_all,
+        fresh_project=args.fresh_project,
         accept_low=args.accept_low,
         yolo=args.yolo,
         trust_state=args.trust_selected,
@@ -1150,21 +1294,46 @@ def cmd_setup(args: argparse.Namespace) -> int:
         approval_root=catalog_root(args),
         global_scope=not args.project_only,
     )
+    if fresh_project_reset is not None:
+        report["fresh_project_reset"] = fresh_project_reset
+    report["no_manifest_skills"] = _no_manifest_skill_summary(report["selected"])
     _remember_setup_paths(root(args), args.paths or None)
+    if args.summary_json or args.json:
+        bootstrap = _setup_bootstrap_after_review(
+            args,
+            report,
+            project_dir=project_dir,
+            agents=setup_agents,
+            allow_prompt=False,
+        )
+        if bootstrap is not None:
+            report["bootstrap"] = bootstrap
+            if _setup_bootstrap_saves_scope(bootstrap):
+                _save_status_scope(root(args), report["selected"], audience=audience, include_global=args.include_global, agents=list(bootstrap.get("agents") or setup_agents), paths=args.paths or None)
     if args.summary_json:
         print(json.dumps(_compact_setup_report(report), indent=2, sort_keys=True))
     elif args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(f"Indexed {report['indexed']} skills")
+        print(f"Project root: {project_dir}")
         if report.get("skipped_global"):
             print(f"Skipped {report['skipped_global']} global skill(s) already installed; use --include-global to review them.")
-        if args.fresh_all:
+        if args.fresh_project:
+            retained = ((report.get("fresh_project_reset") or {}).get("retained_global_state") or {})
             print(
-                "Fresh-all reset: "
+                "Fresh project reset: "
                 f"project trust decisions cleared={report.get('fresh_reset', 0)}, "
-                f"reusable global approvals revoked={report.get('global_reset', 0)}. "
-                "Retained tags, collections, sessions, and materialized skill files."
+                "reusable global approvals retained. "
+                f"Project tags detached={((report.get('fresh_project_reset') or {}).get('project_tags', 0))}, "
+                f"sessions cleared={((report.get('fresh_project_reset') or {}).get('sessions', 0))}, "
+                f"saved setup scope cleared={int(bool((report.get('fresh_project_reset') or {}).get('status_scope')))}. "
+                "Retained global state: "
+                f"{retained.get('global_approvals', 0)} approval(s), "
+                f"{retained.get('catalog_tags', 0)} catalog tag(s), "
+                f"{retained.get('catalog_tag_members', 0)} tag member(s), "
+                f"{retained.get('collections', 0)} collection(s), "
+                f"plus {retained.get('materialized_skill_targets', 0)} materialized skill target(s)."
             )
         elif args.fresh:
             print(
@@ -1174,13 +1343,17 @@ def cmd_setup(args: argparse.Namespace) -> int:
             )
         if report.get("global_approved"):
             print(f"Applied {report['global_approved']} reusable global approval(s).")
+        _print_no_manifest_skill_summary(report.get("no_manifest_skills") or {})
         if report.get("errors"):
-            print(f"Errors: {len(report['errors'])}")
+            _print_discovery_errors(report["errors"])
         _print_review_report(report["selected"], report["summary"], report["action"], compact=not args.details)
         if not report["selected"]:
             _print_empty_setup_guidance(args)
-        _print_out_of_scope_collections(root(args), catalog_root(args), action_requested=bool(args.yolo or args.accept_low or args.trust_selected or args.block_high or args.override_lint))
-        action_requested = any((args.accept_low, args.yolo, args.trust_selected, args.block_high, args.override_lint))
+        _print_out_of_scope_collections(
+            root(args),
+            catalog_root(args),
+            action_requested=bool(args.yolo or args.accept_low or args.trust_selected or args.block_high or args.override_lint),
+        )
         if not action_requested and not args.non_interactive:
             _interactive_setup(
                 root(args),
@@ -1190,13 +1363,35 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 catalog_root=catalog_root(args),
                 global_scope=not args.project_only,
                 paths=args.paths or None,
+                agents=setup_agents,
+                no_bootstrap=args.no_bootstrap,
+                project_dir=project_dir,
             )
-        elif not action_requested:
+        elif not action_requested and not _setup_bootstrap_relevant(args, report):
             print()
             _print_setup_next_steps(report["selected"])
-        elif report["action"].get("changed"):
+        else:
             print()
-            print("Next step: tell your agent what you plan to do; it can inspect approved metadata with `skillager search --trusted-only --json`, tag relevant approved skills, and expose a narrow router, stub, native skill, or no new exposure.")
+            bootstrap = _setup_bootstrap_after_review(
+                args,
+                report,
+                project_dir=project_dir,
+                agents=setup_agents,
+                allow_prompt=not args.non_interactive and sys.stdin.isatty() and sys.stdout.isatty(),
+            )
+            if bootstrap is not None:
+                report["bootstrap"] = bootstrap
+                bootstrap_agents = list(bootstrap.get("agents") or setup_agents)
+                if bootstrap.get("performed"):
+                    _print_setup_bootstrap_result(bootstrap)
+                elif bootstrap.get("reason_code") in {SETUP_BOOTSTRAP_REASON_DISABLED, SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED}:
+                    _print_setup_bootstrap_reminder(bootstrap)
+                if _setup_bootstrap_saves_scope(bootstrap):
+                    _save_status_scope(root(args), report["selected"], audience=audience, include_global=args.include_global, agents=bootstrap_agents, paths=args.paths or None)
+                if bootstrap.get("performed") and bootstrap.get("handoff_ready"):
+                    _print_agent_next_steps(list(bootstrap.get("artifacts") or []))
+            if bootstrap is None or not _setup_already_printed_specific_guidance(bootstrap):
+                print("Next step: tell your agent what you plan to do; it can inspect available metadata with `skillager search --json`, tag relevant available skills, and expose a narrow router, stub, native skill, or no new exposure.")
     return 0
 
 
@@ -1210,12 +1405,56 @@ def _print_empty_setup_guidance(args: argparse.Namespace) -> None:
         print("  Already-installed global skills are hidden by default; add --include-global to review them.")
 
 
+def _print_discovery_errors(errors: list[dict[str, Any]], *, limit: int = 5) -> None:
+    print(f"Errors: {len(errors)}")
+    for item in errors[:limit]:
+        path = item.get("path") or "<unknown>"
+        error = item.get("error") or "unknown error"
+        print(f"  - {path}: {error}")
+    remaining = len(errors) - limit
+    if remaining > 0:
+        print(f"  ... {remaining} more")
+
+
+def _no_manifest_skill_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
+    selected = [skill for skill in skills if skill.get("inferred") and not skill.get("manifest_path")]
+    by_source = Counter(_no_manifest_source_label(skill) for skill in selected)
+    return {
+        "count": len(selected),
+        "by_source": dict(sorted(by_source.items())),
+        "metadata": "SKILL.md-only directories without skillager.yaml",
+    }
+
+
+def _no_manifest_source_label(skill: dict[str, Any]) -> str:
+    source = skill.get("source") or {}
+    for key in ("collection", "package", "name"):
+        value = source.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return str(source.get("type") or "unknown")
+
+
+def _print_no_manifest_skill_summary(summary: dict[str, Any]) -> None:
+    count = int(summary.get("count") or 0)
+    if not count:
+        return
+    by_source = summary.get("by_source") or {}
+    parts = ", ".join(f"{source}={amount}" for source, amount in sorted(by_source.items()))
+    suffix = f" ({parts})" if parts else ""
+    print(
+        "No-manifest skills discovered: "
+        f"{count}{suffix}. "
+        "`skillager manifest init` is only needed if you want structured audience/activation metadata."
+    )
+
+
 def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
     selected = report.get("selected", [])
     review_needed = [skill for skill in selected if skill.get("trust") == "discovered"]
     lint_blocked = [skill for skill in selected if skill.get("trust") == "lint_blocked"]
     approved = [skill for skill in selected if skill.get("trust") in {"reviewed", "trusted", "pinned"}]
-    return {
+    compact = {
         "indexed": report.get("indexed", 0),
         "selected": len(selected),
         "approved": len(approved),
@@ -1225,6 +1464,8 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
         "fresh_reset": report.get("fresh_reset", 0),
         "global_reset": report.get("global_reset", 0),
         "global_approved": report.get("global_approved", 0),
+        "fresh_project_reset": report.get("fresh_project_reset"),
+        "no_manifest_skills": report.get("no_manifest_skills"),
         "errors": len(report.get("errors", [])),
         "summary": report.get("summary", {}),
         "action": report.get("action", {}),
@@ -1232,54 +1473,427 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
         "review_needed_ids": [skill.get("id") for skill in review_needed],
         "lint_blocked_ids": [skill.get("id") for skill in lint_blocked],
     }
+    if "bootstrap" in report:
+        compact["bootstrap"] = report["bootstrap"]
+    return compact
+
+
+def _setup_action_requested(args: argparse.Namespace) -> bool:
+    return any((args.accept_low, args.yolo, args.trust_selected, args.block_high, args.override_lint))
+
+
+def _setup_bootstrap_after_review(
+    args: argparse.Namespace,
+    report: dict[str, Any],
+    *,
+    project_dir: Path,
+    agents: list[str],
+    allow_prompt: bool,
+) -> dict[str, Any] | None:
+    if not _setup_bootstrap_relevant(args, report):
+        return None
+    approved = [skill for skill in report.get("selected", []) if skill.get("trust") in TRUSTED_STATES]
+    if not approved:
+        return _setup_bootstrap_payload(
+            project_dir=project_dir,
+            agents=agents,
+            reason="no available skills in setup scope",
+            reason_code=SETUP_BOOTSTRAP_REASON_NO_APPROVED,
+        )
+    if args.no_bootstrap:
+        return _setup_bootstrap_payload(
+            project_dir=project_dir,
+            agents=agents,
+            reason="disabled by --no-bootstrap",
+            reason_code=SETUP_BOOTSTRAP_REASON_DISABLED,
+        )
+    if not agents and allow_prompt:
+        agents = _choose_materialize_agents()
+    if not agents:
+        return _setup_bootstrap_payload(
+            project_dir=project_dir,
+            agents=agents,
+            reason="agent not specified",
+            reason_code=SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED,
+        )
+    bootstrap = _perform_bootstrap(agents=agents, project_dir=project_dir, dry_run=False, force=False)
+    return _setup_bootstrap_payload(project_dir=project_dir, agents=agents, bootstrap=bootstrap)
+
+
+def _setup_bootstrap_relevant(args: argparse.Namespace, report: dict[str, Any]) -> bool:
+    if args.agent or args.all_agents or args.no_bootstrap:
+        return True
+    return bool(_setup_action_requested(args) and (report.get("action") or {}).get("changed"))
+
+
+def _setup_bootstrap_payload(
+    *,
+    project_dir: Path,
+    agents: list[str],
+    bootstrap: dict[str, Any] | None = None,
+    reason: str | None = None,
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    artifacts = list((bootstrap or {}).get("artifacts") or [])
+    handoff_ready = _setup_handoff_ready(project_dir, agents=agents)
+    next_commands = [] if handoff_ready else _setup_bootstrap_next_commands(agents)
+    return {
+        "performed": bootstrap is not None,
+        "reason": reason,
+        "reason_code": reason_code,
+        "agents": agents,
+        "handoff_ready": handoff_ready,
+        "next_commands": next_commands,
+        "artifacts": artifacts,
+        "summary": (bootstrap or {}).get("summary") or _bootstrap_summary(artifacts),
+    }
+
+
+def _setup_bootstrap_saves_scope(bootstrap: dict[str, Any]) -> bool:
+    if bootstrap.get("performed"):
+        return bool(bootstrap.get("handoff_ready"))
+    return bootstrap.get("reason_code") == SETUP_BOOTSTRAP_REASON_DISABLED and bool(bootstrap.get("agents"))
+
+
+def _setup_already_printed_specific_guidance(bootstrap: dict[str, Any]) -> bool:
+    if bootstrap.get("performed"):
+        return True
+    return bootstrap.get("reason_code") in {SETUP_BOOTSTRAP_REASON_DISABLED, SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED}
+
+
+def _setup_handoff_ready(project_dir: Path, *, agents: list[str]) -> bool:
+    return bool(agents) and all(_handoff_ready(_handoff_artifacts(project_dir, agent=agent)) for agent in agents)
+
+
+def _setup_bootstrap_next_commands(agents: list[str]) -> list[str]:
+    if agents == ["codex", "claude"]:
+        return ["skillager bootstrap --all-agents"]
+    if agents:
+        return [f"skillager bootstrap --agent {agent}" for agent in agents]
+    return ["skillager bootstrap --agent codex", "skillager bootstrap --agent claude"]
+
+
+def _build_visible_skill_view(
+    state_root: Path,
+    *,
+    catalog_root: Path,
+    project_dir: Path,
+    agent: str | None,
+    paths: list[Path] | None = None,
+    include_packages: bool = True,
+    include_global: bool = False,
+    use_saved_scope: bool = True,
+) -> dict[str, Any]:
+    data = build_index(
+        state_root,
+        paths,
+        include_packages=include_packages,
+        approval_root=catalog_root,
+        extra_paths=_active_setup_paths(state_root, paths),
+    )
+    extra_skills = select_attached_tag_skills(
+        state_root,
+        catalog_root=catalog_root,
+        approval_root=catalog_root,
+        include_lint_blocked=True,
+    )
+    if extra_skills:
+        data["skills"] = [*data.get("skills", []), *extra_skills]
+    saved_scope = _load_status_scope(state_root) if use_saved_scope else None
+    scope_audience = saved_scope.get("audience") if saved_scope else None
+    selected_include_global = (include_global or bool(saved_scope.get("include_global"))) if saved_scope else include_global
+    skills = select_visible_skills(
+        data.get("skills", []),
+        audience=scope_audience,
+        include_global=selected_include_global,
+        include_lint_blocked=True,
+    )
+    skills = annotate_duplicate_content(skills)
+    review_needed = _status_review_needed(skills, saved_scope=saved_scope)
+    lint_blocked = [skill for skill in skills if skill.get("trust") == "lint_blocked"]
+    approved = [skill for skill in skills if skill.get("trust") in TRUSTED_STATES]
+    authored_unreviewed = _authored_unreviewed(skills)
+    blocked = [skill for skill in data.get("skills", []) if skill.get("trust") == "blocked"]
+    project_exposure = _project_exposure(project_dir)
+    attached_tags = sorted(load_project_tags(state_root).get("attached_tags", []))
+    materialized_router_tags = sorted(_materialized_router_tags(project_dir, agent=agent)) if agent else []
+    artifacts = _handoff_artifacts(project_dir, agent=agent) if agent else {}
+    materialized_project_counts = _materialized_project_counts(project_dir)
+    unmaterialized_attached_tags = sorted(tag for tag in attached_tags if tag not in set(materialized_router_tags))
+    migration = collection_migration_summary(catalog_root)
+    lookback = _status_lookback_summary(state_root)
+    tagging = _status_tagging_summary(state_root, catalog_root)
+    readiness = _build_readiness(
+        review_needed=review_needed,
+        lint_blocked=lint_blocked,
+        approved=approved,
+        artifacts=artifacts,
+        agent=agent,
+        project_exposure=project_exposure,
+        materialized_project_counts=materialized_project_counts,
+        attached_tags=attached_tags,
+        materialized_router_tags=materialized_router_tags,
+        unmaterialized_attached_tags=unmaterialized_attached_tags,
+    )
+    return {
+        "index": data,
+        "skills": skills,
+        "saved_scope": saved_scope,
+        "review_needed": review_needed,
+        "lint_blocked": lint_blocked,
+        "approved": approved,
+        "authored_unreviewed": authored_unreviewed,
+        "blocked": blocked,
+        "project_exposure": project_exposure,
+        "attached_tags": attached_tags,
+        "materialized_router_tags": materialized_router_tags,
+        "unmaterialized_attached_tags": unmaterialized_attached_tags,
+        "artifacts": artifacts,
+        "materialized_project_counts": materialized_project_counts,
+        "migration": migration,
+        "lookback": lookback,
+        "tagging": tagging,
+        "duplicate_content": duplicate_content_summary(skills),
+        "readiness": readiness,
+    }
+
+
+def _build_readiness(
+    *,
+    review_needed: list[dict[str, Any]],
+    lint_blocked: list[dict[str, Any]],
+    approved: list[dict[str, Any]],
+    artifacts: dict[str, Any],
+    agent: str | None,
+    project_exposure: dict[str, list[dict[str, Any]]],
+    materialized_project_counts: dict[str, int],
+    attached_tags: list[str],
+    materialized_router_tags: list[str],
+    unmaterialized_attached_tags: list[str],
+) -> dict[str, Any]:
+    review_ready = not review_needed and not lint_blocked
+    handoff_ready = _handoff_ready(artifacts) if agent else False
+    handoff_action = _handoff_repair_action(artifacts, agent=agent) if not handoff_ready else None
+    return {
+        "review_ready": review_ready,
+        "handoff_ready": handoff_ready,
+        "ready": review_ready and handoff_ready,
+        "handoff": handoff_action,
+        "exposure": _readiness_exposure(
+            approved=approved,
+            project_exposure=project_exposure,
+            materialized_project_counts=materialized_project_counts,
+            attached_tags=attached_tags,
+            materialized_router_tags=materialized_router_tags,
+            unmaterialized_attached_tags=unmaterialized_attached_tags,
+        ),
+    }
+
+
+def _readiness_exposure(
+    *,
+    approved: list[dict[str, Any]],
+    project_exposure: dict[str, list[dict[str, Any]]],
+    materialized_project_counts: dict[str, int],
+    attached_tags: list[str],
+    materialized_router_tags: list[str],
+    unmaterialized_attached_tags: list[str],
+) -> dict[str, Any]:
+    approved_ids = {skill["id"] for skill in approved}
+    breakdown = _project_exposure_breakdown(project_exposure, skill_ids=approved_ids)
+    return {
+        "approved": len(approved_ids),
+        "approved_source_entries": len(approved_ids),
+        "exposed": breakdown["exposed"],
+        "exposed_source_entries": breakdown["exposed"],
+        "native": breakdown["native"],
+        "stubbed": breakdown["stubbed"],
+        "routed": breakdown["routed"],
+        "router_tags": breakdown["router_tags"],
+        "available_on_demand": len(approved_ids.difference(breakdown["exposed_ids"])),
+        "available_source_entries_on_demand": len(approved_ids.difference(breakdown["exposed_ids"])),
+        "count_basis": "approved source entries",
+        "project_materialized": materialized_project_counts,
+        "attached_tags": attached_tags,
+        "materialized_router_tags": materialized_router_tags,
+        "unmaterialized_attached_tags": unmaterialized_attached_tags,
+    }
+
+
+def _project_exposure_breakdown(
+    project_exposure: dict[str, list[dict[str, Any]]],
+    *,
+    skill_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    native_ids: set[str] = set()
+    stubbed_ids: set[str] = set()
+    routed_ids: set[str] = set()
+    router_tags: set[str] = set()
+    for skill_id, targets in project_exposure.items():
+        if skill_id == WORKING_SKILL_ID:
+            continue
+        if skill_ids is not None and skill_id not in skill_ids:
+            continue
+        for target in targets:
+            kind = target.get("kind")
+            if kind == "native":
+                native_ids.add(skill_id)
+            elif kind == "stub":
+                stubbed_ids.add(skill_id)
+            elif kind == "router":
+                routed_ids.add(skill_id)
+                tag = target.get("tag") or target.get("router")
+                if tag:
+                    router_tags.add(str(tag))
+    exposed_ids = native_ids | stubbed_ids | routed_ids
+    return {
+        "exposed": len(exposed_ids),
+        "native": len(native_ids),
+        "stubbed": len(stubbed_ids),
+        "routed": len(routed_ids),
+        "router_tags": len(router_tags),
+        "exposed_ids": exposed_ids,
+    }
+
+
+def _exposure_summary_text(exposure: dict[str, Any]) -> str:
+    exposed = int(exposure.get("exposed") or 0)
+    available = int(exposure.get("available_on_demand") or 0)
+    details = []
+    router_tags = int(exposure.get("router_tags") or 0)
+    routed = int(exposure.get("routed") or 0)
+    stubbed = int(exposure.get("stubbed") or 0)
+    native = int(exposure.get("native") or 0)
+    if router_tags or routed:
+        details.append(f"{router_tags} router tag(s), {routed} routed")
+    if stubbed:
+        details.append(f"{stubbed} stubbed")
+    if native:
+        details.append(f"{native} native")
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"{exposed} exposed entr{'y' if exposed == 1 else 'ies'}{suffix}, {available} available entr{'y' if available == 1 else 'ies'} on demand"
+
+
+def _handoff_ready(artifacts: dict[str, Any]) -> bool:
+    if not artifacts:
+        return False
+    working = artifacts.get("working_skill") or {}
+    notes = artifacts.get("project_notes") or []
+    return working.get("status") == "present" and bool(notes) and all(note.get("status") == "present" for note in notes)
+
+
+def _handoff_repair_action(artifacts: dict[str, Any], *, agent: str | None) -> dict[str, Any] | None:
+    if not agent:
+        return {
+            "kind": "agent-required",
+            "reason": "agent not specified",
+            "reason_code": HANDOFF_REASON_AGENT_REQUIRED,
+            "message": "Pass --agent codex or --agent claude to check first-party handoff artifacts.",
+            "command": None,
+        }
+    working = artifacts.get("working_skill") or {}
+    working_status = working.get("status")
+    if working_status == "unmanaged":
+        return {
+            "kind": "manual",
+            "reason": "unmanaged working skill",
+            "reason_code": HANDOFF_REASON_WORKING_UNMANAGED,
+            "message": f"Move or remove unmanaged Skillager Working target before refreshing: {working.get('path')}",
+            "command": None,
+        }
+    if working_status == "drift":
+        reason = working.get("reason") or "working skill drift"
+        return {
+            "kind": "manual",
+            "reason": reason,
+            "reason_code": _working_drift_reason_code(reason),
+            "message": f"Review local Skillager Working changes before refreshing: {working.get('path')}",
+            "command": None,
+        }
+    if working_status in {"missing", "stale"}:
+        return _bootstrap_repair_action(agent, f"working skill {working_status}", reason_code=_working_status_reason_code(working_status))
+    notes = artifacts.get("project_notes") or []
+    stale_note = next((note for note in notes if note.get("status") != "present"), None)
+    if stale_note:
+        status = str(stale_note.get("status") or "unknown")
+        return _bootstrap_repair_action(agent, f"project note {status}", reason_code=_project_note_reason_code(status))
+    if _artifacts_need_attention(artifacts):
+        return _bootstrap_repair_action(agent, "handoff artifacts need refresh", reason_code=HANDOFF_REASON_HANDOFF_ARTIFACTS)
+    return None
+
+
+def _working_status_reason_code(status: str | None) -> str:
+    if status == "missing":
+        return HANDOFF_REASON_WORKING_MISSING
+    if status == "stale":
+        return HANDOFF_REASON_WORKING_STALE
+    return HANDOFF_REASON_WORKING_DRIFT
+
+
+def _working_drift_reason_code(reason: str) -> str:
+    return _WORKING_DRIFT_REASON_CODES.get(reason, HANDOFF_REASON_WORKING_DRIFT)
+
+
+def _project_note_reason_code(status: str) -> str:
+    return _PROJECT_NOTE_REASON_CODES.get(status, HANDOFF_REASON_PROJECT_NOTE_UNKNOWN)
+
+
+def _bootstrap_repair_action(agent: str, reason: str, *, reason_code: str) -> dict[str, Any]:
+    command = f"skillager bootstrap --agent {agent}"
+    return {
+        "kind": "bootstrap",
+        "reason": reason,
+        "reason_code": reason_code,
+        "message": f"Run `{command}` to refresh Skillager's first-party project handoff artifacts.",
+        "command": command,
+    }
 
 
 def cmd_status(args: argparse.Namespace) -> int:
     if args.ack_migration:
         ack_collection_migrations(catalog_root(args))
-    data = build_index(
-        root(args),
-        args.paths or None,
+    state_root = root(args)
+    approval_root = catalog_root(args)
+    project_dir = (find_project_root() or Path.cwd()).resolve()
+    agent, agent_source = _status_agent(args, state_root)
+    view = _build_visible_skill_view(
+        state_root,
+        catalog_root=approval_root,
+        project_dir=project_dir,
+        agent=agent,
+        paths=args.paths or None,
         include_packages=not args.no_packages,
-        approval_root=catalog_root(args),
-        extra_paths=_active_setup_paths(root(args), args.paths or None),
+        include_global=args.include_global,
+        use_saved_scope=not args.all,
     )
-    extra_skills = select_attached_tag_skills(root(args), catalog_root=catalog_root(args), approval_root=catalog_root(args), include_lint_blocked=True)
-    if extra_skills:
-        data["skills"] = [*data.get("skills", []), *extra_skills]
-    saved_scope = _load_status_scope(root(args)) if not args.all else None
-    scope_audience = saved_scope.get("audience") if saved_scope else None
-    include_global = args.include_global
-    if saved_scope:
-        include_global = include_global or bool(saved_scope.get("include_global"))
-    skills = select_visible_skills(
-        data.get("skills", []),
-        audience=scope_audience,
-        include_global=include_global,
-        include_lint_blocked=True,
-    )
-    _save_native_inventory(root(args), _effective_project_skills(root(args), catalog_root=catalog_root(args)))
+    data = view["index"]
+    skills = view["skills"]
+    saved_scope = view.get("saved_scope")
+    _save_native_inventory(state_root, _effective_project_skills(state_root, catalog_root=approval_root))
     summary = review_summary(skills)
-    materialized = _materialized_project_counts(Path.cwd())
-    exposure = _project_exposure(Path.cwd())
-    review_needed = _status_review_needed(skills, saved_scope=saved_scope)
-    lint_blocked = [skill for skill in skills if skill.get("trust") == "lint_blocked"]
+    materialized = view["materialized_project_counts"]
+    review_needed = view["review_needed"]
+    lint_blocked = view["lint_blocked"]
     scan_summary = _status_scan_summary(skills)
     manifest_lint = _status_manifest_lint_summary(skills)
     lint_warned = [skill for skill in skills if (skill.get("lint") or {}).get("status") == "warned"]
-    approved = [skill for skill in skills if skill.get("trust") in {"reviewed", "trusted", "pinned"}]
+    approved = view["approved"]
     global_approved = [skill for skill in approved if skill.get("trust_reason") == "global-approval"]
-    authored_unreviewed = _authored_unreviewed(skills)
-    blocked = [skill for skill in data.get("skills", []) if skill.get("trust") == "blocked"]
-    lookback_summary = _status_lookback_summary(root(args))
-    collection_summary = _status_collection_summary(root(args), catalog_root(args))
+    authored_unreviewed = view["authored_unreviewed"]
+    blocked = view["blocked"]
+    lookback_summary = view["lookback"]
+    collection_summary = _status_collection_summary(state_root, approval_root)
     collection_inventory = _status_collection_inventory(skills)
-    tagging_summary = _status_tagging_summary(root(args), catalog_root(args))
-    migration_summary = collection_migration_summary(catalog_root(args))
+    tagging_summary = view["tagging"]
+    migration_summary = view["migration"]
+    duplicate_content = view["duplicate_content"]
     update = check_for_update(cache_root(), current_version=__version__)
+    readiness = view["readiness"]
     status = {
         "indexed": len(data.get("skills", [])),
         "selected": len(skills),
+        "agent": agent,
+        "agent_source": agent_source,
         "review_needed": len(review_needed),
         "lint_blocked": len(lint_blocked),
         "lint_blocked_ids": [skill["id"] for skill in lint_blocked],
@@ -1295,13 +1909,20 @@ def cmd_status(args: argparse.Namespace) -> int:
         "materialized": materialized,
         "reviewed_scope_count": saved_scope.get("selected_count") if saved_scope else None,
         "setup_scope_count": saved_scope.get("selected_count") if saved_scope else None,
-        "exposure_count": len([skill_id for skill_id in exposure if skill_id != "skillager/working"]),
-        "needs_setup": bool(review_needed or lint_blocked),
+        "exposure_count": readiness["exposure"]["exposed"],
+        "exposure_breakdown": {
+            key: readiness["exposure"].get(key, 0)
+            for key in ("native", "stubbed", "routed", "router_tags")
+        },
+        "readiness": readiness,
+        "inventory": _available_inventory_summary(skills, agent=agent, project_exposure=view["project_exposure"]),
+        "needs_setup": not readiness["review_ready"],
         "lookback_pending": lookback_summary["pending"],
         "lookback_summary": lookback_summary,
         "collections": collection_summary,
         "collection_inventory": collection_inventory,
         "tagging": tagging_summary,
+        "duplicate_content": duplicate_content,
         "collection_migrations": migration_summary,
         "migration_details": args.migration_details,
         "update": update,
@@ -1312,6 +1933,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             lookback_summary=lookback_summary,
             collection_summary=collection_summary,
             migration_summary=migration_summary,
+            duplicate_content=duplicate_content,
+            readiness=readiness,
         ),
     }
     if args.json:
@@ -1321,7 +1944,276 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(status["message"])
     else:
         _print_status(status)
-    return 10 if args.exit_code and (review_needed or lint_blocked) else 0
+    if args.exit_code:
+        if not readiness["review_ready"]:
+            return 10
+        if agent and not readiness["handoff_ready"] and readiness.get("exposure", {}).get("approved"):
+            return 11
+    return 0
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    state_root = root(args)
+    approval_root = catalog_root(args)
+    project_dir = (find_project_root() or Path.cwd()).resolve()
+    agent = args.agent or _detect_agent_optional()
+    result = _build_doctor_result(
+        state_root,
+        catalog_root=approval_root,
+        project_dir=project_dir,
+        agent=agent,
+        include_packages=not args.no_packages,
+        include_global=args.include_global,
+    )
+    observed_result = result
+    fix_result: dict[str, Any] | None = None
+    if args.fix:
+        fix_result = _doctor_apply_fix(result, project_dir=project_dir, agent=args.agent)
+        if fix_result.get("applied"):
+            result = _build_doctor_result(
+                state_root,
+                catalog_root=approval_root,
+                project_dir=project_dir,
+                agent=agent,
+                include_packages=not args.no_packages,
+                include_global=args.include_global,
+            )
+        result["fix"] = fix_result
+    record_doctor_event(
+        state_root,
+        result=observed_result,
+        fix_result=fix_result,
+        agent=agent,
+        no_record=args.no_session_record,
+    )
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        _print_doctor_result(result)
+    return int(result.get("exit_code") or 0)
+
+
+def _build_doctor_result(
+    state_root: Path,
+    *,
+    catalog_root: Path,
+    project_dir: Path,
+    agent: str | None,
+    include_packages: bool,
+    include_global: bool,
+) -> dict[str, Any]:
+    view = _build_visible_skill_view(
+        state_root,
+        catalog_root=catalog_root,
+        project_dir=project_dir,
+        agent=agent,
+        include_packages=include_packages,
+        include_global=include_global,
+        use_saved_scope=True,
+    )
+    diagnosis = _doctor_diagnosis(view, agent=agent)
+    return {
+        "schema": "skillager.doctor.v1",
+        "project": str(project_dir),
+        "agent": agent,
+        "readiness": view["readiness"],
+        "state": _doctor_state(view),
+        "status": diagnosis["status"],
+        "exit_code": diagnosis["exit_code"],
+        "message": diagnosis["message"],
+        "next": {
+            "command": diagnosis.get("command"),
+            "next_commands": diagnosis.get("next_commands", []),
+        },
+    }
+
+
+def _doctor_state(view: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "review": {
+            "needed": len(view["review_needed"]),
+            "ids": [skill["id"] for skill in view["review_needed"]],
+        },
+        "lint_blocked": {
+            "count": len(view["lint_blocked"]),
+            "ids": [skill["id"] for skill in view["lint_blocked"]],
+        },
+        "authored_unreviewed": {
+            "count": len(view["authored_unreviewed"]),
+            "ids": [skill["id"] for skill in view["authored_unreviewed"]],
+        },
+        "migration": view["migration"],
+        "artifacts": view["artifacts"],
+        "lookback": view["lookback"],
+        "duplicate_content": view["duplicate_content"],
+    }
+
+
+def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, Any]:
+    if view["lint_blocked"]:
+        count = len(view["lint_blocked"])
+        return _doctor_issue(
+            "lint-blocked",
+            DOCTOR_EXIT_LINT_BLOCKED,
+            f"{count} skill(s) are lint-blocked. Fix the source or approve with an audited override.",
+            "skillager lint",
+        )
+    if view["authored_unreviewed"]:
+        count = len(view["authored_unreviewed"])
+        return _doctor_issue(
+            "authored-review-needed",
+            DOCTOR_EXIT_REVIEW_NEEDED,
+            f"{count} authored skill(s) are not reviewed yet.",
+            "skillager review --summary",
+        )
+    migration = view["migration"]
+    migration_totals = migration.get("totals") or {}
+    if migration.get("pending") and (migration_totals.get("needs_review") or migration_totals.get("tag_needs_repair")):
+        return _doctor_issue(
+            "migration-review-needed",
+            DOCTOR_EXIT_MIGRATION_NEEDED,
+            "Review collection ID migration details before using migrated collection skills.",
+            "skillager status --migration-details",
+        )
+    if migration.get("pending"):
+        return _doctor_issue(
+            "migration-ack-needed",
+            DOCTOR_EXIT_MIGRATION_NEEDED,
+            "Acknowledge the collection ID migration report after reviewing it.",
+            "skillager status --ack-migration",
+        )
+    readiness = view["readiness"]
+    handoff_action = readiness.get("handoff") or {}
+    if handoff_action.get("kind") == "manual":
+        return _doctor_issue(
+            "manual-artifact-repair-needed",
+            DOCTOR_EXIT_MANUAL_REPAIR,
+            handoff_action.get("message") or "Repair local Skillager handoff artifacts manually before refreshing.",
+            None,
+        )
+    if view["review_needed"]:
+        count = len(view["review_needed"])
+        command, next_commands = _doctor_setup_next(agent)
+        duplicate_review = int((view.get("duplicate_content") or {}).get("review_needed") or 0)
+        message = f"{count} unreviewed skill(s) need review in the active setup scope."
+        if duplicate_review:
+            message += f" {duplicate_review} are same-content duplicate(s) that need source-key approval."
+        return _doctor_issue(
+            "review-needed",
+            DOCTOR_EXIT_REVIEW_NEEDED,
+            message,
+            command,
+            next_commands=next_commands,
+        )
+    if not readiness.get("handoff_ready") and (readiness.get("exposure") or {}).get("approved"):
+        if handoff_action.get("kind") == "agent-required":
+            return _doctor_issue(
+                "agent-required",
+                DOCTOR_EXIT_BOOTSTRAP_REPAIR,
+                "Review is complete. Choose which agent's handoff artifacts to check.",
+                None,
+                next_commands=["skillager doctor --agent codex", "skillager doctor --agent claude"],
+            )
+        command = handoff_action.get("command")
+        return _doctor_issue(
+            "artifact-attention-needed",
+            DOCTOR_EXIT_BOOTSTRAP_REPAIR,
+            handoff_action.get("message") or "Refresh Skillager's first-party project handoff artifacts.",
+            str(command) if command else None,
+        )
+    lookback = view["lookback"]
+    if lookback.get("pending"):
+        return _doctor_issue(
+            "lookback-pending",
+            DOCTOR_EXIT_LOOKBACK_PENDING,
+            "Lookback evidence is ready for review.",
+            "skillager lookback",
+        )
+    return _doctor_issue("ready", DOCTOR_EXIT_READY, "Skillager is ready.", None)
+
+
+def _doctor_issue(
+    status: str,
+    exit_code: int,
+    message: str,
+    command: str | None,
+    *,
+    next_commands: list[str] | None = None,
+) -> dict[str, Any]:
+    commands = list(next_commands) if next_commands is not None else ([command] if command else [])
+    return {
+        "status": status,
+        "exit_code": exit_code,
+        "message": message,
+        "command": command,
+        "next_commands": commands,
+    }
+
+
+def _doctor_setup_next(agent: str | None) -> tuple[str | None, list[str]]:
+    if agent:
+        command = f"skillager setup --agent {agent}"
+        return command, [command]
+    return None, ["skillager setup --agent codex", "skillager setup --agent claude"]
+
+
+def _doctor_apply_fix(result: dict[str, Any], *, project_dir: Path, agent: str | None) -> dict[str, Any]:
+    handoff_action = (result.get("readiness") or {}).get("handoff") or {}
+    reason_code = handoff_action.get("reason_code")
+    if result.get("status") != "artifact-attention-needed" or handoff_action.get("kind") != "bootstrap":
+        return {
+            "requested": True,
+            "applied": False,
+            "reason": "selected next action is not a first-party bootstrap repair",
+            "reason_code": reason_code,
+        }
+    if not agent:
+        return {
+            "requested": True,
+            "applied": False,
+            "reason": "pass --agent to apply mutating repairs",
+            "reason_code": reason_code,
+        }
+    bootstrap = _perform_bootstrap(agents=[agent], project_dir=project_dir, dry_run=False, force=False)
+    artifacts = bootstrap["artifacts"]
+    applied = any(item.get("status") == "materialized" for item in artifacts)
+    fix: dict[str, Any] = {
+        "requested": True,
+        "applied": applied,
+        "action": "bootstrap",
+        "reason": None if applied else "bootstrap completed without writing artifacts",
+        "reason_code": reason_code,
+        "artifacts": artifacts,
+        "summary": bootstrap["summary"],
+    }
+    return fix
+
+
+def _print_doctor_result(result: dict[str, Any]) -> None:
+    print(_style("Skillager doctor", "bold"))
+    print(f"  project: {result['project']}")
+    print(f"  agent: {result.get('agent') or 'not specified'}")
+    readiness = result.get("readiness") or {}
+    exposure = readiness.get("exposure") or {}
+    print()
+    print("Readiness:")
+    print(f"  Ready: {'yes' if readiness.get('ready') else 'no'}")
+    print(f"  Review: {'ready' if readiness.get('review_ready') else 'needs review'}")
+    print(f"  Handoff: {_readiness_handoff_state(readiness)}")
+    print(f"  Exposure: {_exposure_summary_text(exposure)}")
+    fix = result.get("fix")
+    if fix:
+        print()
+        if fix.get("applied"):
+            print("Fix: bootstrap repair applied.")
+        else:
+            print(f"Fix: not applied ({fix.get('reason', 'no repair available')}).")
+    print()
+    print("Next:")
+    print(f"  {result['message']}")
+    commands = (result.get("next") or {}).get("next_commands") or []
+    for command in commands:
+        print(f"  - {command}")
 
 
 def cmd_handoff(args: argparse.Namespace) -> int:
@@ -1335,46 +2227,222 @@ def cmd_handoff(args: argparse.Namespace) -> int:
     return 0
 
 
-def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, agent: str) -> dict[str, Any]:
-    data = build_index(state_root, include_packages=True, approval_root=catalog_root, extra_paths=_active_setup_paths(state_root))
-    extra_skills = select_attached_tag_skills(state_root, catalog_root=catalog_root, approval_root=catalog_root, include_lint_blocked=True)
-    if extra_skills:
-        data["skills"] = [*data.get("skills", []), *extra_skills]
-    saved_scope = _load_status_scope(state_root)
-    scope_audience = saved_scope.get("audience") if saved_scope else None
-    include_global = bool(saved_scope.get("include_global")) if saved_scope else False
-    skills = select_visible_skills(
-        data.get("skills", []),
-        audience=scope_audience,
-        include_global=include_global,
-        include_lint_blocked=True,
+def cmd_bootstrap(args: argparse.Namespace) -> int:
+    agents = _bootstrap_agents(args)
+    project_dir = (find_project_root() or Path.cwd()).resolve()
+    bootstrap = _perform_bootstrap(agents=agents, project_dir=project_dir, dry_run=args.dry_run, force=args.force)
+    result = {
+        "schema": "skillager.bootstrap.v1",
+        "project": str(project_dir),
+        "agents": agents,
+        "dry_run": args.dry_run,
+        "artifacts": bootstrap["artifacts"],
+        "summary": bootstrap["summary"],
+    }
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        _print_bootstrap_result(result)
+    return 11 if _bootstrap_has_local_blocker(bootstrap["artifacts"]) else 0
+
+
+def _bootstrap_agents(args: argparse.Namespace) -> list[str]:
+    if args.all_agents:
+        return ["codex", "claude"]
+    return sorted(dict.fromkeys(args.agent or []))
+
+
+def _bootstrap_note_statuses(project_dir: Path, *, agents: list[str]) -> dict[str, dict[str, Any]]:
+    statuses: dict[str, dict[str, Any]] = {}
+    for agent in agents:
+        for path in agent_note_paths(project_dir, agents=[agent]):
+            statuses[str(path)] = _handoff_note_status(path)
+    return statuses
+
+
+def _perform_bootstrap(*, agents: list[str], project_dir: Path, dry_run: bool, force: bool) -> dict[str, Any]:
+    note_before = _bootstrap_note_statuses(project_dir, agents=agents)
+    working_results = _bootstrap_working_results(agents=agents, project_dir=project_dir, dry_run=dry_run, force=force)
+    artifacts = [_bootstrap_working_artifact(item) for item in working_results]
+    note_agents = _bootstrap_note_agents(working_results)
+    artifacts.extend(
+        _bootstrap_note_artifacts(
+            project_dir,
+            agents=agents,
+            note_agents=note_agents,
+            before=note_before,
+            dry_run=dry_run,
+        )
     )
-    review_needed = _status_review_needed(skills, saved_scope=saved_scope)
-    lint_blocked = [skill for skill in skills if skill.get("trust") == "lint_blocked"]
-    authored_unreviewed = _authored_unreviewed(skills)
-    attached_tags = load_project_tags(state_root).get("attached_tags", [])
-    materialized_router_tags = _materialized_router_tags(project_dir, agent=agent)
-    migration = collection_migration_summary(catalog_root)
-    lookback = _status_lookback_summary(state_root)
-    artifacts = _handoff_artifacts(project_dir, agent=agent)
-    tagging = _status_tagging_summary(state_root, catalog_root)
+    return {
+        "artifacts": artifacts,
+        "summary": _bootstrap_summary(artifacts),
+    }
+
+
+def _bootstrap_working_results(*, agents: list[str], project_dir: Path, dry_run: bool, force: bool) -> list[dict[str, Any]]:
+    # Bootstrap writes project notes itself so note state stays per-agent in the result.
+    return materialize_working_skill(
+        agents=agents,
+        scope="project",
+        project_dir=project_dir,
+        dry_run=dry_run,
+        force=force,
+        include_notes=False,
+    )
+
+
+def _bootstrap_working_artifact(item: dict[str, Any]) -> dict[str, Any]:
+    reason = item.get("reason")
+    result = {
+        "kind": "working_skill",
+        "agent": item.get("agent"),
+        "scope": item.get("scope"),
+        "target": item.get("target"),
+        "status": item.get("status"),
+        "reason": reason,
+        "skill_id": item.get("skill_id"),
+        "blocked_by_local_state": reason in {WORKING_REASON_LOCAL_CUSTOMIZATION, WORKING_REASON_UNMANAGED},
+        "local_customization_blocked": reason == WORKING_REASON_LOCAL_CUSTOMIZATION,
+        "unmanaged_artifact_blocked": reason == WORKING_REASON_UNMANAGED,
+    }
+    return result
+
+
+def _bootstrap_note_agents(working_results: list[dict[str, Any]]) -> list[str]:
+    agents = []
+    for item in working_results:
+        status = item.get("status")
+        reason = item.get("reason")
+        if status in {"materialized", "would_write"} or (status == "skipped" and reason == "already up to date"):
+            agent = item.get("agent")
+            if isinstance(agent, str):
+                agents.append(agent)
+    return sorted(dict.fromkeys(agents))
+
+
+def _bootstrap_note_artifacts(
+    project_dir: Path,
+    *,
+    agents: list[str],
+    note_agents: list[str],
+    before: dict[str, dict[str, Any]],
+    dry_run: bool,
+) -> list[dict[str, Any]]:
+    if note_agents and not dry_run:
+        ensure_agent_notes(project_dir, agents=note_agents)
+    enabled = set(note_agents)
+    artifacts: list[dict[str, Any]] = []
+    for agent in agents:
+        for path in agent_note_paths(project_dir, agents=[agent]):
+            prior = before.get(str(path)) or _handoff_note_status(path)
+            status = prior.get("status")
+            if agent not in enabled:
+                artifacts.append(_bootstrap_note_artifact(agent, path, "skipped", "working skill not ready"))
+            elif status == "present":
+                artifacts.append(_bootstrap_note_artifact(agent, path, "skipped", "already up to date"))
+            elif dry_run:
+                artifacts.append(_bootstrap_note_artifact(agent, path, "would_write", f"currently {status}"))
+            else:
+                after = _handoff_note_status(path)
+                if after.get("status") == "present":
+                    artifacts.append(_bootstrap_note_artifact(agent, path, "materialized", None))
+                else:
+                    artifacts.append(_bootstrap_note_artifact(agent, path, "skipped", f"still {after.get('status', 'unknown')}"))
+    return artifacts
+
+
+def _bootstrap_note_artifact(agent: str, path: Path, status: str, reason: str | None) -> dict[str, Any]:
+    return {
+        "kind": "project_note",
+        "agent": agent,
+        "scope": "project",
+        "target": str(path),
+        "status": status,
+        "reason": reason,
+        "blocked_by_local_state": False,
+        "local_customization_blocked": False,
+        "unmanaged_artifact_blocked": False,
+    }
+
+
+def _bootstrap_summary(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
+    by_status = Counter(str(item.get("status") or "unknown") for item in artifacts)
+    return {
+        "total": len(artifacts),
+        "by_status": dict(sorted(by_status.items())),
+        "local_blockers": sum(1 for item in artifacts if item.get("blocked_by_local_state")),
+    }
+
+
+def _bootstrap_has_local_blocker(artifacts: list[dict[str, Any]]) -> bool:
+    return any(item.get("blocked_by_local_state") for item in artifacts)
+
+
+def _print_bootstrap_result(result: dict[str, Any]) -> None:
+    print(_style("Skillager bootstrap", "bold"))
+    print(f"  project: {result['project']}")
+    print(f"  agents: {', '.join(result.get('agents') or [])}")
+    for item in result.get("artifacts", []):
+        line = f"  - {item.get('agent')} {item.get('kind')}: {item.get('status')}"
+        if item.get("target"):
+            line += f" {item['target']}"
+        if item.get("reason"):
+            line += f" ({item['reason']})"
+        print(line)
+    summary = result.get("summary") or {}
+    artifacts = result.get("artifacts") or []
+    ready = sum(
+        1
+        for item in artifacts
+        if item.get("status") == "materialized"
+        or (item.get("status") == "skipped" and item.get("reason") == "already up to date")
+    )
+    print(f"Ready: {ready} of {len(artifacts)} artifacts current.")
+    if summary.get("local_blockers"):
+        print()
+        print("Local artifact repair needed. Re-run with --force only if you want Skillager to overwrite the listed local target(s).")
+
+
+def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, agent: str) -> dict[str, Any]:
+    view = _build_visible_skill_view(
+        state_root,
+        catalog_root=catalog_root,
+        project_dir=project_dir,
+        agent=agent,
+        include_packages=True,
+        include_global=False,
+        use_saved_scope=True,
+    )
+    review_needed = view["review_needed"]
+    lint_blocked = view["lint_blocked"]
+    migration = view["migration"]
+    lookback = view["lookback"]
+    artifacts = view["artifacts"]
+    tagging = view["tagging"]
+    readiness = view["readiness"]
+    inventory = _available_inventory_summary(
+        view["skills"],
+        agent=agent,
+        project_exposure=view["project_exposure"],
+    )
     state = {
-        "setup": {"needed": bool(review_needed), "unreviewed": len(review_needed)},
-        "lint_blocked": {"count": len(lint_blocked), "ids": [skill["id"] for skill in lint_blocked]},
-        "authored_unreviewed": {"count": len(authored_unreviewed), "ids": [skill["id"] for skill in authored_unreviewed]},
+        "setup": {"needed": not readiness["review_ready"], "pending_owner_review": len(review_needed) + len(lint_blocked)},
         "migration": migration,
         "artifacts": artifacts,
         "lookback": lookback,
-        "tagging": tagging,
-        "attached_tags": attached_tags,
-        "materialized_router_tags": sorted(materialized_router_tags),
-        "unmaterialized_attached_tags": sorted(tag for tag in attached_tags if tag not in materialized_router_tags),
+        "tagging": _compact_tagging_summary(tagging),
+        "attached_tags": view["attached_tags"],
+        "materialized_router_tags": view["materialized_router_tags"],
+        "unmaterialized_attached_tags": view["unmaterialized_attached_tags"],
         "unmaterialized_attached_tags_policy": "diagnostic only; materialize a router only after the user's goal makes that tag relevant",
+        "inventory": inventory,
     }
-    next_step = _handoff_next(state, agent=agent)
+    next_step = _handoff_next(state, agent=agent, readiness=readiness)
     return {
         "schema": "skillager.handoff.v1",
         "agent": agent,
+        "readiness": _compact_readiness(readiness),
         "state": state,
         "status": next_step["status"],
         "next": next_step,
@@ -1382,11 +2450,41 @@ def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, a
 
 
 def _detect_agent() -> str:
+    return _detect_agent_optional() or "codex"
+
+
+def _detect_agent_optional() -> str | None:
     if os.environ.get("CLAUDE_SESSION_ID"):
         return "claude"
     if os.environ.get("CODEX_SESSION_ID"):
         return "codex"
-    return "codex"
+    return None
+
+
+def _status_agent(args: argparse.Namespace, state_root: Path) -> tuple[str | None, str | None]:
+    if args.agent:
+        return args.agent, "argument"
+    detected = _detect_agent_optional()
+    if detected:
+        return detected, "environment"
+    saved = _saved_status_scope_agent(state_root)
+    if saved:
+        return saved, "saved_setup_scope"
+    return None, None
+
+
+def _saved_status_scope_agent(state_root: Path) -> str | None:
+    scope = _load_status_scope(state_root) or {}
+    agents = sorted(
+        {
+            agent
+            for agent in (scope.get("agents") or [])
+            if agent in {"codex", "claude"}
+        }
+    )
+    if len(agents) == 1:
+        return agents[0]
+    return None
 
 
 def _handoff_artifacts(project_dir: Path, *, agent: str) -> dict[str, Any]:
@@ -1455,23 +2553,7 @@ def _materialized_router_tags(project_dir: Path, *, agent: str) -> set[str]:
     return tags
 
 
-def _handoff_next(state: dict[str, Any], *, agent: str) -> dict[str, Any]:
-    lint_blocked = state.get("lint_blocked") or {}
-    if lint_blocked.get("count"):
-        return {
-            "status": "lint-blocked",
-            "message": f"{lint_blocked.get('count')} skill(s) are lint-blocked. Ask the user to run `skillager lint` and fix or explicitly override.",
-            "command": "skillager lint",
-            "next_commands": ["skillager lint"],
-        }
-    authored = state.get("authored_unreviewed") or {}
-    if authored.get("count"):
-        return {
-            "status": "authored-review-needed",
-            "message": f"{authored.get('count')} authored skill(s) are not reviewed yet. Review them before activation or materialization.",
-            "command": "skillager review --summary",
-            "next_commands": ["skillager review --summary"],
-        }
+def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any]) -> dict[str, Any]:
     migration = state.get("migration") or {}
     migration_totals = migration.get("totals") or {}
     if migration.get("pending") and (migration_totals.get("needs_review") or migration_totals.get("tag_needs_repair")):
@@ -1488,29 +2570,31 @@ def _handoff_next(state: dict[str, Any], *, agent: str) -> dict[str, Any]:
             "command": "skillager status --ack-migration",
             "next_commands": ["skillager status --ack-migration"],
         }
-    artifacts = state.get("artifacts") or {}
-    working = artifacts.get("working_skill") or {}
-    if working.get("status") == "unmanaged":
+    handoff_action = readiness.get("handoff") or {}
+    if handoff_action.get("kind") == "manual":
         return {
             "status": "manual-artifact-repair-needed",
-            "message": f"Move or remove unmanaged Skillager Working target before refreshing: {working.get('path')}",
+            "message": handoff_action.get("message") or "Repair local Skillager handoff artifacts manually before refreshing.",
             "command": None,
             "next_commands": [],
         }
     setup = state.get("setup") or {}
     if setup.get("needed"):
+        command = f"skillager setup --agent {agent}"
+        message = f"Ask the user to run `{command}` from this project directory before using Skillager-managed skills."
         return {
             "status": "setup-needed",
-            "message": "Ask the user to run `skillager setup` from this project directory before using Skillager-managed skills.",
-            "command": "skillager setup",
-            "next_commands": ["skillager setup"],
+            "message": message,
+            "command": command,
+            "next_commands": [command],
         }
-    if _artifacts_need_attention(artifacts):
+    if not readiness.get("handoff_ready"):
+        command = handoff_action.get("command") or f"skillager bootstrap --agent {agent}"
         return {
             "status": "artifact-attention-needed",
-            "message": f"Refresh Skillager's project handoff artifacts for {agent}.",
-            "command": "skillager setup",
-            "next_commands": ["skillager setup"],
+            "message": handoff_action.get("message") or f"Refresh Skillager's project handoff artifacts for {agent}.",
+            "command": command,
+            "next_commands": [command],
         }
     lookback = state.get("lookback") or {}
     if lookback.get("pending"):
@@ -1527,7 +2611,7 @@ def _handoff_next(state: dict[str, Any], *, agent: str) -> dict[str, Any]:
             "message": (
                 "Ask the user what they plan to do. Existing materialized router tag(s) are already available: "
                 f"{', '.join(materialized_router_tags)}. Search within an existing router tag when it matches the user's goal; "
-                "otherwise search approved metadata, curate a task tag, and materialize a narrow router, stub, native skill, or no new exposure as appropriate. "
+                "otherwise search available metadata, curate a task tag, and materialize a narrow router, stub, native skill, or no new exposure as appropriate. "
                 "Report any curation or exposure changes."
             ),
             "command": None,
@@ -1535,7 +2619,7 @@ def _handoff_next(state: dict[str, Any], *, agent: str) -> dict[str, Any]:
         }
     return {
         "status": "ready",
-        "message": "Ask the user what they plan to do, search approved metadata when a specialized skill may help, build a scored slate of skills or groups, then tag approved skills, attach relevant tags, and materialize a narrow router, stub, native skill, or no new exposure as appropriate. Report any curation or exposure changes.",
+        "message": "Ask the user what they plan to do, search available metadata when a specialized skill may help, build a scored slate of skills or groups, then tag available skills, attach relevant tags, and materialize a narrow router, stub, native skill, or no new exposure as appropriate. Report any curation or exposure changes.",
         "command": None,
         "next_commands": _ready_handoff_commands(agent),
     }
@@ -1544,7 +2628,7 @@ def _handoff_next(state: dict[str, Any], *, agent: str) -> dict[str, Any]:
 def _ready_handoff_commands(agent: str, *, materialized_router_tags: list[str] | None = None) -> list[str]:
     commands = [
         f"skillager list --summary-json --agent {agent}",
-        f"skillager search \"<user-goal>\" --trusted-only --agent {agent} --json",
+        f"skillager search \"<user-goal>\" --agent {agent} --json",
         "skillager tag create <task-tag>",
         "skillager tag add <task-tag> <skill-id>...",
         "skillager project attach-tag <task-tag>",
@@ -1552,10 +2636,32 @@ def _ready_handoff_commands(agent: str, *, materialized_router_tags: list[str] |
         f"skillager materialize <skill-id> --mode stub --agent {agent} --scope project",
     ]
     router_commands = [
-        f"skillager search \"<user-goal>\" --tag {tag} --approved-only --agent {agent} --json"
+        f"skillager search \"<user-goal>\" --tag {tag} --agent {agent} --json"
         for tag in (materialized_router_tags or [])
     ]
     return [commands[0], *router_commands, *commands[1:]]
+
+
+def _available_inventory_summary(
+    skills: list[dict[str, Any]],
+    *,
+    agent: str | None,
+    project_exposure: dict[str, list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    available = _available_skills(skills)
+    source_entry_count = len(available)
+    agent_visible = _collapse_agent_variant_results(available, agent) if agent else available
+    exposed_ids = _project_exposure_breakdown(project_exposure or {}, skill_ids={skill["id"] for skill in available})["exposed_ids"]
+    available_ids = {skill["id"] for skill in available}
+    return {
+        "selected_source_entries": len(skills),
+        "available_source_entries": source_entry_count,
+        "agent_visible_choices": len(agent_visible),
+        "exposed_now": len(exposed_ids),
+        "available_on_demand": len(available_ids.difference(exposed_ids)),
+        "collapsed_variants": max(0, source_entry_count - len(agent_visible)),
+        "basis": "available source entries; agent-visible choices collapse alternate native-agent variants when --agent is set",
+    }
 
 
 def _artifacts_need_attention(artifacts: dict[str, Any]) -> bool:
@@ -1566,18 +2672,49 @@ def _artifacts_need_attention(artifacts: dict[str, Any]) -> bool:
     return working.get("status") != "present"
 
 
+def _readiness_handoff_state(readiness: dict[str, Any]) -> str:
+    if readiness.get("handoff_ready"):
+        return "ready"
+    action = readiness.get("handoff") or {}
+    kind = action.get("kind")
+    reason = action.get("reason")
+    if kind == "agent-required":
+        return "not checked (agent not specified)"
+    if kind == "manual":
+        return f"manual repair needed ({reason})" if reason else "manual repair needed"
+    if kind == "bootstrap":
+        return f"needs repair ({reason})" if reason else "needs repair"
+    return "needs repair"
+
+
+def _readiness_next_actions(readiness: dict[str, Any]) -> list[str]:
+    if readiness.get("handoff_ready"):
+        return []
+    action = readiness.get("handoff") or {}
+    if action.get("command"):
+        return [str(action["command"])]
+    if action.get("kind") == "agent-required":
+        return ["skillager status --agent codex", "skillager status --agent claude"]
+    message = action.get("message")
+    return [str(message)] if message else []
+
+
 def _print_handoff(handoff: dict[str, Any]) -> None:
     state = handoff["state"]
     print(_style("Skillager handoff complete", "bold"))
     print()
+    readiness = handoff.get("readiness") or {}
+    exposure = readiness.get("exposure") or {}
+    print("Readiness:")
+    print(f"  Ready: {'yes' if readiness.get('ready') else 'no'}")
+    print(f"  Review: {'ready' if readiness.get('review_ready') else 'needs review'}")
+    print(f"  Handoff: {_readiness_handoff_state(readiness)}")
+    print(f"  Exposure: {_exposure_summary_text(exposure)}")
+    print()
     print("State:")
     setup = state["setup"]
-    setup_text = f"needed, {setup['unreviewed']} unreviewed skill(s)" if setup["needed"] else "clean"
+    setup_text = f"needed, {setup.get('pending_owner_review', 0)} skill(s) pending owner review" if setup["needed"] else "clean"
     print(f"  Setup: {setup_text}")
-    lint_blocked = state.get("lint_blocked") or {}
-    print(f"  Lint blocked: {lint_blocked.get('count', 0)}")
-    authored = state.get("authored_unreviewed") or {}
-    print(f"  Authored unreviewed: {authored.get('count', 0)}")
     migration = state["migration"]
     migration_text = "pending" if migration.get("pending") else "clean"
     if migration.get("pending"):
@@ -1609,18 +2746,14 @@ def _print_handoff(handoff: dict[str, Any]) -> None:
         f"{', '.join(state['unmaterialized_attached_tags']) if state['unmaterialized_attached_tags'] else 'none'}"
     )
     tagging = state.get("tagging") or {}
-    if tagging.get("mixed_trust_tag_count"):
+    if tagging.get("tags_pending_owner_review"):
+        print(f"  Attached tags pending owner review: {tagging.get('tags_pending_owner_review')}")
+    if tagging.get("available_untagged_count"):
         names = ", ".join(
-            f"{item['tag']}={item['review_needed']} unreviewed"
-            for item in tagging.get("mixed_trust_tags", [])[:5]
+            f"{item['collection']}={item['available_untagged']}"
+            for item in tagging.get("available_untagged_collections", [])[:5]
         )
-        print(f"  Attached tags needing review: {names}")
-    if tagging.get("approved_untagged_count"):
-        names = ", ".join(
-            f"{item['collection']}={item['approved_untagged']}"
-            for item in tagging.get("approved_untagged_collections", [])[:5]
-        )
-        print(f"  Approved untagged collection skills: {tagging['approved_untagged_count']} ({names})")
+        print(f"  Available untagged collection skills: {tagging['available_untagged_count']} ({names})")
     print()
     print("Next:")
     print(handoff["next"]["message"])
@@ -1634,12 +2767,133 @@ def _print_handoff(handoff: dict[str, Any]) -> None:
             print(f"  {command}")
 
 
+def _print_inventory_block(inventory: dict[str, Any], *, indent: str = "") -> None:
+    if not inventory:
+        return
+    print(f"{indent}Inventory:")
+    print(f"{indent}  selected source entries: {inventory.get('selected_source_entries', 0)}")
+    print(f"{indent}  available source entries: {inventory.get('available_source_entries', 0)}")
+    print(f"{indent}  agent-visible choices: {inventory.get('agent_visible_choices', 0)}")
+    print(f"{indent}  exposed now: {inventory.get('exposed_now', 0)}")
+    print(f"{indent}  on demand: {inventory.get('available_on_demand', 0)}")
+    print(f"{indent}  collapsed variants: {inventory.get('collapsed_variants', 0)}")
+
+
 def _compact_status(status: dict[str, Any]) -> dict[str, Any]:
     payload = dict(status)
+    payload["available"] = payload.pop("approved", 0)
+    payload["pending_owner_review"] = int(payload.pop("review_needed", 0) or 0) + int(payload.pop("lint_blocked", 0) or 0)
+    if payload["pending_owner_review"]:
+        payload["message"] = (
+            f"Skillager: {payload['pending_owner_review']} skill(s) pending owner review. "
+            "Ask the user to run `skillager setup`."
+        )
+    payload.pop("global_approved", None)
+    payload.pop("lint_blocked_ids", None)
     scope = payload.get("scope")
     if isinstance(scope, dict):
         payload["scope"] = {key: value for key, value in scope.items() if key != "baseline"}
+    payload.pop("scan", None)
+    payload.pop("lint_warned", None)
+    payload.pop("manifest_lint", None)
+    summary = payload.get("summary")
+    if isinstance(summary, dict):
+        payload["summary"] = _compact_review_summary(summary)
+    payload.pop("duplicate_content", None)
+    authored = payload.get("authored_unreviewed")
+    if isinstance(authored, dict):
+        payload["authored_pending_owner_review"] = int(authored.get("count") or 0)
+        payload.pop("authored_unreviewed", None)
+    readiness = payload.get("readiness")
+    if isinstance(readiness, dict):
+        payload["readiness"] = _compact_readiness(readiness)
+    tagging = payload.get("tagging")
+    if isinstance(tagging, dict):
+        payload["tagging"] = _compact_tagging_summary(tagging)
+    collection_inventory = payload.get("collection_inventory")
+    if isinstance(collection_inventory, dict):
+        payload["collection_inventory"] = _compact_collection_inventory(collection_inventory)
     return payload
+
+
+def _compact_readiness(readiness: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(readiness)
+    exposure = compact.get("exposure")
+    if isinstance(exposure, dict):
+        compact["exposure"] = _compact_exposure(exposure)
+    return compact
+
+
+def _compact_exposure(exposure: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(exposure)
+    if "approved" in compact:
+        compact["available"] = compact.pop("approved")
+    if "approved_source_entries" in compact:
+        compact["available_source_entries"] = compact.pop("approved_source_entries")
+    if compact.get("count_basis") == "approved source entries":
+        compact["count_basis"] = "available source entries"
+    return compact
+
+
+def _compact_duplicate_content(duplicate: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(duplicate)
+    for key in ("review_needed_ids", "approved_ids", "groups_detail"):
+        compact.pop(key, None)
+    return compact
+
+
+def _compact_tagging_summary(tagging: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(tagging)
+    if "mixed_trust_tag_count" in compact:
+        compact["tags_pending_owner_review"] = compact.pop("mixed_trust_tag_count")
+    compact.pop("mixed_trust_tags", None)
+    if "approved_untagged_count" in compact:
+        compact["available_untagged_count"] = compact.pop("approved_untagged_count")
+    collections = compact.pop("approved_untagged_collections", None)
+    if isinstance(collections, list):
+        compact["available_untagged_collections"] = [
+            {
+                **item,
+                "available_untagged": item.get("approved_untagged", 0),
+            }
+            for item in collections
+        ]
+        for item in compact["available_untagged_collections"]:
+            item.pop("approved_untagged", None)
+    return compact
+
+
+def _compact_collection_inventory(inventory: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(inventory)
+    if "approved" in compact:
+        compact["available"] = compact.pop("approved")
+    pending = int(compact.pop("review_needed", 0) or 0) + int(compact.pop("lint_blocked", 0) or 0)
+    compact["pending_owner_review"] = pending
+    items = []
+    for item in compact.get("items") or []:
+        next_item = dict(item)
+        if "approved" in next_item:
+            next_item["available"] = next_item.pop("approved")
+        item_pending = int(next_item.pop("review_needed", 0) or 0) + int(next_item.pop("lint_blocked", 0) or 0)
+        next_item["pending_owner_review"] = item_pending
+        items.append(next_item)
+    compact["items"] = items
+    return compact
+
+
+def _compact_review_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(summary)
+    compact.pop("by_risk", None)
+    compact.pop("by_trust", None)
+    by_source = compact.get("by_source")
+    if isinstance(by_source, dict):
+        compact["by_source"] = {
+            source: sum(int(count) for count in counts.values())
+            if isinstance(counts, dict)
+            else counts
+            for source, counts in by_source.items()
+        }
+    return compact
 
 
 def _status_lookback_summary(state_root: Path) -> dict[str, Any]:
@@ -1948,15 +3202,51 @@ def _tag_summary_line(summary: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
+def _tag_available_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    pending = int(summary.get("review_needed") or 0) + int(summary.get("lint_blocked") or 0)
+    blocked = int(summary.get("blocked") or 0)
+    available = int(summary.get("approved") or 0)
+    return {
+        "tag": summary.get("tag"),
+        "skills": int(summary.get("skills") or 0),
+        "available": available,
+        "pending_owner_review": pending,
+        "unavailable": pending + blocked,
+        "blocked": blocked,
+    }
+
+
+def _tag_available_summary_line(summary: dict[str, Any]) -> str:
+    parts = [
+        f"{summary['tag']}: {summary['skills']} skill(s)",
+        f"available={summary['available']}",
+    ]
+    if summary.get("pending_owner_review"):
+        parts.append(f"pending_owner_review={summary['pending_owner_review']}")
+    if summary.get("blocked"):
+        parts.append(f"blocked={summary['blocked']}")
+    return ", ".join(parts)
+
+
 def _print_tag_review_warning(summary: dict[str, Any], *, indent: str = "") -> None:
     if not (summary.get("review_needed") or summary.get("lint_blocked")):
         return
     print(
         f"{indent}warning: tag {summary['tag']} contains "
         f"{summary.get('review_needed', 0)} unreviewed and {summary.get('lint_blocked', 0)} lint-blocked skill(s); "
-        "approved-only search and router materialization will use only reviewed/trusted/pinned members."
+        "search and router materialization will use only available members."
     )
     print(f"{indent}review remaining tag members with: skillager setup --source collection")
+
+
+def _print_tag_owner_review_note(summary: dict[str, Any], *, indent: str = "") -> None:
+    pending = int(summary.get("review_needed") or 0) + int(summary.get("lint_blocked") or 0)
+    if not pending:
+        return
+    print(
+        f"{indent}note: {pending} tag member(s) need owner review before they become available. "
+        "Ask the user to run `skillager setup --source collection` when they want to inspect them."
+    )
 
 
 def _status_tagging_summary(state_root: Path, catalog_root: Path) -> dict[str, Any]:
@@ -2010,6 +3300,8 @@ def _status_message(
     lookback_summary: dict[str, Any] | None = None,
     collection_summary: dict[str, Any] | None = None,
     migration_summary: dict[str, Any] | None = None,
+    duplicate_content: dict[str, Any] | None = None,
+    readiness: dict[str, Any] | None = None,
 ) -> str:
     if lint_blocked:
         return f"Skillager: {len(lint_blocked)} skill(s) are lint-blocked. Run `skillager lint` and fix the source or approve with an audited override."
@@ -2023,30 +3315,61 @@ def _status_message(
             "Run `skillager status --ack-migration` after reviewing."
         )
     if review_needed:
-        return f"Skillager: {len(review_needed)} unreviewed skill(s) need review in the active setup scope. Ask the user to run `skillager setup`."
+        duplicate_review = int((duplicate_content or {}).get("review_needed") or 0)
+        if duplicate_review:
+            return (
+                f"Skillager: {len(review_needed)} skill(s) need owner review in the active setup scope; "
+                f"{duplicate_review} same-content duplicate(s) already match approved content and need source-key approval. "
+                "Ask the user to run `skillager setup`."
+            )
+        return f"Skillager: {len(review_needed)} skill(s) need owner review in the active setup scope. Ask the user to run `skillager setup`."
+    if readiness and not readiness.get("handoff_ready") and (readiness.get("exposure") or {}).get("approved"):
+        handoff = readiness.get("handoff") or {}
+        if handoff.get("kind") == "agent-required":
+            return "Skillager: review is complete. Run `skillager status --agent codex` or `skillager status --agent claude` to check handoff readiness."
+        command = handoff.get("command")
+        if command:
+            return f"Skillager: review is complete, but handoff artifacts need refresh. Run `{command}`."
+        return f"Skillager: review is complete, but handoff artifacts need manual repair. {handoff.get('message', '').strip()}"
     if collection_summary and collection_summary.get("unattached_count"):
         return "Skillager: registered collections are not attached to this project. Run `skillager collection enable <name>` before setup."
     if lookback_summary and lookback_summary.get("pending"):
         recs = lookback_summary.get("recommendations", 0)
         overlaps = lookback_summary.get("observed_overlaps", 0)
-        return f"Skillager: no new unreviewed skills found. Lookback available: {recs} recommendation(s), {overlaps} overlap hint(s) (behavioral signals, not decisions). Run `skillager lookback`."
-    return "Skillager: no new unreviewed skills found. Use only approved materialized skills."
+        return f"Skillager: no skills pending owner review. Lookback available: {recs} recommendation(s), {overlaps} overlap hint(s) (behavioral signals, not decisions). Run `skillager lookback`."
+    return "Skillager: no skills pending owner review. Use only available materialized skills."
 
 
 def _print_status(status: dict[str, Any]) -> None:
     print(_style("Skillager status", "bold"))
+    readiness = status.get("readiness") or {}
+    exposure = readiness.get("exposure") or {}
+    print(f"  - readiness: {'ready' if readiness.get('ready') else 'not ready'}")
+    print(f"    review: {'ready' if readiness.get('review_ready') else 'needs review'}")
+    print(f"    handoff: {_readiness_handoff_state(readiness)}")
+    next_actions = _readiness_next_actions(readiness)
+    if len(next_actions) == 1:
+        print(f"    next: {next_actions[0]}")
+    elif next_actions:
+        print("    next:")
+        for action in next_actions:
+            print(f"      - {action}")
+    print(f"    exposure: {_exposure_summary_text(exposure)}")
+    if status.get("agent"):
+        source = status.get("agent_source")
+        source_suffix = " from saved setup scope" if source == "saved_setup_scope" else ""
+        print(f"  - agent: {status['agent']}{source_suffix}")
     print(f"  - selected skills: {status['selected']}")
-    print(f"  - approved: {status['approved']}")
+    print(f"  - available: {status['approved']}")
     if status.get("global_approved"):
-        print(f"  - reusable global approvals: {status['global_approved']}")
+        print(f"  - reusable global availability records: {status['global_approved']}")
     authored = status.get("authored_unreviewed") or {}
     if authored.get("count"):
-        print(f"  - authored unreviewed: {authored['count']}")
-        for skill_id in authored.get("ids", []):
-            print(f"    - {skill_id}")
-    print(f"  - review needed: {status['review_needed']}")
+        print(f"  - authored pending owner review: {authored['count']}")
+    print(f"  - pending owner review: {status['review_needed']}")
     if status.get("lint_blocked"):
         print(f"  - lint blocked: {status['lint_blocked']} (run `skillager lint`)")
+    _print_duplicate_content_status(status.get("duplicate_content") or {}, indent="  - ")
     manifest_lint = status.get("manifest_lint") or {}
     if manifest_lint.get("warned"):
         print(f"  - manifest lint warned: {manifest_lint['warned']}")
@@ -2121,7 +3444,8 @@ def _print_status(status: dict[str, Any]) -> None:
         parts = [f"{agent}={count}" for agent, count in sorted(materialized.items())]
         print(f"  - materialized project skills: {', '.join(parts)}")
     if status.get("exposure_count"):
-        print(f"  - exposed approved skills: {status['exposure_count']}")
+        print(f"  - exposure detail: {_exposure_summary_text(exposure)}")
+    _print_inventory_block(status.get("inventory") or {}, indent="  - ")
     lookback = status.get("lookback_summary") or {}
     if lookback.get("pending"):
         print(
@@ -2132,12 +3456,27 @@ def _print_status(status: dict[str, Any]) -> None:
     update = status.get("update") or {}
     if update.get("available"):
         print(f"  - update available: skillager {update.get('latest_version')} (run `{update.get('command')}`)")
-    by_risk = (status.get("scan") or {}).get("by_risk") or status.get("summary", {}).get("by_risk", {})
-    if by_risk:
-        risk_bits = ", ".join(_risk_count(risk, count) for risk, count in sorted(by_risk.items()))
-        print(f"  - scan risk: {risk_bits}")
     print()
     print(status["message"])
+
+
+def _print_duplicate_content_status(duplicate_content: dict[str, Any], *, indent: str = "") -> None:
+    review_needed = int(duplicate_content.get("review_needed") or 0)
+    if not review_needed:
+        return
+    groups = int(duplicate_content.get("approved_overlap_groups") or 0)
+    print(f"{indent}duplicate approved content: {review_needed} source-key approval(s) across {groups} group(s)")
+    relevant_groups = [
+        group
+        for group in (duplicate_content.get("groups_detail") or [])
+        if group.get("source_key_approval_required")
+    ]
+    for group in relevant_groups[:3]:
+        review_ids = ", ".join(group.get("review_needed_ids") or [])
+        approved_ids = ", ".join(group.get("approved_ids") or [])
+        print(f"    {review_ids} matches approved {approved_ids}")
+    if len(relevant_groups) > 3:
+        print(f"    ... {len(relevant_groups) - 3} more duplicate group(s)")
 
 
 def _print_migration_details(migrations: dict[str, Any]) -> None:
@@ -2172,6 +3511,35 @@ def _authored_unreviewed(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _status_scope_path(state_root: Path) -> Path:
     return state_root / "status_scope.json"
+
+
+def _clear_fresh_project_state(state_root: Path) -> dict[str, Any]:
+    return {
+        "project_tags": clear_project_tags(state_root),
+        "sessions": clear_sessions(state_root),
+        "status_scope": _clear_status_scope(state_root),
+    }
+
+
+def _fresh_project_retained_global_state(catalog_root: Path, project_dir: Path) -> dict[str, Any]:
+    tags = load_tags(catalog_root).get("tags") or {}
+    return {
+        "global_approvals": len(load_trust(catalog_root).get("global_approvals") or {}),
+        "catalog_tags": len(tags),
+        "catalog_tag_members": sum(len(skill_ids or []) for skill_ids in tags.values()),
+        "collections": len(load_collections(catalog_root).get("collections") or {}),
+        "materialized_skill_targets": len(_materialized_target_paths(project_dir, agents=["codex", "claude"])),
+    }
+
+
+def _clear_status_scope(state_root: Path) -> bool:
+    path = _status_scope_path(state_root)
+    if not path.exists():
+        return False
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"refusing to clear unsafe status scope path: {path}")
+    path.unlink()
+    return True
 
 
 def _native_inventory_path(state_root: Path) -> Path:
@@ -2344,37 +3712,34 @@ def _prompt_setup_audience(state_root: Path, args: argparse.Namespace, *, catalo
     )
     counts: dict[str, int] = {}
     for skill in skills:
-        audience = skill.get("audience_guess", {}).get("audience") or "unknown"
+        audience = audience_bucket(skill)
         counts[audience] = counts.get(audience, 0) + 1
     if len([count for count in counts.values() if count]) <= 1:
         return None
 
     print(_style("Audience scope", "bold"))
-    print("  This setup selection spans multiple audiences.")
-    print("  If you are setting up before a specific task is known, choose both; agents can narrow after asking the user goal.")
+    print("  This setup selection spans declared audiences and undeclared skills.")
+    print("  Choose all when setting up before a specific task is known; agents can narrow after asking the user goal.")
     for audience, count in sorted(counts.items()):
-        print(f"    - {audience}: {count}")
+        print(f"    - {audience_bucket_label(audience)}: {count}")
     while True:
-        print("  1. User-facing library usage")
-        print("  2. Dev/maintainer workflows")
-        print("  3. Both user and dev")
-        if counts.get("unknown"):
-            print("  4. Unknown only")
-            print("  5. Cancel setup")
-        else:
-            print("  4. Cancel setup")
+        print("  1. Declared user-facing skills")
+        print("  2. Declared dev/maintainer skills")
+        print("  3. Everything else (no declared audience)")
+        print("  4. All selected skills")
+        print("  5. Cancel setup")
         choice = _interactive_input("> ").strip().lower()
         if choice == "1" or choice == "user":
             return "user"
         if choice == "2" or choice in {"dev", "developer", "maintainer"}:
             return "dev"
-        if choice == "3" or choice in {"both", "all"}:
+        if choice == "3" or choice in {AUDIENCE_OTHER, "unknown", "undeclared", "everything_else", "everything-else", "everything else"}:
+            return AUDIENCE_OTHER
+        if choice == "4" or choice in {"both", "all"}:
             return None
-        if counts.get("unknown") and (choice == "4" or choice == "unknown"):
-            return "unknown"
-        if (counts.get("unknown") and choice == "5") or (not counts.get("unknown") and choice == "4") or choice in {"q", "quit", "exit", "cancel"}:
+        if choice == "5" or choice in {"q", "quit", "exit", "cancel"}:
             return "__cancel__"
-        print("Enter a listed number, user, dev, both, or cancel.")
+        print("Enter a listed number, user, dev, everything else, all, or cancel.")
 
 
 def cmd_index(args: argparse.Namespace) -> int:
@@ -2390,7 +3755,7 @@ def cmd_index(args: argparse.Namespace) -> int:
     else:
         print(f"Indexed {len(data['skills'])} skills")
         if data.get("errors"):
-            print(f"Errors: {len(data['errors'])}")
+            _print_discovery_errors(data["errors"])
     return 0
 
 
@@ -2400,25 +3765,28 @@ def cmd_list(args: argparse.Namespace) -> int:
     skills = _effective_project_skills(
         root(args),
         catalog_root=catalog_root(args),
-        include_blocked=args.include_blocked,
-        include_lint_blocked=args.include_lint_blocked,
     )
+    skills = _available_skills(skills)
     if not args.include_global and not args.source:
         skills = [skill for skill in skills if skill.get("source", {}).get("type") != "global"]
     if args.no_packages and not args.source:
         skills = [skill for skill in skills if skill.get("source", {}).get("type") != "python-package"]
     skills = [_skill for _skill in skills if _matches_filters(_skill, args)]
-    if args.agent or args.summary_json:
+    source_entry_count = len(skills)
+    if args.agent:
+        skills = _collapse_agent_variant_results(skills, args.agent)
+    elif args.summary_json:
         skills = _annotate_agent_variants(skills, args.agent)
     if args.agent:
         skills = _sort_agent_variant_inventory(skills, args.agent)
     if args.summary_json:
-        print(json.dumps(_inventory_summary(skills, agent=args.agent), indent=2, sort_keys=True))
+        print(json.dumps(_inventory_summary(skills, agent=args.agent, source_entry_count=source_entry_count), indent=2, sort_keys=True))
     elif args.json:
-        print(json.dumps(skills, indent=2, sort_keys=True))
+        payload = skills if args.full_json else [_compact_skill_metadata(skill, agent=args.agent) for skill in skills]
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         for skill in skills:
-            print(f"{skill['id']}\t{skill.get('activation', '-')}\t{skill['trust']}\t{skill['source'].get('type')}\t{skill.get('summary', '-')}")
+            print(f"{skill['id']}\t{skill.get('activation', '-')}\t{skill['source'].get('type')}\t{skill.get('summary', '-')}")
     return 0
 
 
@@ -2426,15 +3794,11 @@ def cmd_search(args: argparse.Namespace) -> int:
     if args.tag:
         tag_key = normalize_tag(args.tag)
         attached = tag_key in load_project_tags(root(args)).get("attached_tags", [])
-        if args.approved_only and not attached:
-            raise ValueError(f"tag is not attached to this project: {args.tag}")
         skills = []
         for skill in _select_project_tag_skills(
             root(args),
             catalog_root(args),
             args.tag,
-            include_blocked=args.include_blocked,
-            include_lint_blocked=args.include_lint_blocked,
         ):
             item = dict(skill)
             availability = set(item.get("availability", []))
@@ -2447,17 +3811,16 @@ def cmd_search(args: argparse.Namespace) -> int:
         skills = _effective_project_skills(
             root(args),
             catalog_root=catalog_root(args),
-            include_blocked=args.include_blocked,
-            include_lint_blocked=args.include_lint_blocked,
         )
         if not args.include_global:
             skills = [skill for skill in skills if skill.get("source", {}).get("type") != "global"]
+    skills = _available_skills(skills)
+    if args.agent:
+        skills = _collapse_agent_variant_results(skills, args.agent)
     results = search_index(
         skills,
         args.query,
-        include_blocked=args.include_blocked,
-        include_lint_blocked=args.include_lint_blocked,
-        include_untrusted=not (args.trusted_only or args.approved_only),
+        include_untrusted=False,
     )
     if args.compatible_only:
         if not args.agent:
@@ -2466,7 +3829,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     if args.limit < 0:
         raise ValueError("--limit must be 0 or greater")
     if args.agent:
-        results = _sort_agent_variant_search(_annotate_agent_variants(results, args.agent), args.agent)
+        results = _sort_agent_variant_search(results, args.agent)
     if args.limit:
         results = results[: args.limit]
     record_search_event(
@@ -2475,7 +3838,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         results=results,
         agent=args.agent,
         tag=args.tag,
-        trusted_only=bool(args.trusted_only or args.approved_only),
+        trusted_only=True,
         limit=args.limit,
         no_record=args.no_session_record,
     )
@@ -2484,28 +3847,35 @@ def cmd_search(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         for skill in results:
-            print(f"{skill['score']}\t{skill['id']}\t{skill['trust']}\t{skill['summary']}")
+            print(f"{skill['score']}\t{skill['id']}\t{skill['summary']}")
     return 0
 
 
+def _is_available_skill(skill: dict[str, Any]) -> bool:
+    return skill.get("trust") in TRUSTED_STATES
+
+
+def _available_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [skill for skill in skills if _is_available_skill(skill)]
+
+
 def _compact_search_result(skill: dict[str, Any], *, agent: str | None = None) -> dict[str, Any]:
-    scan = skill.get("scan") or {}
     compatibility = skill.get("compatibility") or {}
     problem = compatibility_problem(skill, agent)
     return {
         "id": skill.get("id"),
         "name": skill.get("name"),
         "summary": skill.get("summary"),
+        "available": True,
         "score": skill.get("score"),
+        "score_detail": skill.get("score_detail"),
         "reasons": skill.get("reasons", []),
-        "trust": skill.get("trust"),
-        "trust_reason": skill.get("trust_reason"),
-        "risk": scan.get("risk"),
         "source": skill.get("source", {}),
         "availability": skill.get("availability", []),
         "exposure": skill.get("exposure", "hidden"),
         "materialized_targets": skill.get("materialized_targets", []),
         "tags": skill.get("tags", []),
+        "source_root": (skill.get("source") or {}).get("path") or skill.get("root"),
         "entrypoint": skill.get("entrypoint"),
         "agent_hint": skill.get("agent_hint") or _agent_hint(skill),
         "agent_variant": skill.get("agent_variant"),
@@ -2521,12 +3891,46 @@ def _compact_search_result(skill: dict[str, Any], *, agent: str | None = None) -
     }
 
 
-def _inventory_summary(skills: list[dict[str, Any]], *, agent: str | None = None) -> dict[str, Any]:
+def _compact_skill_metadata(skill: dict[str, Any], *, agent: str | None = None) -> dict[str, Any]:
+    compatibility = skill.get("compatibility") or {}
+    problem = compatibility_problem(skill, agent)
+    payload: dict[str, Any] = {
+        "id": skill.get("id"),
+        "name": skill.get("name"),
+        "summary": skill.get("summary"),
+        "available": True,
+        "source": skill.get("source", {}),
+        "availability": skill.get("availability", []),
+        "activation": skill.get("activation"),
+        "exposure": skill.get("exposure", "hidden"),
+        "materialized_targets": skill.get("materialized_targets", []),
+        "tags": skill.get("tags", []),
+        "source_root": (skill.get("source") or {}).get("path") or skill.get("root"),
+        "entrypoint": skill.get("entrypoint"),
+        "agent_hint": skill.get("agent_hint") or _agent_hint(skill),
+        "agent_variant": skill.get("agent_variant"),
+        "compatibility": {
+            "exclusive_to": compatibility.get("exclusive_to"),
+            "incompatible_with": compatibility.get("incompatible_with", []),
+            "assumptions": compatibility.get("assumptions", {}),
+            "warnings": compatibility.get("warnings", {}),
+            "agent": agent,
+            "problem": problem,
+            "activation_warnings": compatibility_warnings(skill, agent),
+        },
+    }
+    return payload
+
+
+def _inventory_summary(
+    skills: list[dict[str, Any]],
+    *,
+    agent: str | None = None,
+    source_entry_count: int | None = None,
+) -> dict[str, Any]:
     annotated = _annotate_agent_variants(skills, agent)
     source_counts = Counter((skill.get("source") or {}).get("type") or "unknown" for skill in annotated)
-    trust_counts = Counter(skill.get("trust") or "unknown" for skill in annotated)
     exposure_counts = Counter(skill.get("exposure") or "hidden" for skill in annotated)
-    risk_counts = Counter((skill.get("scan") or {}).get("risk") or "unknown" for skill in annotated)
     availability_counts: Counter[str] = Counter()
     tag_counts: Counter[str] = Counter()
     for skill in annotated:
@@ -2536,11 +3940,17 @@ def _inventory_summary(skills: list[dict[str, Any]], *, agent: str | None = None
         "schema": "skillager.inventory-summary.v1",
         "agent": agent,
         "total": len(annotated),
+        "total_label": "agent-visible choices" if agent else "inventory entries",
+        "source_entry_count": source_entry_count if source_entry_count is not None else len(annotated),
+        "variant_collapse": {
+            "applied": bool(agent),
+            "before": source_entry_count if source_entry_count is not None else len(annotated),
+            "after": len(annotated),
+            "basis": "native-agent variants collapse to one preferred agent-visible choice when --agent is set",
+        },
         "counts": {
             "by_source": dict(sorted(source_counts.items())),
-            "by_trust": dict(sorted(trust_counts.items())),
             "by_exposure": dict(sorted(exposure_counts.items())),
-            "by_risk": dict(sorted(risk_counts.items())),
             "by_availability": dict(sorted(availability_counts.items())),
         },
         "tags": [
@@ -2550,20 +3960,17 @@ def _inventory_summary(skills: list[dict[str, Any]], *, agent: str | None = None
         "sources": _inventory_source_groups(annotated),
         "duplicate_families": _agent_variant_families(annotated, agent=agent),
         "skills": [_compact_inventory_item(skill) for skill in annotated],
-        "full_inventory_command": "skillager list --json",
-        "search_command": "skillager search \"<query>\" --trusted-only --json",
+        "search_command": "skillager search \"<query>\" --json",
     }
 
 
 def _compact_inventory_item(skill: dict[str, Any]) -> dict[str, Any]:
-    scan = skill.get("scan") or {}
     source = skill.get("source") or {}
     return {
         "id": skill.get("id"),
         "name": skill.get("name"),
         "summary": skill.get("summary"),
-        "trust": skill.get("trust"),
-        "risk": scan.get("risk"),
+        "available": True,
         "source": {
             key: value
             for key, value in source.items()
@@ -2631,6 +4038,18 @@ def _annotate_agent_variants(skills: list[dict[str, Any]], agent: str | None) ->
             }
         annotated.append(item)
     return annotated
+
+
+def _collapse_agent_variant_results(skills: list[dict[str, Any]], agent: str) -> list[dict[str, Any]]:
+    collapsed = []
+    for skill in _annotate_agent_variants(skills, agent):
+        variant = skill.get("agent_variant") or {}
+        if variant and not variant.get("is_preferred"):
+            continue
+        if variant:
+            variant["policy"] = "agent-scoped result collapsed to the preferred variant; alternatives are listed for inspection"
+        collapsed.append(skill)
+    return collapsed
 
 
 def _sort_agent_variant_search(skills: list[dict[str, Any]], agent: str) -> list[dict[str, Any]]:
@@ -2744,17 +4163,19 @@ def _same_skill_variant(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 
 def cmd_show(args: argparse.Namespace) -> int:
-    skill = _find_project_skill(root(args), args.skill_id, catalog_root=catalog_root(args), include_lint_blocked=args.include_lint_blocked)
+    skill = _find_project_skill(root(args), args.skill_id, catalog_root=catalog_root(args), include_lint_blocked=True)
+    if not _is_available_skill(skill):
+        raise ValueError(f"skill is not available: {args.skill_id}; ask the user to run `skillager setup`")
     if skill.get("trust") == "lint_blocked" and args.content:
         raise ValueError(f"skill content is not available while lint-blocked: {args.skill_id}")
     if args.content and skill.get("trust") not in {"reviewed", "trusted", "pinned"}:
-        raise ValueError(f"skill content is not available until reviewed or trusted: {args.skill_id}; {_approval_hint(skill)}")
+        raise ValueError(f"skill content is not available: {args.skill_id}; {_approval_hint(skill)}")
     if args.activate:
         record_skill_event(root(args), "skill_activated", skill)
     elif args.content:
         record_skill_event(root(args), "skill_shown", skill)
     if args.json:
-        payload: dict[str, Any] = {"skill": skill}
+        payload: dict[str, Any] = {"skill": skill if args.full_json else _compact_skill_metadata(skill)}
         if args.content:
             payload["content"] = Path(skill["entrypoint"]).read_text(encoding="utf-8", errors="replace")
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -2787,15 +4208,13 @@ def cmd_activate(args: argparse.Namespace) -> int:
     if skill.get("trust") == "blocked" and not args.force:
         raise ValueError(f"skill is blocked: {args.skill_id}")
     if skill.get("trust") == "discovered" and not args.force:
-        raise ValueError(f"skill is not reviewed or trusted: {args.skill_id}; {_approval_hint(skill)}")
+        raise ValueError(f"skill is not available: {args.skill_id}; {_approval_hint(skill)}")
     activation_agent = _activation_agent(args, skill)
     problem = compatibility_problem(skill, activation_agent)
     if problem and not args.allow_incompatible:
         raise ValueError(f"skill is {problem}; use --allow-incompatible only with explicit user approval")
     for warning in compatibility_warnings(skill, activation_agent):
         print(f"warning: {warning}", file=sys.stderr)
-    if skill.get("scan", {}).get("risk") == "high" and not args.force:
-        print(f"warning: skill has high-risk scan findings: {args.skill_id}", file=sys.stderr)
     record_skill_event(
         root(args),
         "skill_activated",
@@ -2874,9 +4293,11 @@ def _effective_project_skills(
     catalog_root: Path | None = None,
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
+    project_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     catalog_root = catalog_root or state_root
-    exposure = _project_exposure(Path.cwd())
+    project_dir = (project_dir or find_project_root() or Path.cwd()).resolve()
+    exposure = _project_exposure(project_dir)
     extra_paths = _active_setup_paths(state_root)
     if extra_paths:
         data = build_index(state_root, include_packages=True, approval_root=catalog_root, extra_paths=extra_paths)
@@ -3062,6 +4483,7 @@ def _project_exposure(project: Path) -> dict[str, list[dict[str, Any]]]:
                 if data.get("source_type") == "skillager-router":
                     target["kind"] = "router"
                     target["router"] = data.get("id") or data.get("source_id")
+                    target["tag"] = data.get("tag")
                     for skill_id in data.get("skill_ids") or []:
                         exposure.setdefault(str(skill_id), []).append(dict(target))
                 elif data.get("source_type") == "skillager-stub":
@@ -3252,6 +4674,13 @@ def cmd_review(args: argparse.Namespace) -> int:
         include_lint_blocked=args.include_lint_blocked or args.override_lint,
         include_global=args.include_global,
     )
+    duplicate_context = select_visible_skills(
+        data.get("skills", []),
+        include_blocked=args.include_blocked,
+        include_lint_blocked=args.include_lint_blocked or args.override_lint,
+        include_global=args.include_global,
+    )
+    skills = annotate_duplicate_content(skills, context=duplicate_context)
     summary = review_summary(skills)
     action = apply_review_action(
         root(args),
@@ -3281,6 +4710,13 @@ def cmd_review(args: argparse.Namespace) -> int:
             include_lint_blocked=True,
             include_global=args.include_global,
         )
+        duplicate_context = select_visible_skills(
+            data.get("skills", []),
+            include_blocked=args.include_blocked or args.block_high,
+            include_lint_blocked=True,
+            include_global=args.include_global,
+        )
+        skills = annotate_duplicate_content(skills, context=duplicate_context)
         summary = review_summary(skills)
     if args.json:
         print(json.dumps({"selected": skills, "summary": summary, "action": action}, indent=2, sort_keys=True))
@@ -3295,6 +4731,9 @@ def _review_extra_skills(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 def cmd_materialize(args: argparse.Namespace) -> int:
     mode = args.mode
+    if mode == "router" and not args.tag:
+        raise ValueError("--mode router requires --tag")
+    _require_materialize_selection(args)
     agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
     agent_notes_ready_before = _agent_notes_ready(Path.cwd(), agents=agents) if args.scope == "project" else False
     materialized_targets_before = _materialized_target_paths(Path.cwd(), agents=agents) if args.scope == "project" else set()
@@ -3311,8 +4750,6 @@ def cmd_materialize(args: argparse.Namespace) -> int:
             project_dir=Path.cwd(),
         )
     else:
-        if mode == "router":
-            raise ValueError("--mode router requires --tag")
         if args.tag:
             _require_attached_tag(root(args), args.tag)
         tag_skill_ids = {skill["id"] for skill in _select_project_tag_skills(root(args), catalog_root(args), args.tag)} if args.tag else None
@@ -3351,6 +4788,8 @@ def cmd_materialize(args: argparse.Namespace) -> int:
         print(json.dumps(results, indent=2, sort_keys=True))
     else:
         _print_materialize_results(results)
+        if args.scope == "project" and mode == "router" and args.tag and not args.dry_run:
+            _print_router_verification(args.tag, agents, results)
         if args.scope == "project" and not args.dry_run and any(item.get("status") == "materialized" for item in results):
             saved_scope = _load_status_scope(root(args))
             if saved_scope is None or saved_scope.get("selected_count") is None:
@@ -3369,6 +4808,17 @@ def cmd_materialize(args: argparse.Namespace) -> int:
             ):
                 _print_agent_next_steps(results)
     return 0
+
+
+def _require_materialize_selection(args: argparse.Namespace) -> None:
+    if args.tag or args.skill_ids or args.all_reviewed:
+        if args.all_reviewed and args.include_unreviewed:
+            raise ValueError("--all-reviewed cannot be combined with --include-unreviewed")
+        return
+    raise ValueError(
+        "materialize requires explicit skill IDs, --tag, or --all-reviewed. "
+        "To refresh first-party handoff artifacts, run skillager bootstrap --agent <agent>."
+    )
 
 
 def _require_materialize_matches(
@@ -3411,6 +4861,20 @@ def _suppress_materialize_result(item: dict[str, Any]) -> bool:
     return item.get("status") == "skipped" and item.get("reason") == "already up to date"
 
 
+def _print_router_verification(tag: str, agents: list[str], results: list[dict[str, Any]]) -> None:
+    current_agents = sorted(
+        agent
+        for agent in {item.get("agent") for item in results if item.get("skill_id") == f"skillager/{tag}" and _agent_next_step_artifact_current(item)}
+        if isinstance(agent, str)
+    )
+    if not current_agents:
+        return
+    print()
+    print("Verify router exposure:")
+    for agent in current_agents or agents:
+        print(f"  skillager handoff --agent {agent} --json")
+
+
 def _agent_notes_ready(project_dir: Path, *, agents: list[str]) -> bool:
     notes = agent_note_paths(project_dir, agents=agents)
     if not notes:
@@ -3446,11 +4910,9 @@ def _should_print_agent_next_steps(
     agent_notes_ready_before: bool = False,
     materialized_targets_before: set[Path] | None = None,
 ) -> bool:
-    changed = [item for item in results if item.get("status") == "materialized" and item.get("skill_id") != "skillager/working"]
+    changed = [item for item in results if item.get("status") == "materialized" and item.get("skill_id") and item.get("skill_id") != "skillager/working"]
     if not changed:
         return False
-    if not agent_notes_ready_before:
-        return True
     materialized_targets_before = materialized_targets_before or set()
     for item in changed:
         target = item.get("target")
@@ -3461,7 +4923,8 @@ def _should_print_agent_next_steps(
                 return True
         except OSError:
             return True
-    return False
+    # If no new target appeared, only print restart guidance for a fresh project.
+    return not agent_notes_ready_before and not materialized_targets_before
 
 
 def cmd_manifest_init(args: argparse.Namespace) -> int:
@@ -3566,17 +5029,17 @@ def cmd_lookback(args: argparse.Namespace) -> int:
 
 
 def _matches_filters(skill: dict[str, Any], args: argparse.Namespace) -> bool:
-    if skill.get("trust") == "blocked" and not args.include_blocked:
+    if skill.get("trust") == "blocked" and not getattr(args, "include_blocked", False):
         return False
     if skill.get("trust") == "lint_blocked" and not getattr(args, "include_lint_blocked", False):
         return False
     if args.source and skill.get("source", {}).get("type") != args.source:
         return False
-    if args.trust and skill.get("trust") != args.trust:
+    if getattr(args, "trust", None) and skill.get("trust") != args.trust:
         return False
     if args.activation and skill.get("activation") != args.activation:
         return False
-    if args.audience and args.audience not in skill.get("audience", []):
+    if args.audience and not _matches_declared_audience(skill, args.audience):
         return False
     if args.package and skill.get("package") != args.package:
         return False
@@ -3588,22 +5051,13 @@ def _format_skill(skill: dict[str, Any]) -> str:
         f"id: {skill['id']}",
         f"name: {skill.get('name', '-')}",
         f"summary: {skill.get('summary', '-')}",
+        "available: true",
         f"source: {skill['source'].get('type')}",
         f"availability: {', '.join(skill.get('availability', [])) or '-'}",
         f"activation: {skill.get('activation', '-')}",
-        f"trust: {skill['trust']}",
-        f"trust_reason: {skill.get('trust_reason', '-')}",
-        f"trust_scope: {skill.get('trust_scope', '-')}",
-        f"authored: {skill.get('authored', False)}",
         f"exposure: {skill.get('exposure', 'hidden')}",
-        f"scan: {skill.get('scan', {}).get('risk')}",
         f"entrypoint: {skill.get('entrypoint')}",
     ]
-    lint = skill.get("lint") or {}
-    if lint.get("status") and lint.get("status") != "ok":
-        lines.append(f"lint: {lint.get('status')}")
-        for item in lint.get("findings", [])[:5]:
-            lines.append(f"  - {item.get('severity')} {item.get('code')} {item.get('field')}: {item.get('detail')}")
     compatibility = skill.get("compatibility") or {}
     if compatibility.get("exclusive_to"):
         lines.append(f"exclusive_to: {compatibility['exclusive_to']}")
@@ -3628,22 +5082,25 @@ def _print_review_report(
         return
     print(_style("Review summary", "bold"))
     print(f"  - selected: {_style(str(summary['total']), 'bold')}")
-    families = summary.get("families") or {}
-    if families:
-        print(f"  - families: total={families.get('total', 0)}, variants={families.get('with_variants', 0)}")
     for source, counts in summary.get("by_source", {}).items():
         risk_bits = ", ".join(_risk_count(risk, count) for risk, count in sorted(counts.items()))
         print(f"  - {source}: {risk_bits}")
     if summary.get("by_audience"):
-        audience_bits = ", ".join(f"{audience}={_style(str(count), 'bold')}" for audience, count in sorted(summary["by_audience"].items()))
+        audience_bits = ", ".join(f"{audience_bucket_label(audience)}={_style(str(count), 'bold')}" for audience, count in sorted(summary["by_audience"].items()))
         print(f"  - audience: {audience_bits}")
     if summary.get("by_trust"):
         trust_bits = ", ".join(_trust_count(state, count) for state, count in sorted(summary["by_trust"].items()))
         print(f"  - trust: {trust_bits}")
+    _print_review_duplicate_summary(summary)
     if action.get("changed"):
         print(_style("Changed:", "bold"))
         for item in action["changed"]:
-            print(f"  - {item['skill_id']}: {_trust_label(item['state'])}")
+            line = f"  - {item['skill_id']}: {_trust_label(item['state'])}"
+            duplicate = item.get("duplicate_of_reviewed") or {}
+            approved_ids = duplicate.get("approved_ids") or []
+            if approved_ids:
+                line += f" (same content as approved {', '.join(approved_ids)})"
+            print(line)
     if action.get("skipped"):
         print(_style("Skipped:", "bold"))
         for item in action["skipped"]:
@@ -3680,20 +5137,28 @@ def _print_review_report_rich(
     table.add_column("Bucket", style="bold")
     table.add_column("Value")
     table.add_row("selected", str(summary["total"]))
-    families = summary.get("families") or {}
-    if families:
-        table.add_row("families", f"total={families.get('total', 0)}, variants={families.get('with_variants', 0)}")
     for source, counts in summary.get("by_source", {}).items():
         table.add_row(source, ", ".join(_risk_count(risk, count) for risk, count in sorted(counts.items())))
     if summary.get("by_audience"):
-        table.add_row("audience", ", ".join(f"{audience}={count}" for audience, count in sorted(summary["by_audience"].items())))
+        table.add_row("audience", ", ".join(f"{audience_bucket_label(audience)}={count}" for audience, count in sorted(summary["by_audience"].items())))
     if summary.get("by_trust"):
         table.add_row("trust", ", ".join(_trust_count(state, count) for state, count in sorted(summary["by_trust"].items())))
+    duplicate = (summary.get("duplicate_content") or {})
+    if duplicate.get("review_needed"):
+        table.add_row(
+            "duplicate approved content",
+            f"{duplicate.get('review_needed', 0)} source-key approval(s) across {duplicate.get('approved_overlap_groups', 0)} group(s)",
+        )
     console.print(table)
     if action.get("changed") or action.get("skipped"):
         lines = []
         for item in action.get("changed", []):
-            lines.append(f"[green]{item['skill_id']}[/green]: {item['state']}")
+            suffix = ""
+            duplicate = item.get("duplicate_of_reviewed") or {}
+            approved_ids = duplicate.get("approved_ids") or []
+            if approved_ids:
+                suffix = f" (same content as approved {', '.join(approved_ids)})"
+            lines.append(f"[green]{item['skill_id']}[/green]: {item['state']}{suffix}")
         for item in action.get("skipped", []):
             lines.append(f"[yellow]{item['skill_id']}[/yellow]: skipped ({item['reason']})")
         console.print(Panel("\n".join(lines), title="Review action", border_style="cyan"))
@@ -3717,6 +5182,17 @@ def _print_review_report_rich(
             _first_sentence(skill.get("summary") or ""),
         )
     console.print(skill_table)
+
+
+def _print_review_duplicate_summary(summary: dict[str, Any]) -> None:
+    duplicate = summary.get("duplicate_content") or {}
+    if not duplicate.get("review_needed"):
+        return
+    print(
+        "  - duplicate approved content: "
+        f"{duplicate.get('review_needed', 0)} source-key approval(s), "
+        f"groups={duplicate.get('approved_overlap_groups', 0)}"
+    )
 
 
 def _print_lint_blocked(skills: list[dict[str, Any]]) -> None:
@@ -3814,6 +5290,9 @@ def _print_ready_for_approval(skills: list[dict[str, Any]], *, limit: int = 12) 
         print(f"    audience: {_audience_label(skill)}")
         if skill.get("summary"):
             _print_wrapped("    used for: ", _first_sentence(skill["summary"]), width=_output_width(), max_chars=140)
+        duplicate = skill.get("duplicate_of_reviewed") or {}
+        if duplicate.get("approved_ids"):
+            print(f"    duplicate of approved: {', '.join(duplicate['approved_ids'])}")
         _print_wrapped("    file: ", skill.get("entrypoint", "<unknown>"), width=_output_width(), break_long_words=True)
     if len(ready) > limit:
         print(f"  ... {len(ready) - limit} more low-risk skill(s); choose option 1 or run skillager setup --details to inspect all.")
@@ -3827,10 +5306,14 @@ def _print_ready_for_approval_rich(skills: list[dict[str, Any]], *, limit: int =
     table.add_column("Used for", overflow="fold")
     table.add_column("File", overflow="fold")
     for skill in skills[:limit]:
+        detail = _truncate(_first_sentence(skill.get("summary") or ""), 140)
+        duplicate = skill.get("duplicate_of_reviewed") or {}
+        if duplicate.get("approved_ids"):
+            detail = f"{detail} Same content as approved {', '.join(duplicate['approved_ids'])}.".strip()
         table.add_row(
             skill["id"],
             _audience_label(skill),
-            _truncate(_first_sentence(skill.get("summary") or ""), 140),
+            detail,
             skill.get("entrypoint", "<unknown>"),
         )
     console.print(table)
@@ -3866,6 +5349,43 @@ def _print_setup_next_steps(skills: list[dict[str, Any]]) -> None:
     print("  - Show full list: skillager setup --details")
 
 
+def _print_setup_bootstrap_result(result: dict[str, Any]) -> None:
+    print(_style("Skillager bootstrap", "bold"))
+    for item in result.get("artifacts", []):
+        line = _setup_bootstrap_artifact_line(item)
+        if line:
+            print(line)
+    if result.get("handoff_ready"):
+        print("Handoff ready.")
+    else:
+        _print_setup_bootstrap_reminder(result)
+
+
+def _setup_bootstrap_artifact_line(item: dict[str, Any]) -> str | None:
+    kind = item.get("kind")
+    if kind == "working_skill":
+        line = f"{item.get('skill_id')}: {item.get('status')}"
+    elif kind == "project_note":
+        line = f"{item.get('agent')} project note: {item.get('status')}"
+    else:
+        return None
+    if item.get("target"):
+        line += f" {item['target']}"
+    if item.get("reason"):
+        line += f" ({item['reason']})"
+    return line
+
+
+def _print_setup_bootstrap_reminder(result: dict[str, Any]) -> None:
+    commands = result.get("next_commands") or []
+    if len(commands) == 1:
+        print(f"Handoff not ready: run {commands[0]}")
+    elif commands:
+        print("Handoff not ready. Run one of:")
+        for command in commands:
+            print(f"  - {command}")
+
+
 def _interactive_setup(
     state_root: Path,
     skills: list[dict[str, Any]],
@@ -3875,6 +5395,9 @@ def _interactive_setup(
     catalog_root: Path | None = None,
     global_scope: bool = True,
     paths: list[Path] | None = None,
+    agents: list[str] | None = None,
+    no_bootstrap: bool = False,
+    project_dir: Path | None = None,
 ) -> None:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print()
@@ -3896,11 +5419,20 @@ def _interactive_setup(
                 print("No approved skills in this setup selection.")
                 return
             print()
-            results = _materialize_reviewed_for_project(approved, state_root=state_root, catalog_root=catalog_root, prompt_prefix="Review complete. ")
+            results = _materialize_reviewed_for_project(
+                approved,
+                state_root=state_root,
+                catalog_root=catalog_root,
+                prompt_prefix="Review complete. ",
+                agents=agents,
+                no_bootstrap=no_bootstrap,
+                project_dir=project_dir,
+            )
             if results is not None:
-                _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=_materialized_agents(results), paths=paths)
+                result_agents = _setup_result_agents(results)
+                _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=result_agents, paths=paths)
                 print("Setup complete.")
-                _print_setup_completion_summary(selected, results, agents=_materialized_agents(results))
+                _print_setup_completion_summary(selected, results, agents=result_agents)
                 _print_agent_next_steps(results)
             else:
                 print("Setup complete; no skills materialized.")
@@ -3939,11 +5471,19 @@ def _interactive_setup(
                 _print_action_result(apply_review_action(state_root, high, block_high=True))
         elif choice == "4":
             reviewed = _approved_skills(selected)
-            results = _materialize_reviewed_for_project(reviewed, state_root=state_root, catalog_root=catalog_root)
+            results = _materialize_reviewed_for_project(
+                reviewed,
+                state_root=state_root,
+                catalog_root=catalog_root,
+                agents=agents,
+                no_bootstrap=no_bootstrap,
+                project_dir=project_dir,
+            )
             if results is not None:
-                _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=_materialized_agents(results), paths=paths)
+                result_agents = _setup_result_agents(results)
+                _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=result_agents, paths=paths)
                 print("Setup complete.")
-                _print_setup_completion_summary(selected, results, agents=_materialized_agents(results))
+                _print_setup_completion_summary(selected, results, agents=result_agents)
                 _print_agent_next_steps(results)
                 return
         elif choice == "5" or choice.lower() in {"q", "quit", "exit"}:
@@ -3956,7 +5496,7 @@ def _current_selected_skills(state_root: Path, selected_ids: list[str], *, catal
     by_id = {skill["id"]: skill for skill in load_index(state_root, approval_root=catalog_root).get("skills", [])}
     for skill in select_attached_tag_skills(state_root, catalog_root=catalog_root, approval_root=catalog_root, include_lint_blocked=True):
         by_id[skill["id"]] = skill
-    return [by_id[skill_id] for skill_id in selected_ids if skill_id in by_id]
+    return annotate_duplicate_content([by_id[skill_id] for skill_id in selected_ids if skill_id in by_id])
 
 
 def _unreviewed_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -3970,21 +5510,22 @@ def _approved_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _choose_low_risk_audience_group(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for skill in skills:
-        audience = skill.get("audience_guess", {}).get("audience") or "unknown"
+        audience = audience_bucket(skill)
         groups.setdefault(audience, []).append(skill)
     if len(groups) <= 1:
         return skills
     ordered = sorted(groups)
-    print("Low-risk skills span multiple audiences:")
+    print("Low-risk skills span declared audiences and undeclared skills:")
     for audience in ordered:
-        print(f"  - {audience}: {len(groups[audience])}")
-    answer = _interactive_input("Approve which audience? Enter user/dev/unknown/all, or blank to cancel: ").strip().lower()
+        print(f"  - {audience_bucket_label(audience)}: {len(groups[audience])}")
+    answer = _interactive_input("Approve which group? Enter user/dev/other/all, or blank to cancel: ").strip().lower()
     if not answer:
         return []
     if answer == "all":
         return skills
-    if answer in groups:
-        return groups[answer]
+    audience = _normalize_audience_choice(answer)
+    if audience in groups:
+        return groups[audience]
     print(f"Unknown audience choice: {answer}")
     return []
 
@@ -4030,7 +5571,7 @@ def _interactive_review_skills(
             _print_wrapped("      ", _finding_detail(finding, group_risk=risk), width=_output_width())
         if len(findings) > 3:
             print(f"  ... {len(findings) - 3} more findings")
-        choice = _interactive_input("Approve this skill as reviewed? [y/N/q] ").strip().lower()
+        choice = _interactive_input("Review decision? [y] approve / [s]kip / [b]lock / [q]uit (default: skip): ").strip().lower()
         if choice in {"q", "quit", "exit"}:
             return decided
         decided.add(skill["id"])
@@ -4044,16 +5585,26 @@ def _interactive_review_skills(
                     global_scope=global_scope,
                 )
             )
+        elif choice in {"b", "block"}:
+            _block_review_item(state_root, skill)
         else:
-            print(f"{skill['id']}: not approved")
+            print(f"{skill['id']}: skipped; remains unreviewed")
     return decided
 
 
 def _review_family_items(skills: list[dict[str, Any]], *, agent: str | None) -> list[list[dict[str, Any]]]:
+    items: list[list[dict[str, Any]]] = []
+    grouped_objects: set[int] = set()
+    for _, _, group in duplicate_content_group_entries(skills):
+        ordered = sorted(group, key=lambda skill: _agent_variant_preference_key(skill, agent))
+        items.append(ordered)
+        grouped_objects.update(id(skill) for skill in group)
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for skill in skills:
+        if id(skill) in grouped_objects:
+            continue
         groups[_agent_variant_family_key(skill)].append(skill)
-    items = [sorted(group, key=lambda skill: _agent_variant_preference_key(skill, agent)) for group in groups.values()]
+    items.extend(sorted(group, key=lambda skill: _agent_variant_preference_key(skill, agent)) for group in groups.values())
     return sorted(items, key=lambda group: _review_family_sort_key(group, agent))
 
 
@@ -4084,13 +5635,15 @@ def _interactive_review_family(
         for risk in sorted(risk_counts, key=_risk_sort_key)
     )
     print()
-    print(_style(f"Review family {index} of {total}", "bold"))
-    print(f"  family: {_agent_variant_family_key(preferred)} ({len(ordered)} variants)")
+    print(_style(f"Review related skills {index} of {total}", "bold"))
+    print(f"  group: {_agent_variant_family_key(preferred)} ({len(ordered)} variants)")
+    if _same_content_cross_source_group(ordered):
+        print("  duplicate content: same content appears under multiple source keys; approval records each source.")
     print(f"  preferred for {agent or 'this agent'}: {preferred['id']}")
     print(f"  risks: {risk_text}")
     for skill in ordered:
         _print_review_family_variant(skill, preferred=preferred)
-    choice = _interactive_input("Approve this family as reviewed? [y/N/q] ").strip().lower()
+    choice = _interactive_input("Review group? [y] approve / [s]kip / [b]lock / [q]uit (default: skip): ").strip().lower()
     if choice in {"q", "quit", "exit"}:
         return False
     if choice in {"y", "yes"}:
@@ -4103,9 +5656,17 @@ def _interactive_review_family(
                 global_scope=global_scope,
             )
         )
+    elif choice in {"b", "block"}:
+        for skill in ordered:
+            _block_review_item(state_root, skill)
     else:
-        print(f"{_agent_variant_family_key(preferred)}: not approved")
+        print(f"{_agent_variant_family_key(preferred)}: skipped; remains unreviewed")
     return True
+
+
+def _block_review_item(state_root: Path, skill: dict[str, Any]) -> None:
+    set_trust(state_root, skill["id"], "blocked", skill["content_hash"], skill["source"], lint=skill.get("lint"))
+    print(f"{skill['id']}: blocked")
 
 
 def _print_review_family_variant(skill: dict[str, Any], *, preferred: dict[str, Any]) -> None:
@@ -4128,6 +5689,15 @@ def _print_review_family_variant(skill: dict[str, Any], *, preferred: dict[str, 
         print(f"      ... {len(findings) - 2} more findings")
 
 
+def _same_content_cross_source_group(group: list[dict[str, Any]]) -> bool:
+    if len(group) <= 1:
+        return False
+    content_hashes = {skill.get("content_hash") for skill in group}
+    if len(content_hashes) != 1:
+        return False
+    return len({_agent_variant_family_key(skill) for skill in group}) > 1
+
+
 def _risk_sort_key(risk: str) -> tuple[int, str]:
     return ({"high": 0, "medium": 1, "low": 2, "unknown": 3}.get(risk, 4), risk)
 
@@ -4138,35 +5708,49 @@ def _materialize_reviewed_for_project(
     state_root: Path,
     catalog_root: Path | None,
     prompt_prefix: str = "",
+    agents: list[str] | None = None,
+    no_bootstrap: bool = False,
+    project_dir: Path | None = None,
 ) -> list[dict[str, Any]] | None:
+    project_dir = (project_dir or find_project_root() or Path.cwd()).resolve()
     if not skills:
         print("No reviewed/trusted/pinned skills are ready for project setup.")
         print("Approve low-risk skills first with setup option 2, or review warned/high-risk skills with option 1.")
         return None
-    agents = _choose_materialize_agents()
+    agents = list(agents or [])
+    if not agents:
+        agents = _choose_materialize_agents()
     if not agents:
         return None
-    target_label = " and ".join(agent.title() for agent in agents)
-    if not _confirm(f"{prompt_prefix}Install Skillager working skill for {target_label} project scope?"):
-        return None
-    results = materialize_working_skill(agents=agents, scope="project", project_dir=Path.cwd())
-    for item in results:
-        line = f"{item['skill_id']}: {item['status']}"
-        if item.get("target"):
-            line += f" {item['target']}"
-        if item.get("reason"):
-            line += f" ({item['reason']})"
-        print(line)
-    if not any(item.get("status") == "materialized" for item in results):
-        return None
+    results: list[dict[str, Any]] = []
+    if no_bootstrap:
+        _print_setup_bootstrap_reminder(
+            _setup_bootstrap_payload(
+                project_dir=project_dir,
+                agents=agents,
+                reason="disabled by --no-bootstrap",
+                reason_code=SETUP_BOOTSTRAP_REASON_DISABLED,
+            )
+        )
+    else:
+        target_label = " and ".join(agent.title() for agent in agents)
+        if not _confirm(f"{prompt_prefix}Install Skillager working skill for {target_label} project scope?"):
+            return None
+        bootstrap = _perform_bootstrap(agents=agents, project_dir=project_dir, dry_run=False, force=False)
+        results = list(bootstrap["artifacts"])
+        for item in results:
+            line = _setup_bootstrap_artifact_line(item)
+            if line:
+                print(line)
+        if _bootstrap_has_local_blocker(results) or not _setup_handoff_ready(project_dir, agents=agents):
+            return None
     native = _choose_native_project_skills(skills, agents=agents)
     if native:
         native_results = materialize_skills(
             native,
             agents=agents,
             scope="project",
-            project_dir=Path.cwd(),
-            include_working=False,
+            project_dir=project_dir,
         )
         for item in native_results:
             line = f"{item['skill_id']}: {item['status']}"
@@ -4177,7 +5761,7 @@ def _materialize_reviewed_for_project(
             print(line)
         results.extend(native_results)
     _print_router_suggestions(state_root, catalog_root=catalog_root, agents=agents)
-    return results
+    return results or None
 
 
 def _print_router_suggestions(state_root: Path, *, catalog_root: Path | None, agents: list[str]) -> None:
@@ -4208,31 +5792,38 @@ def _print_setup_completion_summary(
     agents: list[str],
 ) -> None:
     approved = [skill for skill in skills if skill.get("trust") in TRUSTED_STATES]
-    exposed_ids = {
-        item.get("skill_id")
-        for item in results
-        if item.get("status") in {"materialized", "already_native"} and item.get("skill_id") != "skillager/working"
-    }
+    exposed_ids: set[str] = set()
+    for item in results:
+        skill_id = item.get("skill_id")
+        if (
+            item.get("status") in {"materialized", "already_native"}
+            and isinstance(skill_id, str)
+            and skill_id != "skillager/working"
+        ):
+            exposed_ids.add(skill_id)
     hidden = [skill for skill in approved if skill["id"] not in exposed_ids]
     if not approved:
         return
     agent = agents[0] if len(agents) == 1 else "codex"
+    inventory = _available_inventory_summary(
+        skills,
+        agent=agent,
+        project_exposure={skill_id: [{"kind": "native"}] for skill_id in exposed_ids},
+    )
     print()
     print(_style("Setup summary", "bold"))
-    print(f"  - approved skills: {len(approved)}")
-    print(f"  - exposed native skills: {len(exposed_ids)}")
-    print(f"  - available through Skillager metadata: {len(hidden)}")
+    _print_inventory_block(inventory, indent="  ")
     if hidden:
         print()
         print("  Stub candidates")
-        print("    These are approved but not loaded as native skills. Stub any that should be easy to invoke by name:")
+        print("    These are available but not loaded as native skills. Stub any that should be easy to invoke by name:")
         for index, skill in enumerate(hidden[:25], start=1):
             summary = _first_sentence(skill.get("summary", ""))
-            print(f"    {index}. {skill['id']} [{_risk_label(skill.get('scan', {}).get('risk'))}]")
+            print(f"    {index}. {skill['id']}")
             if summary:
                 _print_wrapped("       ", summary, width=_output_width(), max_chars=110)
         if len(hidden) > 25:
-            print(f"    ... {len(hidden) - 25} more approved hidden skill(s)")
+            print(f"    ... {len(hidden) - 25} more available hidden skill(s)")
         print()
         print("    To stub specific skills:")
         print(f"    skillager materialize <skill-id> --mode stub --agent {agent} --scope project")
@@ -4254,10 +5845,10 @@ def _choose_native_project_skills(skills: list[dict[str, Any]], *, agents: list[
     for index, skill in enumerate(skills, start=1):
         print()
         print(f"  {_style(f'Skill {index} of {len(skills)}', 'bold')}")
-        print(f"  {_style(skill['id'], 'bold')} [{_risk_label(skill.get('scan', {}).get('risk'))}]")
+        print(f"  {_style(skill['id'], 'bold')}")
         variants = skill.get("_family_variants") or []
         if len(variants) > 1:
-            print(f"  family: {skill.get('family_key')} ({len(variants)} variants)")
+            print(f"  variants: {skill.get('family_key')} ({len(variants)} related skills)")
             for variant in variants[:4]:
                 marker = "selected" if variant.get("id") == skill.get("id") and variant.get("entrypoint") == skill.get("entrypoint") else "variant"
                 print(f"    - {marker}: {variant.get('id')} {variant.get('agent_hint') or variant.get('source_type')} {variant.get('status')}")
@@ -4281,7 +5872,7 @@ def _choose_native_project_skills(skills: list[dict[str, Any]], *, agents: list[
 def _native_setup_candidates(skills: list[dict[str, Any]], *, agents: list[str]) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for skill in skills:
-        if skill.get("source", {}).get("type") == "collection":
+        if skill.get("source", {}).get("type") != "project":
             continue
         key = _native_candidate_key(skill)
         groups.setdefault(key, []).append(skill)
@@ -4320,9 +5911,9 @@ def _family_variant(skill: dict[str, Any], *, representative_hash: str | None) -
 
 def _native_candidate_sort_key(skill: dict[str, Any], agents: list[str]) -> tuple[int, int, int, str]:
     source_type = skill.get("source", {}).get("type")
-    audience = skill.get("audience_guess", {}).get("audience") or "unknown"
+    audience = audience_bucket(skill)
     source_rank = {"project": 0, "python-package": 1, "environment": 2, "global": 3}.get(source_type, 4)
-    audience_rank = {"user": 0, "unknown": 1, "dev": 2}.get(audience, 3)
+    audience_rank = {"user": 0, "user+dev": 1, AUDIENCE_OTHER: 2, "dev": 3}.get(audience, 4)
     agent_hint = _agent_hint(skill)
     target_rank = 0 if agent_hint in set(agents) or agent_hint is None else 1
     return (source_rank, audience_rank, target_rank, skill["id"])
@@ -4372,9 +5963,10 @@ def _print_agent_next_steps(results: list[dict[str, Any]]) -> None:
     project_dir = _materialized_project_dir_from_bases(target_bases)
     agents = sorted(
         agent
-        for agent in {item.get("agent") for item in results if item.get("status") == "materialized" and item.get("agent")}
+        for agent in {item.get("agent") for item in results if _agent_next_step_artifact_current(item) and item.get("agent")}
         if isinstance(agent, str)
     )
+    first_party_handoff = _first_party_handoff_current(results)
     print()
     print(_style("Next step", "bold"))
     if len(target_bases) == 1:
@@ -4385,16 +5977,34 @@ def _print_agent_next_steps(results: list[dict[str, Any]]) -> None:
             print(f"    - {target_base}")
     if project_dir:
         print(f"  - Restart {_agent_label(agents)} in this directory: {project_dir}")
-        notes = agent_note_paths(project_dir, agents=agents)
-        if len(notes) == 1:
-            print(f"  - Project handoff note: {notes[0]}")
-        else:
-            print("  - Project handoff notes:")
-            for note in notes:
-                print(f"    - {note}")
+        if first_party_handoff:
+            notes = agent_note_paths(project_dir, agents=agents)
+            if len(notes) == 1:
+                print(f"  - Project handoff note: {notes[0]}")
+            else:
+                print("  - Project handoff notes:")
+                for note in notes:
+                    print(f"    - {note}")
     else:
         print(f"  - Restart {_agent_label(agents)} in the directory where you ran Skillager.")
-    print("  - The agent will discover Skillager-managed skills from the project note and native skill directory.")
+    if first_party_handoff:
+        print("  - The agent will discover Skillager-managed skills from the project note and native skill directory.")
+    else:
+        print("  - The agent will discover Skillager-managed native skills from the native skill directory.")
+
+
+def _agent_next_step_artifact_current(item: dict[str, Any]) -> bool:
+    if item.get("status") == "materialized":
+        return True
+    return item.get("kind") in {"working_skill", "project_note"} and item.get("status") == "skipped" and item.get("reason") == "already up to date"
+
+
+def _first_party_handoff_current(results: list[dict[str, Any]]) -> bool:
+    return any(
+        (item.get("kind") in {"working_skill", "project_note"} or item.get("skill_id") == WORKING_SKILL_ID)
+        and _agent_next_step_artifact_current(item)
+        for item in results
+    )
 
 
 def _agent_label(agents: list[str]) -> str:
@@ -4415,17 +6025,26 @@ def _materialized_agents(results: list[dict[str, Any]]) -> list[str]:
     )
 
 
+def _setup_result_agents(results: list[dict[str, Any]]) -> list[str]:
+    return sorted(
+        agent
+        for agent in {item.get("agent") for item in results if item.get("agent")}
+        if isinstance(agent, str)
+    )
+
+
 def _common_audience(skills: list[dict[str, Any]]) -> str | None:
-    audiences = {skill.get("audience_guess", {}).get("audience") for skill in skills}
+    audiences = {audience_bucket(skill) for skill in skills}
     audiences.discard(None)
-    audiences.discard("unknown")
+    audiences.discard(AUDIENCE_OTHER)
     if len(audiences) == 1:
-        return next(iter(audiences))
+        audience = next(iter(audiences))
+        return audience if audience in {"user", "dev"} else None
     return None
 
 
 def _materialized_target_bases(results: list[dict[str, Any]]) -> list[Path]:
-    targets = [Path(item["target"]) for item in results if item.get("target") and item.get("status") == "materialized"]
+    targets = [Path(item["target"]) for item in results if item.get("target") and _agent_next_step_artifact_current(item) and item.get("kind") != "project_note"]
     if not targets:
         return []
     return sorted({target.parent for target in targets})
@@ -4553,13 +6172,29 @@ def _finding_detail(finding: dict[str, Any], *, group_risk: str | None = None) -
 
 def _audience_label(skill: dict[str, Any]) -> str:
     guess = skill.get("audience_guess") or {}
-    audience = guess.get("audience") or "unknown"
-    confidence = guess.get("confidence") or "low"
+    audience = guess.get("audience") or audience_bucket(skill)
+    confidence = guess.get("confidence") or "undeclared"
     reasons = guess.get("reasons") or []
-    label = f"{audience} ({confidence})"
+    label = f"{audience_bucket_label(audience)} ({confidence})"
     if reasons:
         label += " - " + "; ".join(str(reason) for reason in reasons[:2])
     return label
+
+
+def _matches_declared_audience(skill: dict[str, Any], audience: str) -> bool:
+    requested = _normalize_audience_choice(audience)
+    if requested == AUDIENCE_OTHER:
+        return not declared_audiences(skill)
+    return requested in declared_audiences(skill)
+
+
+def _normalize_audience_choice(audience: str | None) -> str:
+    value = (audience or "").strip().lower().replace(" ", "_")
+    if value in {"developer", "maintainer", "maintainers"}:
+        return "dev"
+    if value in {"unknown", "undeclared", "everything_else", "everything-else", "other"}:
+        return AUDIENCE_OTHER
+    return value
 
 
 def _shorten(text: str, limit: int) -> str:

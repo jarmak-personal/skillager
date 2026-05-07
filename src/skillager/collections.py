@@ -14,6 +14,7 @@ add_collection = _impl.add_collection
 add_tag_skill = _impl.add_tag_skill
 apply_collection_trust_migrations = _impl.apply_collection_trust_migrations
 attach_project_tag = _impl.attach_project_tag
+clear_project_tags = _impl.clear_project_tags
 collection_migration_summary = _impl.collection_migration_summary
 create_tag = _impl.create_tag
 detach_project_tag = _impl.detach_project_tag
@@ -51,6 +52,7 @@ __all__ = [
     "add_tag_skill",
     "apply_collection_trust_migrations",
     "attach_project_tag",
+    "clear_project_tags",
     "collection_migration_summary",
     "create_tag",
     "detach_project_tag",

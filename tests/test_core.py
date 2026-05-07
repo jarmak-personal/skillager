@@ -62,12 +62,13 @@ class SkillagerCoreTests(unittest.TestCase):
 
     def test_top_level_help_points_agents_to_agentic_setup_flow(self) -> None:
         help_text = build_parser().format_help()
-        self.assertIn("skillager status", help_text)
-        self.assertIn("skillager setup", help_text)
+        self.assertIn("skillager handoff", help_text)
         self.assertIn("Ask the user what they plan to do", help_text)
-        self.assertIn("Tag approved skills and expose a narrow router, stub, native skill, or no new exposure", help_text)
-        self.assertIn("Do not activate or materialize unreviewed skills", help_text)
+        self.assertIn("Tag available skills and expose a narrow router, stub, native skill, or no new exposure", help_text)
+        self.assertIn("Do not activate or materialize unavailable skills", help_text)
+        self.assertIn("pending owner review", help_text)
         self.assertIn("--catalog-state-dir", help_text)
+        self.assertNotIn("recommend", help_text)
 
     def test_python_module_entrypoint_runs(self) -> None:
         result = subprocess.run(
@@ -85,6 +86,16 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertEqual(skill.activation, "suggested")
         self.assertEqual(skill.targets["python_packages"][0]["name"], "skillager")
 
+    def test_permission_allowlist_examples_exclude_mutating_doctor_fix(self) -> None:
+        for name in ("codex", "claude"):
+            data = json.loads((Path("examples") / f"{name}-allowlist.json").read_text(encoding="utf-8"))
+            self.assertNotIn(f"skillager doctor --agent {name} --json", data["read_only_commands"])
+            self.assertIn("skillager doctor", data["deliberately_excluded"])
+            self.assertIn("skillager doctor --fix", data["deliberately_excluded"])
+            self.assertNotIn("skillager doctor --fix", data["read_only_commands"])
+            self.assertIn(f"skillager search <query> --agent {name} --json", data["read_only_commands"])
+            self.assertNotIn("recommend", " ".join(data["read_only_commands"]))
+
     def test_canonical_agent_variant_slug_strips_repeated_suffixes(self) -> None:
         self.assertEqual(canonical_agent_variant_slug("foo-codex-claude"), "foo")
         self.assertEqual(canonical_agent_variant_slug("foo-claude-skill-codex"), "foo")
@@ -101,21 +112,29 @@ class SkillagerCoreTests(unittest.TestCase):
     def test_working_skill_has_session_query_cadence(self) -> None:
         text = render_working_skill("codex")
         self.assertIn("Run `skillager handoff --agent codex` once", text)
-        self.assertIn("re-run `skillager handoff` before making approval-dependent decisions", text)
+        self.assertIn("Availability is the eligibility gate", text)
+        self.assertNotIn("skillager list --json", text)
+        self.assertIn("ask the user to run `skillager doctor --agent codex`", text)
+        self.assertIn("Re-run handoff after repairs", text)
         self.assertIn("Do not search Skillager on every user message", text)
         self.assertIn("You are unsure how to approach the task", text)
         self.assertIn("until the task changes", text)
         self.assertIn("handoff reports lookback pending", text)
+        self.assertIn("Do not run lookback after setup-only", text)
 
     def test_working_skill_has_exposure_signal_hierarchy(self) -> None:
         text = render_working_skill("codex")
-        self.assertIn("Every approved skill can be activated through Skillager", text)
-        self.assertIn("Not every approved skill should be materialized", text)
+        self.assertIn("Every available skill can be activated through Skillager", text)
+        self.assertIn("Not every available skill should be materialized", text)
         self.assertIn("Use search for the long tail", text)
         self.assertIn("Use routers for broad recurring tags", text)
-        self.assertIn("Tags are agent-maintained curation for approved skills", text)
+        self.assertIn("Tags are agent-maintained curation for available skills", text)
         self.assertIn("skillager tag add <tag> <skill-id>", text)
-        self.assertIn("Consider 5-20 plausible approved skills or skill groups", text)
+        self.assertIn('skillager search "<user goal>" --agent codex --json', text)
+        self.assertIn("score_detail", text)
+        self.assertIn("use `--limit <n>`", text)
+        self.assertNotIn("skillager recommend", text)
+        self.assertIn("Consider 5-20 plausible available skills or skill groups", text)
         self.assertIn("confidence score from 0-100", text)
         self.assertIn("workflow suite such as ideation, review, debugging, release", text)
         self.assertIn("Do not list more than 20 candidates", text)
@@ -128,7 +147,7 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertIn("Concordant static hints raise confidence", text)
         self.assertIn("`user-invokable` metadata", text)
         self.assertIn("Native agent provenance", text)
-        self.assertIn("The current task clearly matches a specific approved skill", text)
+        self.assertIn("The current task clearly matches a specific available skill", text)
 
     def test_working_skill_preview_defaults_to_codex(self) -> None:
         text = render_working_skill()
@@ -141,6 +160,26 @@ class SkillagerCoreTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True), patch("pathlib.Path.home", return_value=root), chdir(root):
                 self.assertEqual(find_project_root(), root)
                 self.assertEqual(state_root(), project_state_root(root))
+
+    def test_project_root_does_not_climb_to_temp_or_cache_parent_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_root = Path(tmp).resolve()
+            cache_root = temp_root / "cache"
+            project = cache_root / "fresh-project"
+            nested_repo = cache_root / "nested-repo"
+            project.mkdir(parents=True)
+            nested_repo.mkdir()
+            (cache_root / ".git").mkdir()
+            (nested_repo / ".git").mkdir()
+            child = nested_repo / "child"
+            child.mkdir()
+            with (
+                patch.dict(os.environ, {"XDG_CACHE_HOME": str(cache_root)}),
+                patch("tempfile.gettempdir", return_value=str(temp_root)),
+                patch("pathlib.Path.home", return_value=temp_root / "home"),
+            ):
+                self.assertEqual(find_project_root(project), project.resolve())
+                self.assertEqual(find_project_root(child), nested_repo.resolve())
 
     def test_legacy_in_tree_state_is_ignored_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -163,8 +202,8 @@ class SkillagerCoreTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
             data = json.loads(stdout.getvalue())
-            self.assertEqual(data["review_needed"], 1)
-            self.assertEqual(data["approved"], 0)
+            self.assertEqual(data["pending_owner_review"], 1)
+            self.assertEqual(data["available"], 0)
             self.assertIn("ignoring legacy in-tree state", stderr.getvalue())
 
     def test_state_migrate_refuses_temp_project_roots(self) -> None:
@@ -206,8 +245,7 @@ class SkillagerCoreTests(unittest.TestCase):
                 with redirect_stdout(status):
                     self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
                 data = json.loads(status.getvalue())
-                self.assertEqual(data["authored_unreviewed"]["count"], 1)
-                self.assertEqual(data["authored_unreviewed"]["ids"], ["project/gis-workflow"])
+                self.assertEqual(data["authored_pending_owner_review"], 1)
 
                 activated = StringIO()
                 with redirect_stdout(activated):
@@ -218,8 +256,9 @@ class SkillagerCoreTests(unittest.TestCase):
                 with redirect_stdout(handoff):
                     self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
                 handoff_data = json.loads(handoff.getvalue())
-                self.assertEqual(handoff_data["status"], "authored-review-needed")
-                self.assertEqual(handoff_data["state"]["authored_unreviewed"]["count"], 1)
+                self.assertEqual(handoff_data["status"], "setup-needed")
+                self.assertEqual(handoff_data["state"]["setup"]["pending_owner_review"], 1)
+                self.assertNotIn("authored_unreviewed", handoff_data["state"])
 
     def test_authored_high_risk_refusal_uses_review_hint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -326,7 +365,7 @@ class SkillagerCoreTests(unittest.TestCase):
                 build_index(state, include_packages=False)
                 self.assertEqual(main(["show", "project/demo", "--content"]), 2)
             self.assertNotIn("Secret unreviewed body", stdout.getvalue())
-            self.assertIn("not available until reviewed", stderr.getvalue())
+            self.assertIn("not available", stderr.getvalue())
 
     def test_user_installed_native_skill_requires_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -349,8 +388,8 @@ class SkillagerCoreTests(unittest.TestCase):
                 self.assertEqual(main(["activate", "project/manual-risk", "--no-session-record"]), 2)
             data = json.loads(output.getvalue())
             self.assertTrue(data["needs_setup"])
-            self.assertEqual(data["approved"], 0)
-            self.assertEqual(data["review_needed"], 1)
+            self.assertEqual(data["available"], 0)
+            self.assertEqual(data["pending_owner_review"], 1)
             self.assertNotIn("user_installed", data)
             skill = load_index(state)["skills"][0]
             self.assertEqual(skill["trust"], "discovered")
@@ -539,6 +578,8 @@ assert MINIMAL_MANIFEST_YAML.strip()
             names = set(wheel.namelist())
         self.assertIn("skillager/docs/USER_GUIDE.md", names)
         self.assertIn("skillager/docs/AGENT_CLI_GUIDE.md", names)
+        self.assertIn("skillager/examples/codex-allowlist.json", names)
+        self.assertIn("skillager/examples/claude-allowlist.json", names)
         self.assertNotIn("skillager/docs/MANIFEST_HARDENING_PLAN.md", names)
 
     def test_sdist_includes_repo_skill_and_excludes_planning_doc(self) -> None:

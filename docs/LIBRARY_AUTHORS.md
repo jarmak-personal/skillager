@@ -49,7 +49,7 @@ targets:
       versions: ">=1,<2"
 ```
 
-The manifest is intentionally structured-only. It cannot declare `id`, `name`, `summary`, `source`, `entrypoint`, `safety`, `triggers`, `domains`, `tools`, or `references`. Skillager derives identity from the package/path and from the reviewed `SKILL.md` body: simple `name`/`description` frontmatter when present, then heading/first sentence fallbacks.
+The manifest is intentionally structured-only. It cannot declare `id`, `name`, `summary`, `source`, `entrypoint`, `safety`, `triggers`, `domains`, `tools`, or `references`. Skillager derives identity from the package/path and from the reviewed `SKILL.md` body: simple `name`/`description` frontmatter when present, then top-level heading/first sentence fallbacks.
 
 `skillager.yaml` uses a strict loader: one document, string keys, no duplicate keys, no anchors, no aliases, no merge keys, no custom tags, and a small file-size cap. Unknown keys lint-block the skill.
 
@@ -119,7 +119,7 @@ Use `audience: user` for skills that help consumers use your library.
 
 Use `audience: dev` for maintainer workflows, release processes, internal development rules, review gates, or commit workflows.
 
-This distinction matters because setup asks the user what audience they want before approval.
+This distinction matters because setup asks the user what audience they want before approval. If a skill omits audience metadata, Skillager does not guess from its path or wording; setup groups it under "everything else."
 
 ## Safety Notes
 
@@ -137,7 +137,7 @@ From a fresh project with your package installed:
 ```bash
 skillager setup --fresh
 skillager review --package your-package --summary
-skillager materialize --agent codex --scope project
+skillager materialize <your-package-skill-id> --agent codex --scope project
 ```
 
 Interactive setup installs Skillager's bootstrap skill and may optionally materialize a narrow native set. Use the explicit `materialize` command when testing that a package-provided skill copies correctly with its supporting files.
