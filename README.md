@@ -5,7 +5,7 @@ Agent skills are useful. Loading all of them into every chat is not.
 Skillager is a local CLI that lets projects, Python libraries, tools, and personal skill repos ship useful agent skills without turning every session into a wall of instructions. It discovers skills, scans them, asks for human approval, and gives agents a small, fast way to find the right skill only when the task needs it.
 
 ```text
-install package -> discover skills -> approve safety -> agent sees available metadata -> expose only what matters
+discover -> approve -> search metadata -> materialize
 ```
 
 ## Quickstart
@@ -144,7 +144,6 @@ The next `skillager handoff` can tell the agent that lookback is pending. Then t
 - [Library author guide](docs/LIBRARY_AUTHORS.md)
 - [Safety model](docs/SAFETY_MODEL.md)
 - [Release runbook](docs/RELEASE.md)
-- [Release notes](docs/RELEASE_NOTES.md)
 - [Security policy](SECURITY.md)
 
 External contributions are not being accepted yet while the early API and workflow settle.
