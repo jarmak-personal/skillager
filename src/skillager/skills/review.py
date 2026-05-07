@@ -7,7 +7,8 @@ from typing import Any
 from ..families import agent_variant_family_key, duplicate_content_family_key
 from ..index import build_index, load_index
 from ..selection import select_visible_skills
-from ..trust import clear_global_approvals, clear_trust, make_lint_override, set_trust, trust_state
+from ..trust import clear_trust, make_lint_override, set_trust, trust_state
+from .audience import audience_bucket
 
 
 APPROVED_REVIEW_STATES = {"reviewed", "trusted", "pinned"}
@@ -21,7 +22,7 @@ def review_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
     families: dict[str, set[str]] = defaultdict(set)
     for skill in skills:
         source = skill.get("source", {}).get("type") or "unknown"
-        audience = skill.get("audience_guess", {}).get("audience") or "unknown"
+        audience = audience_bucket(skill)
         risk = skill.get("scan", {}).get("risk") or "unknown"
         by_source[source][risk] += 1
         by_audience[audience] += 1
@@ -327,7 +328,7 @@ def setup_environment(
     include_global: bool = False,
     extra_skills: list[dict[str, Any]] | None = None,
     fresh: bool = False,
-    fresh_all: bool = False,
+    fresh_project: bool = False,
     accept_low: bool = False,
     trust_state: str | None = None,
     block_high: bool = False,
@@ -357,13 +358,8 @@ def setup_environment(
     skills = annotate_duplicate_content(skills)
     fresh_reset = 0
     global_reset = 0
-    if fresh or fresh_all:
+    if fresh or fresh_project:
         fresh_reset = clear_trust(state_root, [skill["id"] for skill in skills])
-        if fresh_all and approval_root is not None:
-            global_reset = clear_global_approvals(
-                approval_root,
-                [skill["approval_key"] for skill in skills if skill.get("approval_key")],
-            )
         data = load_index(state_root, approval_root=approval_root)
         if extra_skills:
             extra_skills = _refresh_extra_skill_trust(state_root, extra_skills, approval_root=approval_root)

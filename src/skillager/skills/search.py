@@ -161,13 +161,12 @@ def _fts5_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any
             100.0 + _score_boost(exact, terms, body_text=exact_body),
             ["id:exact", *_reasons(exact, terms, body_text=exact_body)],
         )
-    for rowid, rank in rows:
+    for rowid, _rank in rows:
         skill = skills[int(rowid) - 1]
         body_text = body_texts[skill["id"]]
-        base = max(0.0, -float(rank) * 1_000_000.0)
         item = _with_score(
             skill,
-            base + _score_boost(skill, terms, body_text=body_text),
+            _score_boost(skill, terms, body_text=body_text),
             _reasons(skill, terms, body_text=body_text),
         )
         by_id.setdefault(skill["id"], item)
@@ -332,9 +331,21 @@ def _body_text(skill: dict[str, Any]) -> str:
 
 def _with_score(skill: dict[str, Any], score: float, reasons: list[str]) -> dict[str, Any]:
     item = dict(skill)
-    item["score"] = round(score, 3)
+    capped_score = max(0.0, min(100.0, score))
+    item["score"] = round(capped_score, 3)
     item["reasons"] = sorted(set(reasons))
+    item["score_detail"] = _score_detail(capped_score, item["reasons"])
     return item
+
+
+def _score_detail(score: float, reasons: list[str]) -> dict[str, Any]:
+    fields = sorted({reason.split(":", 1)[0] for reason in reasons if ":" in reason})
+    return {
+        "scale": "0-100 weighted match; exact id matches score 100; body-only matches are intentionally weak",
+        "matched_fields": fields,
+        "body_only": bool(fields) and fields == ["body"],
+        "rounded": round(score, 3),
+    }
 
 
 def _visibility_rank(skill: dict[str, Any]) -> int:

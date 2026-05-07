@@ -19,6 +19,17 @@ from skillager.simple_yaml import loads
 from skillager.trust import content_hash, set_trust
 
 
+def write_manifest(skill_dir: Path, audience: str) -> None:
+    skill_dir.joinpath("skillager.yaml").write_text(
+        "schema: skillager.skill.v1\n"
+        "audience:\n"
+        f"  - {audience}\n"
+        "activation:\n"
+        "  default: manual\n",
+        encoding="utf-8",
+    )
+
+
 class SkillagerStatusHandoffSessionTests(unittest.TestCase):
 
     def test_status_reports_unreviewed_skills_without_activation(self) -> None:
@@ -235,6 +246,9 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             (first / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
             (second / "SKILL.md").write_text("# API Example\n\nUse API examples.\n", encoding="utf-8")
             (dev / "SKILL.md").write_text("# CUDA Writing\n\nUse CUDA implementation guidance.\n", encoding="utf-8")
+            write_manifest(first, "user")
+            write_manifest(second, "user")
+            write_manifest(dev, "dev")
             stdin = TtyStringIO("1\nn\ny\n1\ny\nn\n")
             stdout = TtyStringIO()
             with (
@@ -646,6 +660,50 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertIn("Existing materialized router tag(s)", data["next"]["message"])
             self.assertIn('skillager search "<user-goal>" --tag gis --approved-only --agent codex --json', data["next"]["next_commands"])
             self.assertIn("Materialized router tags: gis", text_output.getvalue())
+
+    def test_handoff_exposure_breakdown_reports_routed_and_stubbed_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            routed = root / ".skills" / "gis-domain"
+            stubbed = root / ".skills" / "api-example"
+            routed.mkdir(parents=True)
+            stubbed.mkdir(parents=True)
+            (routed / "SKILL.md").write_text("# GIS Domain\n\nUse GIS guidance.\n", encoding="utf-8")
+            (stubbed / "SKILL.md").write_text("# API Example\n\nUse API guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                    self.assertEqual(main(["bootstrap", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["tag", "create", "mapping"]), 0)
+                    self.assertEqual(main(["tag", "add", "mapping", "project/gis-domain"]), 0)
+                    self.assertEqual(main(["project", "attach-tag", "mapping"]), 0)
+                    self.assertEqual(main(["materialize", "--tag", "mapping", "--mode", "router", "--agent", "codex", "--scope", "project"]), 0)
+                    self.assertEqual(main(["materialize", "project/api-example", "--mode", "stub", "--agent", "codex", "--scope", "project"]), 0)
+
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+                text_output = StringIO()
+                with redirect_stdout(text_output):
+                    self.assertEqual(main(["handoff", "--agent", "codex"]), 0)
+
+            data = json.loads(output.getvalue())
+            exposure = data["readiness"]["exposure"]
+            self.assertEqual(exposure["exposed"], 2)
+            self.assertEqual(exposure["router_tags"], 1)
+            self.assertEqual(exposure["routed"], 1)
+            self.assertEqual(exposure["stubbed"], 1)
+            self.assertEqual(exposure["native"], 0)
+            self.assertEqual(exposure["available_on_demand"], 0)
+            self.assertEqual(exposure["count_basis"], "approved source entries")
+            self.assertEqual(exposure["available_source_entries_on_demand"], 0)
+            self.assertIn("2 exposed entries (1 router tag(s), 1 routed, 1 stubbed), 0 approved entries on demand", text_output.getvalue())
 
     def test_handoff_prioritizes_lookback_over_unmaterialized_attached_tags(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

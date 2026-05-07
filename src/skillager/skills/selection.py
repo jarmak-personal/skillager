@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .audience import AUDIENCE_OTHER, declared_audiences
+
 
 def select_visible_skills(
     skills: list[dict[str, Any]],
@@ -40,10 +42,8 @@ def select_visible_skills(
 
 
 def _matches_audience(skill: dict[str, Any], audience: str) -> bool:
-    requested = "dev" if audience in {"developer", "maintainer", "maintainers"} else audience
-    guess = skill.get("audience_guess", {}).get("audience")
-    if guess == requested:
-        return True
-    if guess and guess != "unknown":
-        return False
-    return requested in skill.get("audience", [])
+    requested = audience.strip().lower().replace(" ", "_")
+    requested = "dev" if requested in {"developer", "maintainer", "maintainers"} else requested
+    if requested in {AUDIENCE_OTHER, "unknown", "undeclared", "everything_else", "everything-else"}:
+        return not declared_audiences(skill)
+    return requested in declared_audiences(skill)

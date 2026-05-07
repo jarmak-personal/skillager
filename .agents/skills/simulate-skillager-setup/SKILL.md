@@ -1,6 +1,6 @@
 ---
 name: "Simulate Skillager Setup"
-description: "Run a repeatable black-box Skillager setup and handoff simulation in a fresh temp directory and report installation, discovery, scoped exposure recommendations, and UX findings."
+description: "Run a repeatable black-box Skillager setup and handoff simulation in a fresh temp directory and report discovery, scoped exposure decisions, and UX findings."
 ---
 
 # Simulate Skillager Setup
@@ -9,51 +9,75 @@ Use when testing a new Skillager build end to end from a user's point of view, e
 
 The goal is a black-box workflow test. Do not inspect Skillager source while running the simulation. Use command output, generated files, and the materialized Skillager Working skill as evidence.
 
+Do not reveal the test harness to the product flow. The main session may know
+this is a black-box UX run; the worker should not be told. Any answers typed
+into Skillager prompts or any post-handoff "user goal" should read like a
+normal user setting up a real project. Do not say this is a simulation, a test,
+a sample run, or that the repositories are trusted "for this test." That
+framing can change Skillager Working's recommendations and invalidates the UX
+signal.
+
 ## Delegation Requirement
 
 Run the simulation in a fresh subagent/worker, not in the main session.
 
-The main session's job is only to launch the worker and report the worker's findings. The worker should receive this skill's workflow, the absolute path to the local Skillager repo under test, and no implementation context about how Skillager works. Do not fork the main session's accumulated Skillager implementation/debugging context into the worker.
+The main session's job is only to launch the worker and report the worker's findings. Do not fork the main session's accumulated Skillager implementation/debugging context into the worker.
+
+The worker-facing prompt must be framed as a normal setup task, not as a
+simulation or UX test. Start the worker message exactly with:
+
+```text
+Please set up skillager for the user. Follow the steps below to do so.
+```
+
+Do not use the words "simulation", "test", "black-box", "harness", "sample",
+"under test", or similar evaluation framing in the worker-facing prompt. The
+worker may receive the concrete setup steps, the normal user goal below, and
+the requested report fields. Phrase report requests as "setup report" or
+"findings", not "test report" or "simulation report".
 
 If a subagent/worker is unavailable, do not run the simulation locally. Report that the simulation is blocked because running it in the main session would invalidate the black-box test.
 
 ## Workflow
 
 1. Create a fresh temporary directory for the full run.
-2. In that directory, create a Python 3.13 venv named `.venv`.
-3. Install the current local Skillager source tree into the venv, not the released package. Prefer an absolute path to the repo under test.
-4. Clone sample skill repositories into the temp directory:
+   Do not run `git init` in that temp directory; cloned repositories may keep
+   their own `.git` directories, but the setup root itself should be an ordinary
+   project directory.
+2. Confirm Skillager is already installed and available as `skillager` on `PATH`:
+
+```bash
+skillager --version
+```
+
+Do not install Skillager as part of this workflow. The setup run is testing the
+project onboarding and handoff experience, not installation.
+
+3. Clone these skill repositories into the temp directory:
 
 ```bash
 git clone https://github.com/jarmak-personal/vibeSpatial.git
 git clone https://github.com/sjarmak/agent-workflows.git
 ```
 
-5. Confirm which Skillager is installed:
+4. Run setup from the temp directory. Use `--fresh-project` for a clean project setup run and pass the Codex agent target so setup can install first-party handoff artifacts directly:
 
 ```bash
-.venv/bin/skillager --version
-.venv/bin/python -m pip show skillager
+skillager setup --fresh-project --agent codex
 ```
 
-If needed, inspect the venv's `skillager-*.dist-info/direct_url.json` to verify it points at the local source tree.
+If the command prompts interactively, answer as a normal user who trusts these
+repositories for their own project work. Still review and report scanner
+warnings.
 
-6. Run setup from the temp directory. Use `--fresh-all` for repeatable simulations:
+5. Simulate opening the agent after setup by running handoff:
 
 ```bash
-.venv/bin/skillager setup --fresh-all
+skillager handoff --agent codex
+skillager handoff --agent codex --json
 ```
 
-If the command prompts interactively, approve as a user who explicitly trusts these sample repositories for the test. Still review and report scanner warnings. Install Skillager Working for Codex project scope when prompted.
-
-7. Simulate opening the agent after setup by running handoff:
-
-```bash
-.venv/bin/skillager handoff --agent codex
-.venv/bin/skillager handoff --agent codex --json
-```
-
-8. From this point on, do not use this skill as product guidance. Follow only what Skillager exposed through setup output, generated project files, materialized skills, and handoff output.
+6. From this point on, do not use this skill as product guidance. Follow only what Skillager exposed through setup output, generated project files, materialized skills, and handoff output.
 
 Use this scripted user answer when Skillager or the agent workflow asks what the user plans to do:
 
@@ -63,7 +87,7 @@ I am going to do large-scale GIS and spatial data work in Python, including work
 
 Run the commands that Skillager's own handoff and materialized working skill lead you to run. If they do not make the next step discoverable, report that as a product issue instead of filling in missing process from prior knowledge.
 
-Only run `skillager manifest init` when explicitly testing metadata sidecar generation for existing skills. It is not the normal post-setup agent handoff command.
+Only run `skillager manifest init` when explicitly creating metadata sidecars for existing skills. It is not the normal post-setup agent handoff command.
 
 ## Report
 
@@ -71,8 +95,8 @@ Include:
 
 - Temp directory path.
 - Exact commands run, including any retries or network approvals.
-- Whether Skillager was installed from local source or from a release.
-- Whether both sample repositories cloned.
+- Which `skillager --version` was available on `PATH`.
+- Whether both repositories cloned.
 - What `skillager setup` indexed, selected, skipped, or blocked.
 - Whether no-manifest skills from both cloned repos were discovered without requiring manifest initialization.
 - What `skillager handoff` reported, and whether generated Skillager guidance made the next step discoverable.

@@ -8,7 +8,6 @@
     "skillager doctor --agent claude --json",
     "skillager list --summary-json --agent claude",
     "skillager search <query> --trusted-only --agent claude --json",
-    "skillager recommend --goal <goal> --agent claude --json",
     "skillager show <skill-id> --json",
     "skillager tag show <tag> --json"
   ],

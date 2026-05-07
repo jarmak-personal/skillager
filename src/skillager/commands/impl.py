@@ -4,7 +4,6 @@ import argparse
 import contextlib
 import json
 import os
-import shlex
 import shutil
 import sys
 import tempfile
@@ -21,12 +20,14 @@ from rich.table import Table
 
 from .. import __version__
 from ..authored import record_authored_skill
+from ..audience import AUDIENCE_OTHER, audience_bucket, audience_bucket_label, declared_audiences
 from ..compatibility import compatibility_problem, compatibility_warnings
 from ..collections import (
     ack_collection_migrations,
     add_collection,
     add_tag_skill,
     attach_project_tag,
+    clear_project_tags,
     collection_migration_summary,
     create_tag,
     detach_project_tag,
@@ -75,6 +76,7 @@ from ..search import search as search_index
 from ..selection import select_visible_skills
 from ..session import (
     current_session,
+    clear_sessions,
     end_session,
     prune_sessions,
     read_events,
@@ -127,11 +129,6 @@ DOCTOR_EXIT_LOOKBACK_PENDING = 15
 SETUP_BOOTSTRAP_REASON_NO_APPROVED = "no_approved_skills"
 SETUP_BOOTSTRAP_REASON_DISABLED = "bootstrap_disabled"
 SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED = "agent_not_specified"
-RECOMMEND_MIN_SCORE = 8  # Below this, recommend exposure none.
-RECOMMEND_STRONG_SCORE = 20  # At/above this, treat as a strong match.
-RECOMMEND_NATIVE_TOP_N = 10  # At most this many strong matches may recommend native exposure.
-RECOMMEND_TAG_BOOST_CAP = 5  # Cap tag size contribution.
-RECOMMEND_TAG_BOOST_PER_MEMBER = 4
 _WORKING_DRIFT_REASON_CODES = {
     "local customization": HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
     "target is not Skillager Working": HANDOFF_REASON_WORKING_WRONG_SOURCE,
@@ -264,28 +261,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="Emit search results as JSON.")
     p.add_argument("--full-json", action="store_true", help="Emit full indexed metadata instead of compact agent-facing search results.")
     p.set_defaults(func=cmd_search)
-
-    p = sub.add_parser(
-        "recommend",
-        help="Build a read-only candidate slate for a user goal.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=(
-            "Search approved metadata for a goal and recommend exposure options without "
-            "approving, tagging, materializing, activating, or emitting skill bodies."
-        ),
-        epilog=(
-            "Examples:\n"
-            "  skillager recommend --goal \"clean dataframe values\" --agent codex --json\n"
-            "  skillager recommend --goal \"GIS workflow\" --agent claude --limit 3"
-        ),
-    )
-    p.add_argument("--goal", required=True, help="User goal or task description to match against approved skill metadata.")
-    p.add_argument("--agent", required=True, choices=["codex", "claude"], help="Agent target for compatibility warnings and concrete commands.")
-    p.add_argument("--limit", type=int, default=5, help="Maximum candidate count. Use 0 for all candidates.")
-    p.add_argument("--include-global", action="store_true", help="Include global native skills. Defaults to project/environment/package and attached collection skills.")
-    p.add_argument("--compatible-only", action="store_true", help="Hide skills explicitly marked incompatible with --agent.")
-    p.add_argument("--json", action="store_true", help="Emit recommendation slate as JSON.")
-    p.set_defaults(func=cmd_recommend)
 
     p = sub.add_parser(
         "show",
@@ -468,7 +443,7 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
             Examples:
               skillager setup
               skillager setup --fresh
-              skillager setup --fresh-all
+              skillager setup --fresh-project
               skillager setup --source project --accept-low
               skillager setup --source project --accept-low --agent codex
               skillager setup --include-global
@@ -489,7 +464,11 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     p.add_argument("--no-packages", action="store_true", help="Skip installed package skill discovery.")
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills in setup review. Defaults to local/environment/package skills only.")
     p.add_argument("--fresh", action="store_true", help="Clear prior project-local trust decisions for the selected setup scope before review. Does not revoke reusable global approvals or delete materialized skill files.")
-    p.add_argument("--fresh-all", action="store_true", help="Clear project-local trust and matching reusable global approvals for the selected setup scope before review.")
+    p.add_argument(
+        "--fresh-project",
+        action="store_true",
+        help="Reset this project's Skillager state before setup. Clears project trust decisions, tags, sessions, and saved setup scope; keeps reusable global approvals, global catalog entries, and materialized skill files.",
+    )
     add_review_filters(p)
     add_review_actions(p)
     target = p.add_mutually_exclusive_group()
@@ -879,7 +858,7 @@ def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentPars
 
 def add_review_filters(parser: argparse.ArgumentParser, *, include_lint_flag: bool = True) -> None:
     parser.add_argument("--source", help="Filter by source type, e.g. project, global, environment, python-package.")
-    parser.add_argument("--audience", help="Filter by audience.")
+    parser.add_argument("--audience", help="Filter by declared audience: user, dev, or other/everything_else for undeclared skills.")
     parser.add_argument("--package", help="Filter by package name.")
     parser.add_argument("--activation", help="Filter by activation mode.")
     parser.add_argument("--include-blocked", action="store_true", help="Include blocked skills in the selection.")
@@ -1289,6 +1268,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     action_requested = _setup_action_requested(args)
     setup_agents = _bootstrap_agents(args)
     project_dir = (find_project_root() or Path.cwd()).resolve()
+    fresh_project_reset = _clear_fresh_project_state(root(args)) if args.fresh_project else None
+    if fresh_project_reset is not None:
+        fresh_project_reset["retained_global_state"] = _fresh_project_retained_global_state(catalog_root(args), project_dir)
     audience = args.audience
     if _should_prompt_setup_audience(args):
         audience = _prompt_setup_audience(root(args), args, catalog_root=catalog_root(args))
@@ -1309,7 +1291,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         include_lint_blocked=True,
         include_global=args.include_global,
         fresh=args.fresh,
-        fresh_all=args.fresh_all,
+        fresh_project=args.fresh_project,
         accept_low=args.accept_low,
         yolo=args.yolo,
         trust_state=args.trust_selected,
@@ -1319,6 +1301,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
         approval_root=catalog_root(args),
         global_scope=not args.project_only,
     )
+    if fresh_project_reset is not None:
+        report["fresh_project_reset"] = fresh_project_reset
+    report["no_manifest_skills"] = _no_manifest_skill_summary(report["selected"])
     _remember_setup_paths(root(args), args.paths or None)
     if args.summary_json or args.json:
         bootstrap = _setup_bootstrap_after_review(
@@ -1338,14 +1323,24 @@ def cmd_setup(args: argparse.Namespace) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(f"Indexed {report['indexed']} skills")
+        print(f"Project root: {project_dir}")
         if report.get("skipped_global"):
             print(f"Skipped {report['skipped_global']} global skill(s) already installed; use --include-global to review them.")
-        if args.fresh_all:
+        if args.fresh_project:
+            retained = ((report.get("fresh_project_reset") or {}).get("retained_global_state") or {})
             print(
-                "Fresh-all reset: "
+                "Fresh project reset: "
                 f"project trust decisions cleared={report.get('fresh_reset', 0)}, "
-                f"reusable global approvals revoked={report.get('global_reset', 0)}. "
-                "Retained tags, collections, sessions, and materialized skill files."
+                "reusable global approvals retained. "
+                f"Project tags detached={((report.get('fresh_project_reset') or {}).get('project_tags', 0))}, "
+                f"sessions cleared={((report.get('fresh_project_reset') or {}).get('sessions', 0))}, "
+                f"saved setup scope cleared={int(bool((report.get('fresh_project_reset') or {}).get('status_scope')))}. "
+                "Retained global state: "
+                f"{retained.get('global_approvals', 0)} approval(s), "
+                f"{retained.get('catalog_tags', 0)} catalog tag(s), "
+                f"{retained.get('catalog_tag_members', 0)} tag member(s), "
+                f"{retained.get('collections', 0)} collection(s), "
+                f"plus {retained.get('materialized_skill_targets', 0)} materialized skill target(s)."
             )
         elif args.fresh:
             print(
@@ -1355,12 +1350,17 @@ def cmd_setup(args: argparse.Namespace) -> int:
             )
         if report.get("global_approved"):
             print(f"Applied {report['global_approved']} reusable global approval(s).")
+        _print_no_manifest_skill_summary(report.get("no_manifest_skills") or {})
         if report.get("errors"):
-            print(f"Errors: {len(report['errors'])}")
+            _print_discovery_errors(report["errors"])
         _print_review_report(report["selected"], report["summary"], report["action"], compact=not args.details)
         if not report["selected"]:
             _print_empty_setup_guidance(args)
-        _print_out_of_scope_collections(root(args), catalog_root(args), action_requested=bool(args.yolo or args.accept_low or args.trust_selected or args.block_high or args.override_lint))
+        _print_out_of_scope_collections(
+            root(args),
+            catalog_root(args),
+            action_requested=bool(args.yolo or args.accept_low or args.trust_selected or args.block_high or args.override_lint),
+        )
         if not action_requested and not args.non_interactive:
             _interactive_setup(
                 root(args),
@@ -1372,11 +1372,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 paths=args.paths or None,
                 agents=setup_agents,
                 no_bootstrap=args.no_bootstrap,
+                project_dir=project_dir,
             )
-        elif not action_requested:
+        elif not action_requested and not _setup_bootstrap_relevant(args, report):
             print()
             _print_setup_next_steps(report["selected"])
-        elif report["action"].get("changed"):
+        else:
             print()
             bootstrap = _setup_bootstrap_after_review(
                 args,
@@ -1411,6 +1412,50 @@ def _print_empty_setup_guidance(args: argparse.Namespace) -> None:
         print("  Already-installed global skills are hidden by default; add --include-global to review them.")
 
 
+def _print_discovery_errors(errors: list[dict[str, Any]], *, limit: int = 5) -> None:
+    print(f"Errors: {len(errors)}")
+    for item in errors[:limit]:
+        path = item.get("path") or "<unknown>"
+        error = item.get("error") or "unknown error"
+        print(f"  - {path}: {error}")
+    remaining = len(errors) - limit
+    if remaining > 0:
+        print(f"  ... {remaining} more")
+
+
+def _no_manifest_skill_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
+    selected = [skill for skill in skills if skill.get("inferred") and not skill.get("manifest_path")]
+    by_source = Counter(_no_manifest_source_label(skill) for skill in selected)
+    return {
+        "count": len(selected),
+        "by_source": dict(sorted(by_source.items())),
+        "metadata": "SKILL.md-only directories without skillager.yaml",
+    }
+
+
+def _no_manifest_source_label(skill: dict[str, Any]) -> str:
+    source = skill.get("source") or {}
+    for key in ("collection", "package", "name"):
+        value = source.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return str(source.get("type") or "unknown")
+
+
+def _print_no_manifest_skill_summary(summary: dict[str, Any]) -> None:
+    count = int(summary.get("count") or 0)
+    if not count:
+        return
+    by_source = summary.get("by_source") or {}
+    parts = ", ".join(f"{source}={amount}" for source, amount in sorted(by_source.items()))
+    suffix = f" ({parts})" if parts else ""
+    print(
+        "No-manifest skills discovered: "
+        f"{count}{suffix}. "
+        "`skillager manifest init` is only needed if you want structured audience/activation metadata."
+    )
+
+
 def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
     selected = report.get("selected", [])
     review_needed = [skill for skill in selected if skill.get("trust") == "discovered"]
@@ -1426,6 +1471,8 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
         "fresh_reset": report.get("fresh_reset", 0),
         "global_reset": report.get("global_reset", 0),
         "global_approved": report.get("global_approved", 0),
+        "fresh_project_reset": report.get("fresh_project_reset"),
+        "no_manifest_skills": report.get("no_manifest_skills"),
         "errors": len(report.get("errors", [])),
         "summary": report.get("summary", {}),
         "action": report.get("action", {}),
@@ -1660,17 +1707,78 @@ def _readiness_exposure(
     unmaterialized_attached_tags: list[str],
 ) -> dict[str, Any]:
     approved_ids = {skill["id"] for skill in approved}
-    exposed_ids = {skill_id for skill_id in project_exposure if skill_id != WORKING_SKILL_ID}
-    exposed_approved_ids = sorted(approved_ids.intersection(exposed_ids))
+    breakdown = _project_exposure_breakdown(project_exposure, skill_ids=approved_ids)
     return {
         "approved": len(approved_ids),
-        "exposed": len(exposed_approved_ids),
-        "available_on_demand": len(approved_ids.difference(exposed_ids)),
+        "approved_source_entries": len(approved_ids),
+        "exposed": breakdown["exposed"],
+        "exposed_source_entries": breakdown["exposed"],
+        "native": breakdown["native"],
+        "stubbed": breakdown["stubbed"],
+        "routed": breakdown["routed"],
+        "router_tags": breakdown["router_tags"],
+        "available_on_demand": len(approved_ids.difference(breakdown["exposed_ids"])),
+        "available_source_entries_on_demand": len(approved_ids.difference(breakdown["exposed_ids"])),
+        "count_basis": "approved source entries",
         "project_materialized": materialized_project_counts,
         "attached_tags": attached_tags,
         "materialized_router_tags": materialized_router_tags,
         "unmaterialized_attached_tags": unmaterialized_attached_tags,
     }
+
+
+def _project_exposure_breakdown(
+    project_exposure: dict[str, list[dict[str, Any]]],
+    *,
+    skill_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    native_ids: set[str] = set()
+    stubbed_ids: set[str] = set()
+    routed_ids: set[str] = set()
+    router_tags: set[str] = set()
+    for skill_id, targets in project_exposure.items():
+        if skill_id == WORKING_SKILL_ID:
+            continue
+        if skill_ids is not None and skill_id not in skill_ids:
+            continue
+        for target in targets:
+            kind = target.get("kind")
+            if kind == "native":
+                native_ids.add(skill_id)
+            elif kind == "stub":
+                stubbed_ids.add(skill_id)
+            elif kind == "router":
+                routed_ids.add(skill_id)
+                tag = target.get("tag") or target.get("router")
+                if tag:
+                    router_tags.add(str(tag))
+    exposed_ids = native_ids | stubbed_ids | routed_ids
+    return {
+        "exposed": len(exposed_ids),
+        "native": len(native_ids),
+        "stubbed": len(stubbed_ids),
+        "routed": len(routed_ids),
+        "router_tags": len(router_tags),
+        "exposed_ids": exposed_ids,
+    }
+
+
+def _exposure_summary_text(exposure: dict[str, Any]) -> str:
+    exposed = int(exposure.get("exposed") or 0)
+    available = int(exposure.get("available_on_demand") or 0)
+    details = []
+    router_tags = int(exposure.get("router_tags") or 0)
+    routed = int(exposure.get("routed") or 0)
+    stubbed = int(exposure.get("stubbed") or 0)
+    native = int(exposure.get("native") or 0)
+    if router_tags or routed:
+        details.append(f"{router_tags} router tag(s), {routed} routed")
+    if stubbed:
+        details.append(f"{stubbed} stubbed")
+    if native:
+        details.append(f"{native} native")
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"{exposed} exposed entr{'y' if exposed == 1 else 'ies'}{suffix}, {available} approved entr{'y' if available == 1 else 'ies'} on demand"
 
 
 def _handoff_ready(artifacts: dict[str, Any]) -> bool:
@@ -1754,7 +1862,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     state_root = root(args)
     approval_root = catalog_root(args)
     project_dir = (find_project_root() or Path.cwd()).resolve()
-    agent = args.agent or _detect_agent_optional()
+    agent, agent_source = _status_agent(args, state_root)
     view = _build_visible_skill_view(
         state_root,
         catalog_root=approval_root,
@@ -1771,7 +1879,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     _save_native_inventory(state_root, _effective_project_skills(state_root, catalog_root=approval_root))
     summary = review_summary(skills)
     materialized = view["materialized_project_counts"]
-    exposure = view["project_exposure"]
     review_needed = view["review_needed"]
     lint_blocked = view["lint_blocked"]
     scan_summary = _status_scan_summary(skills)
@@ -1793,6 +1900,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         "indexed": len(data.get("skills", [])),
         "selected": len(skills),
         "agent": agent,
+        "agent_source": agent_source,
         "review_needed": len(review_needed),
         "lint_blocked": len(lint_blocked),
         "lint_blocked_ids": [skill["id"] for skill in lint_blocked],
@@ -1808,7 +1916,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         "materialized": materialized,
         "reviewed_scope_count": saved_scope.get("selected_count") if saved_scope else None,
         "setup_scope_count": saved_scope.get("selected_count") if saved_scope else None,
-        "exposure_count": len([skill_id for skill_id in exposure if skill_id != "skillager/working"]),
+        "exposure_count": readiness["exposure"]["exposed"],
+        "exposure_breakdown": {
+            key: readiness["exposure"].get(key, 0)
+            for key in ("native", "stubbed", "routed", "router_tags")
+        },
         "readiness": readiness,
         "needs_setup": not readiness["review_ready"],
         "lookback_pending": lookback_summary["pending"],
@@ -2094,7 +2206,7 @@ def _print_doctor_result(result: dict[str, Any]) -> None:
     print(f"  Ready: {'yes' if readiness.get('ready') else 'no'}")
     print(f"  Review: {'ready' if readiness.get('review_ready') else 'needs review'}")
     print(f"  Handoff: {_readiness_handoff_state(readiness)}")
-    print(f"  Exposure: {exposure.get('exposed', 0)} exposed, {exposure.get('available_on_demand', 0)} available on demand")
+    print(f"  Exposure: {_exposure_summary_text(exposure)}")
     fix = result.get("fix")
     if fix:
         print()
@@ -2353,6 +2465,32 @@ def _detect_agent_optional() -> str | None:
     return None
 
 
+def _status_agent(args: argparse.Namespace, state_root: Path) -> tuple[str | None, str | None]:
+    if args.agent:
+        return args.agent, "argument"
+    detected = _detect_agent_optional()
+    if detected:
+        return detected, "environment"
+    saved = _saved_status_scope_agent(state_root)
+    if saved:
+        return saved, "saved_setup_scope"
+    return None, None
+
+
+def _saved_status_scope_agent(state_root: Path) -> str | None:
+    scope = _load_status_scope(state_root) or {}
+    agents = sorted(
+        {
+            agent
+            for agent in (scope.get("agents") or [])
+            if agent in {"codex", "claude"}
+        }
+    )
+    if len(agents) == 1:
+        return agents[0]
+    return None
+
+
 def _handoff_artifacts(project_dir: Path, *, agent: str) -> dict[str, Any]:
     notes = [_handoff_note_status(path) for path in agent_note_paths(project_dir, agents=[agent])]
     working = _working_artifact_status(project_dir, agent=agent)
@@ -2572,7 +2710,7 @@ def _print_handoff(handoff: dict[str, Any]) -> None:
     print(f"  Ready: {'yes' if readiness.get('ready') else 'no'}")
     print(f"  Review: {'ready' if readiness.get('review_ready') else 'needs review'}")
     print(f"  Handoff: {_readiness_handoff_state(readiness)}")
-    print(f"  Exposure: {exposure.get('exposed', 0)} exposed, {exposure.get('available_on_demand', 0)} available on demand")
+    print(f"  Exposure: {_exposure_summary_text(exposure)}")
     print()
     print("State:")
     setup = state["setup"]
@@ -3074,7 +3212,11 @@ def _print_status(status: dict[str, Any]) -> None:
         print("    next:")
         for action in next_actions:
             print(f"      - {action}")
-    print(f"    exposure: {exposure.get('exposed', 0)} exposed, {exposure.get('available_on_demand', 0)} available on demand")
+    print(f"    exposure: {_exposure_summary_text(exposure)}")
+    if status.get("agent"):
+        source = status.get("agent_source")
+        source_suffix = " from saved setup scope" if source == "saved_setup_scope" else ""
+        print(f"  - agent: {status['agent']}{source_suffix}")
     print(f"  - selected skills: {status['selected']}")
     print(f"  - approved: {status['approved']}")
     if status.get("global_approved"):
@@ -3162,7 +3304,7 @@ def _print_status(status: dict[str, Any]) -> None:
         parts = [f"{agent}={count}" for agent, count in sorted(materialized.items())]
         print(f"  - materialized project skills: {', '.join(parts)}")
     if status.get("exposure_count"):
-        print(f"  - exposed approved skills: {status['exposure_count']}")
+        print(f"  - exposure detail: {_exposure_summary_text(exposure)}")
     lookback = status.get("lookback_summary") or {}
     if lookback.get("pending"):
         print(
@@ -3232,6 +3374,35 @@ def _authored_unreviewed(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _status_scope_path(state_root: Path) -> Path:
     return state_root / "status_scope.json"
+
+
+def _clear_fresh_project_state(state_root: Path) -> dict[str, Any]:
+    return {
+        "project_tags": clear_project_tags(state_root),
+        "sessions": clear_sessions(state_root),
+        "status_scope": _clear_status_scope(state_root),
+    }
+
+
+def _fresh_project_retained_global_state(catalog_root: Path, project_dir: Path) -> dict[str, Any]:
+    tags = load_tags(catalog_root).get("tags") or {}
+    return {
+        "global_approvals": len(load_trust(catalog_root).get("global_approvals") or {}),
+        "catalog_tags": len(tags),
+        "catalog_tag_members": sum(len(skill_ids or []) for skill_ids in tags.values()),
+        "collections": len(load_collections(catalog_root).get("collections") or {}),
+        "materialized_skill_targets": len(_materialized_target_paths(project_dir, agents=["codex", "claude"])),
+    }
+
+
+def _clear_status_scope(state_root: Path) -> bool:
+    path = _status_scope_path(state_root)
+    if not path.exists():
+        return False
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"refusing to clear unsafe status scope path: {path}")
+    path.unlink()
+    return True
 
 
 def _native_inventory_path(state_root: Path) -> Path:
@@ -3404,37 +3575,34 @@ def _prompt_setup_audience(state_root: Path, args: argparse.Namespace, *, catalo
     )
     counts: dict[str, int] = {}
     for skill in skills:
-        audience = skill.get("audience_guess", {}).get("audience") or "unknown"
+        audience = audience_bucket(skill)
         counts[audience] = counts.get(audience, 0) + 1
     if len([count for count in counts.values() if count]) <= 1:
         return None
 
     print(_style("Audience scope", "bold"))
-    print("  This setup selection spans multiple audiences.")
-    print("  If you are setting up before a specific task is known, choose both; agents can narrow after asking the user goal.")
+    print("  This setup selection spans declared audiences and undeclared skills.")
+    print("  Choose all when setting up before a specific task is known; agents can narrow after asking the user goal.")
     for audience, count in sorted(counts.items()):
-        print(f"    - {audience}: {count}")
+        print(f"    - {audience_bucket_label(audience)}: {count}")
     while True:
-        print("  1. User-facing library usage")
-        print("  2. Dev/maintainer workflows")
-        print("  3. Both user and dev")
-        if counts.get("unknown"):
-            print("  4. Unknown only")
-            print("  5. Cancel setup")
-        else:
-            print("  4. Cancel setup")
+        print("  1. Declared user-facing skills")
+        print("  2. Declared dev/maintainer skills")
+        print("  3. Everything else (no declared audience)")
+        print("  4. All selected skills")
+        print("  5. Cancel setup")
         choice = _interactive_input("> ").strip().lower()
         if choice == "1" or choice == "user":
             return "user"
         if choice == "2" or choice in {"dev", "developer", "maintainer"}:
             return "dev"
-        if choice == "3" or choice in {"both", "all"}:
+        if choice == "3" or choice in {AUDIENCE_OTHER, "unknown", "undeclared", "everything_else", "everything-else", "everything else"}:
+            return AUDIENCE_OTHER
+        if choice == "4" or choice in {"both", "all"}:
             return None
-        if counts.get("unknown") and (choice == "4" or choice == "unknown"):
-            return "unknown"
-        if (counts.get("unknown") and choice == "5") or (not counts.get("unknown") and choice == "4") or choice in {"q", "quit", "exit", "cancel"}:
+        if choice == "5" or choice in {"q", "quit", "exit", "cancel"}:
             return "__cancel__"
-        print("Enter a listed number, user, dev, both, or cancel.")
+        print("Enter a listed number, user, dev, everything else, all, or cancel.")
 
 
 def cmd_index(args: argparse.Namespace) -> int:
@@ -3450,7 +3618,7 @@ def cmd_index(args: argparse.Namespace) -> int:
     else:
         print(f"Indexed {len(data['skills'])} skills")
         if data.get("errors"):
-            print(f"Errors: {len(data['errors'])}")
+            _print_discovery_errors(data["errors"])
     return 0
 
 
@@ -3468,12 +3636,15 @@ def cmd_list(args: argparse.Namespace) -> int:
     if args.no_packages and not args.source:
         skills = [skill for skill in skills if skill.get("source", {}).get("type") != "python-package"]
     skills = [_skill for _skill in skills if _matches_filters(_skill, args)]
-    if args.agent or args.summary_json:
+    source_entry_count = len(skills)
+    if args.agent:
+        skills = _collapse_agent_variant_results(skills, args.agent)
+    elif args.summary_json:
         skills = _annotate_agent_variants(skills, args.agent)
     if args.agent:
         skills = _sort_agent_variant_inventory(skills, args.agent)
     if args.summary_json:
-        print(json.dumps(_inventory_summary(skills, agent=args.agent), indent=2, sort_keys=True))
+        print(json.dumps(_inventory_summary(skills, agent=args.agent, source_entry_count=source_entry_count), indent=2, sort_keys=True))
     elif args.json:
         print(json.dumps(skills, indent=2, sort_keys=True))
     else:
@@ -3512,6 +3683,8 @@ def cmd_search(args: argparse.Namespace) -> int:
         )
         if not args.include_global:
             skills = [skill for skill in skills if skill.get("source", {}).get("type") != "global"]
+    if args.agent:
+        skills = _collapse_agent_variant_results(skills, args.agent)
     results = search_index(
         skills,
         args.query,
@@ -3526,7 +3699,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     if args.limit < 0:
         raise ValueError("--limit must be 0 or greater")
     if args.agent:
-        results = _sort_agent_variant_search(_annotate_agent_variants(results, args.agent), args.agent)
+        results = _sort_agent_variant_search(results, args.agent)
     if args.limit:
         results = results[: args.limit]
     record_search_event(
@@ -3548,332 +3721,6 @@ def cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_recommend(args: argparse.Namespace) -> int:
-    if args.limit < 0:
-        raise ValueError("--limit must be 0 or greater")
-    skills = _effective_project_skills(
-        root(args),
-        catalog_root=catalog_root(args),
-        include_blocked=False,
-        include_lint_blocked=False,
-    )
-    if not args.include_global:
-        skills = [skill for skill in skills if skill.get("source", {}).get("type") != "global"]
-    results = search_index(
-        skills,
-        args.goal,
-        include_blocked=False,
-        include_lint_blocked=False,
-        include_untrusted=False,
-    )
-    if args.compatible_only:
-        results = [skill for skill in results if compatibility_problem(skill, args.agent) is None]
-    results = _sort_agent_variant_search(_annotate_agent_variants(results, args.agent), args.agent)
-    attached_tags = set(load_project_tags(root(args)).get("attached_tags", []))
-    candidates = _recommend_candidates(results, goal=args.goal, agent=args.agent, attached_tags=attached_tags)
-    if args.limit:
-        candidates = candidates[: args.limit]
-    payload = {
-        "schema": "skillager.recommend.v1",
-        "goal": args.goal,
-        "agent": args.agent,
-        "candidates": candidates,
-        "commands": _recommend_commands(args.goal, args.agent, candidates),
-        "policy": "read-only metadata recommendation; no approval, tagging, exposure, activation, or trust transfer is performed",
-    }
-    if args.json:
-        print(json.dumps(payload, indent=2, sort_keys=True))
-    else:
-        _print_recommend(payload)
-    return 0
-
-
-def _recommend_candidates(
-    results: list[dict[str, Any]],
-    *,
-    goal: str,
-    agent: str,
-    attached_tags: set[str],
-) -> list[dict[str, Any]]:
-    collapsed = _collapse_recommend_duplicate_results(results, agent=agent)
-    skill_candidates = [
-        _recommend_skill_candidate(skill, goal=goal, agent=agent, strong_match_count=_strong_recommend_match_count(collapsed))
-        for skill in collapsed
-    ]
-    tag_candidates = _recommend_tag_candidates(results, goal=goal, agent=agent, attached_tags=attached_tags)
-    candidates = [*skill_candidates, *tag_candidates]
-    return sorted(
-        candidates,
-        key=lambda item: (
-            -int(item.get("score") or 0),
-            _recommend_exposure_rank(str(item.get("recommended_exposure") or "")),
-            str(item.get("kind") or ""),
-            str(item.get("id") or ""),
-        ),
-    )
-
-
-def _collapse_recommend_duplicate_results(results: list[dict[str, Any]], *, agent: str) -> list[dict[str, Any]]:
-    collapsed: list[dict[str, Any]] = []
-    grouped_objects: set[int] = set()
-    for family_key, content_hash_value, group in duplicate_content_group_entries(results):
-        representative = sorted(group, key=lambda skill: _recommend_result_sort_key(skill, agent))[0]
-        item = dict(representative)
-        item["duplicate_content"] = {
-            "family_key": family_key,
-            "content_hash": content_hash_value,
-            "count": len(group),
-            "ids": sorted(str(skill.get("id")) for skill in group if skill.get("id")),
-            "representative_id": representative.get("id"),
-            "policy": "same-content duplicate candidates collapsed; trust remains source-keyed",
-        }
-        collapsed.append(item)
-        grouped_objects.update(id(skill) for skill in group)
-    collapsed.extend(dict(skill) for skill in results if id(skill) not in grouped_objects)
-    return sorted(collapsed, key=lambda skill: _recommend_result_sort_key(skill, agent))
-
-
-def _recommend_result_sort_key(skill: dict[str, Any], agent: str) -> tuple[float, int, tuple[int, int, str], str]:
-    return (
-        -float(skill.get("score") or 0),
-        _visibility_rank_for_cli(skill),
-        _agent_variant_preference_key(skill, agent),
-        str(skill.get("id") or ""),
-    )
-
-
-def _strong_recommend_match_count(skills: list[dict[str, Any]]) -> int:
-    return sum(1 for skill in skills if _strong_recommend_match(skill))
-
-
-def _recommend_skill_candidate(
-    skill: dict[str, Any],
-    *,
-    goal: str,
-    agent: str,
-    strong_match_count: int,
-) -> dict[str, Any]:
-    score = _recommend_score(skill)
-    exposure = skill.get("exposure", "hidden")
-    recommended = _recommend_skill_exposure(skill, score=score, strong_match_count=strong_match_count, agent=agent)
-    command_skill_id = str((skill.get("duplicate_content") or {}).get("representative_id") or skill.get("id"))
-    candidate: dict[str, Any] = {
-        "kind": "group" if skill.get("duplicate_content") else "skill",
-        "id": (skill.get("duplicate_content") or {}).get("family_key") or skill.get("id"),
-        "skill_id": skill.get("id"),
-        "score": score,
-        "recommended_exposure": recommended,
-        "reason": _recommend_reason(skill, recommended=recommended, score=score, strong_match_count=strong_match_count),
-        "summary": skill.get("summary"),
-        "trust": skill.get("trust"),
-        "current_exposure": exposure,
-        "materialized_targets": skill.get("materialized_targets", []),
-        "tags": skill.get("tags", []),
-        "reasons": skill.get("reasons", []),
-        "compatibility": _recommend_compatibility(skill, agent),
-        "commands": _recommend_candidate_commands(command_skill_id, goal=goal, agent=agent, exposure=recommended),
-    }
-    if skill.get("duplicate_content"):
-        candidate["representative_id"] = command_skill_id
-        candidate["duplicate_content"] = skill["duplicate_content"]
-    return candidate
-
-
-def _recommend_tag_candidates(
-    results: list[dict[str, Any]],
-    *,
-    goal: str,
-    agent: str,
-    attached_tags: set[str],
-) -> list[dict[str, Any]]:
-    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for skill in results:
-        for tag in skill.get("tags") or []:
-            groups[str(tag)].append(skill)
-    candidates: list[dict[str, Any]] = []
-    for tag, group in sorted(groups.items()):
-        if len(group) < 2:
-            continue
-        exposed = any(skill.get("exposure") in {"router", "multiple"} for skill in group)
-        attached = tag in attached_tags
-        score = min(
-            100,
-            round(
-                max(_recommend_score(skill) for skill in group)
-                + min(len(group), RECOMMEND_TAG_BOOST_CAP) * RECOMMEND_TAG_BOOST_PER_MEMBER
-            ),
-        )
-        exposure = "none" if exposed or not attached else "router"
-        member_ids = [str(skill.get("id")) for skill in sorted(group, key=lambda item: _recommend_result_sort_key(item, agent)) if skill.get("id")]
-        candidates.append(
-            {
-                "kind": "tag",
-                "id": tag,
-                "score": score,
-                "recommended_exposure": exposure,
-                "reason": _recommend_tag_reason(tag, group, exposed=exposed, attached=attached),
-                "member_count": len(group),
-                "member_ids": member_ids[:10],
-                "attached": attached,
-                "current_exposure": "router" if exposed else "hidden",
-                "compatibility_warnings": _recommend_group_warnings(group, agent),
-                "commands": {
-                    "inspect": (
-                        f"skillager search {_shell_quote(goal)} --tag {_shell_quote(tag)} "
-                        f"{'--approved-only' if attached else '--trusted-only'} --agent {agent} --json"
-                    ),
-                    "router": None if exposed or not attached else f"skillager materialize --tag {_shell_quote(tag)} --mode router --agent {agent} --scope project",
-                },
-            }
-        )
-    return candidates
-
-
-def _recommend_skill_exposure(skill: dict[str, Any], *, score: int, strong_match_count: int, agent: str) -> str:
-    if skill.get("exposure") in {"native", "stub", "router", "multiple"}:
-        return "none"
-    if compatibility_problem(skill, agent) is not None:
-        return "none"
-    if score < RECOMMEND_MIN_SCORE:
-        return "none"
-    if (
-        strong_match_count
-        and strong_match_count <= RECOMMEND_NATIVE_TOP_N
-        and _strong_recommend_match(skill)
-        and _native_recommend_candidate(skill, agent=agent)
-    ):
-        return "native"
-    return "stub"
-
-
-def _strong_recommend_match(skill: dict[str, Any]) -> bool:
-    if "id:exact" in set(skill.get("reasons") or []):
-        return True
-    if _recommend_score(skill) >= RECOMMEND_STRONG_SCORE:
-        return True
-    return any(str(reason).startswith(("name:", "tags:", "package:", "targets:")) for reason in skill.get("reasons") or [])
-
-
-def _native_recommend_candidate(skill: dict[str, Any], *, agent: str) -> bool:
-    source_type = (skill.get("source") or {}).get("type")
-    if source_type in {"collection", "python-package", "environment"}:
-        return False
-    return compatibility_problem(skill, agent) is None
-
-
-def _recommend_reason(skill: dict[str, Any], *, recommended: str, score: int, strong_match_count: int) -> str:
-    if skill.get("exposure") in {"native", "stub", "router", "multiple"}:
-        return f"already exposed as {skill.get('exposure')}; no new exposure needed"
-    if skill.get("duplicate_content"):
-        return "same-content duplicates collapsed; use the representative if this slate matches the user's goal"
-    if recommended == "native":
-        return f"strong approved metadata match with {strong_match_count} strong candidate(s); native may be appropriate if always relevant"
-    if recommended == "stub":
-        return "approved metadata match; stub keeps the full skill available on demand without loading it every session"
-    return f"weak approved metadata match (score {score}); inspect before changing exposure"
-
-
-def _recommend_tag_reason(tag: str, group: list[dict[str, Any]], *, exposed: bool, attached: bool) -> str:
-    if exposed:
-        return f"tag {tag} already has router exposure in the matching approved set"
-    if not attached:
-        return f"{len(group)} approved matches share tag {tag}, but the tag is not attached to this project"
-    return f"{len(group)} approved matches share tag {tag}; router can expose the group when the task needs it"
-
-
-def _recommend_compatibility(skill: dict[str, Any], agent: str) -> dict[str, Any]:
-    compatibility = skill.get("compatibility") or {}
-    return {
-        "agent": agent,
-        "problem": compatibility_problem(skill, agent),
-        "exclusive_to": compatibility.get("exclusive_to"),
-        "incompatible_with": compatibility.get("incompatible_with", []),
-        "activation_warnings": compatibility_warnings(skill, agent),
-    }
-
-
-def _recommend_group_warnings(group: list[dict[str, Any]], agent: str) -> list[dict[str, Any]]:
-    warnings = []
-    for skill in group:
-        problem = compatibility_problem(skill, agent)
-        activation_warnings = compatibility_warnings(skill, agent)
-        if problem or activation_warnings:
-            warnings.append(
-                {
-                    "skill_id": skill.get("id"),
-                    "problem": problem,
-                    "activation_warnings": activation_warnings,
-                }
-            )
-    return warnings
-
-
-def _recommend_score(skill: dict[str, Any]) -> int:
-    return max(0, min(100, int(round(float(skill.get("score") or 0)))))
-
-
-def _recommend_exposure_rank(exposure: str) -> int:
-    return {"router": 0, "native": 1, "stub": 2, "none": 3}.get(exposure, 4)
-
-
-def _recommend_candidate_commands(
-    skill_id: str,
-    *,
-    goal: str,
-    agent: str,
-    exposure: str,
-) -> dict[str, str | None]:
-    commands: dict[str, str | None] = {
-        "inspect": f"skillager show {_shell_quote(skill_id)} --json",
-        "search": f"skillager search {_shell_quote(goal)} --trusted-only --agent {agent} --json",
-        "stub": None,
-        "native": None,
-        "router": None,
-    }
-    if exposure == "stub":
-        commands["stub"] = f"skillager materialize {_shell_quote(skill_id)} --mode stub --agent {agent} --scope project"
-    elif exposure == "native":
-        commands["native"] = f"skillager materialize {_shell_quote(skill_id)} --mode native --agent {agent} --scope project"
-    return commands
-
-
-def _recommend_commands(goal: str, agent: str, candidates: list[dict[str, Any]]) -> dict[str, str | None]:
-    commands: dict[str, str | None] = {
-        "inspect": f"skillager search {_shell_quote(goal)} --trusted-only --agent {agent} --json",
-        "inventory": f"skillager list --summary-json --agent {agent}",
-        "router": None,
-        "stub": None,
-        "native": None,
-    }
-    # Top-level materialize shortcuts point at the first ranked candidate that can supply each exposure mode.
-    for candidate in candidates:
-        candidate_commands = candidate.get("commands") or {}
-        for key in ("router", "stub", "native"):
-            if commands.get(key) is None and candidate_commands.get(key):
-                commands[key] = str(candidate_commands[key])
-    return commands
-
-
-def _print_recommend(payload: dict[str, Any]) -> None:
-    print(_style("Skillager recommend", "bold"))
-    print(f"  goal: {payload['goal']}")
-    print(f"  agent: {payload['agent']}")
-    candidates = payload.get("candidates") or []
-    if not candidates:
-        print("  no approved candidates matched")
-        return
-    for candidate in candidates:
-        print(
-            f"  - {candidate.get('kind')} {candidate.get('id')}: "
-            f"score={candidate.get('score')} recommend={candidate.get('recommended_exposure')}"
-        )
-        print(f"    {candidate.get('reason')}")
-
-
-def _shell_quote(value: str) -> str:
-    return shlex.quote(value)
-
-
 def _compact_search_result(skill: dict[str, Any], *, agent: str | None = None) -> dict[str, Any]:
     scan = skill.get("scan") or {}
     compatibility = skill.get("compatibility") or {}
@@ -3883,6 +3730,7 @@ def _compact_search_result(skill: dict[str, Any], *, agent: str | None = None) -
         "name": skill.get("name"),
         "summary": skill.get("summary"),
         "score": skill.get("score"),
+        "score_detail": skill.get("score_detail"),
         "reasons": skill.get("reasons", []),
         "trust": skill.get("trust"),
         "trust_reason": skill.get("trust_reason"),
@@ -3892,6 +3740,7 @@ def _compact_search_result(skill: dict[str, Any], *, agent: str | None = None) -
         "exposure": skill.get("exposure", "hidden"),
         "materialized_targets": skill.get("materialized_targets", []),
         "tags": skill.get("tags", []),
+        "source_root": (skill.get("source") or {}).get("path") or skill.get("root"),
         "entrypoint": skill.get("entrypoint"),
         "agent_hint": skill.get("agent_hint") or _agent_hint(skill),
         "agent_variant": skill.get("agent_variant"),
@@ -3907,7 +3756,12 @@ def _compact_search_result(skill: dict[str, Any], *, agent: str | None = None) -
     }
 
 
-def _inventory_summary(skills: list[dict[str, Any]], *, agent: str | None = None) -> dict[str, Any]:
+def _inventory_summary(
+    skills: list[dict[str, Any]],
+    *,
+    agent: str | None = None,
+    source_entry_count: int | None = None,
+) -> dict[str, Any]:
     annotated = _annotate_agent_variants(skills, agent)
     source_counts = Counter((skill.get("source") or {}).get("type") or "unknown" for skill in annotated)
     trust_counts = Counter(skill.get("trust") or "unknown" for skill in annotated)
@@ -3922,6 +3776,14 @@ def _inventory_summary(skills: list[dict[str, Any]], *, agent: str | None = None
         "schema": "skillager.inventory-summary.v1",
         "agent": agent,
         "total": len(annotated),
+        "total_label": "agent-visible choices" if agent else "inventory entries",
+        "source_entry_count": source_entry_count if source_entry_count is not None else len(annotated),
+        "variant_collapse": {
+            "applied": bool(agent),
+            "before": source_entry_count if source_entry_count is not None else len(annotated),
+            "after": len(annotated),
+            "basis": "native-agent variants collapse to one preferred agent-visible choice when --agent is set",
+        },
         "counts": {
             "by_source": dict(sorted(source_counts.items())),
             "by_trust": dict(sorted(trust_counts.items())),
@@ -4017,6 +3879,18 @@ def _annotate_agent_variants(skills: list[dict[str, Any]], agent: str | None) ->
             }
         annotated.append(item)
     return annotated
+
+
+def _collapse_agent_variant_results(skills: list[dict[str, Any]], agent: str) -> list[dict[str, Any]]:
+    collapsed = []
+    for skill in _annotate_agent_variants(skills, agent):
+        variant = skill.get("agent_variant") or {}
+        if variant and not variant.get("is_preferred"):
+            continue
+        if variant:
+            variant["policy"] = "agent-scoped result collapsed to the preferred variant; alternatives are listed for inspection"
+        collapsed.append(skill)
+    return collapsed
 
 
 def _sort_agent_variant_search(skills: list[dict[str, Any]], agent: str) -> list[dict[str, Any]]:
@@ -4260,9 +4134,11 @@ def _effective_project_skills(
     catalog_root: Path | None = None,
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
+    project_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     catalog_root = catalog_root or state_root
-    exposure = _project_exposure(Path.cwd())
+    project_dir = (project_dir or find_project_root() or Path.cwd()).resolve()
+    exposure = _project_exposure(project_dir)
     extra_paths = _active_setup_paths(state_root)
     if extra_paths:
         data = build_index(state_root, include_packages=True, approval_root=catalog_root, extra_paths=extra_paths)
@@ -4448,6 +4324,7 @@ def _project_exposure(project: Path) -> dict[str, list[dict[str, Any]]]:
                 if data.get("source_type") == "skillager-router":
                     target["kind"] = "router"
                     target["router"] = data.get("id") or data.get("source_id")
+                    target["tag"] = data.get("tag")
                     for skill_id in data.get("skill_ids") or []:
                         exposure.setdefault(str(skill_id), []).append(dict(target))
                 elif data.get("source_type") == "skillager-stub":
@@ -4752,6 +4629,9 @@ def cmd_materialize(args: argparse.Namespace) -> int:
         print(json.dumps(results, indent=2, sort_keys=True))
     else:
         _print_materialize_results(results)
+        if args.scope == "project" and mode == "router" and args.tag and not args.dry_run:
+            _print_router_scan_note(args.tag, skills)
+            _print_router_verification(args.tag, agents, results)
         if args.scope == "project" and not args.dry_run and any(item.get("status") == "materialized" for item in results):
             saved_scope = _load_status_scope(root(args))
             if saved_scope is None or saved_scope.get("selected_count") is None:
@@ -4821,6 +4701,34 @@ def _suppress_materialize_result(item: dict[str, Any]) -> bool:
     if item.get("status") == "materialized":
         return True
     return item.get("status") == "skipped" and item.get("reason") == "already up to date"
+
+
+def _print_router_verification(tag: str, agents: list[str], results: list[dict[str, Any]]) -> None:
+    current_agents = sorted(
+        agent
+        for agent in {item.get("agent") for item in results if item.get("skill_id") == f"skillager/{tag}" and _agent_next_step_artifact_current(item)}
+        if isinstance(agent, str)
+    )
+    if not current_agents:
+        return
+    print()
+    print("Verify router exposure:")
+    for agent in current_agents or agents:
+        print(f"  skillager handoff --agent {agent} --json")
+
+
+def _print_router_scan_note(tag: str, skills: list[dict[str, Any]]) -> None:
+    risky = [skill for skill in skills if (skill.get("scan") or {}).get("risk") in {"medium", "high"}]
+    if not risky:
+        return
+    counts = Counter((skill.get("scan") or {}).get("risk") for skill in risky)
+    finding_count = sum(len((skill.get("scan") or {}).get("findings") or []) for skill in risky)
+    parts = ", ".join(f"{risk}={counts[risk]}" for risk in ("high", "medium") if counts.get(risk))
+    print()
+    print(f"Router scan note: tag {tag} includes {parts} skill(s) with {finding_count} scanner finding(s).")
+    sample_ids = ", ".join(skill["id"] for skill in risky[:5])
+    print(f"  Review before activation: {sample_ids}")
+    print(f"  Inspect: skillager tag show {tag} --json")
 
 
 def _agent_notes_ready(project_dir: Path, *, agents: list[str]) -> bool:
@@ -4987,7 +4895,7 @@ def _matches_filters(skill: dict[str, Any], args: argparse.Namespace) -> bool:
         return False
     if args.activation and skill.get("activation") != args.activation:
         return False
-    if args.audience and args.audience not in skill.get("audience", []):
+    if args.audience and not _matches_declared_audience(skill, args.audience):
         return False
     if args.package and skill.get("package") != args.package:
         return False
@@ -5039,14 +4947,11 @@ def _print_review_report(
         return
     print(_style("Review summary", "bold"))
     print(f"  - selected: {_style(str(summary['total']), 'bold')}")
-    families = summary.get("families") or {}
-    if families:
-        print(f"  - families: total={families.get('total', 0)}, variants={families.get('with_variants', 0)}")
     for source, counts in summary.get("by_source", {}).items():
         risk_bits = ", ".join(_risk_count(risk, count) for risk, count in sorted(counts.items()))
         print(f"  - {source}: {risk_bits}")
     if summary.get("by_audience"):
-        audience_bits = ", ".join(f"{audience}={_style(str(count), 'bold')}" for audience, count in sorted(summary["by_audience"].items()))
+        audience_bits = ", ".join(f"{audience_bucket_label(audience)}={_style(str(count), 'bold')}" for audience, count in sorted(summary["by_audience"].items()))
         print(f"  - audience: {audience_bits}")
     if summary.get("by_trust"):
         trust_bits = ", ".join(_trust_count(state, count) for state, count in sorted(summary["by_trust"].items()))
@@ -5097,13 +5002,10 @@ def _print_review_report_rich(
     table.add_column("Bucket", style="bold")
     table.add_column("Value")
     table.add_row("selected", str(summary["total"]))
-    families = summary.get("families") or {}
-    if families:
-        table.add_row("families", f"total={families.get('total', 0)}, variants={families.get('with_variants', 0)}")
     for source, counts in summary.get("by_source", {}).items():
         table.add_row(source, ", ".join(_risk_count(risk, count) for risk, count in sorted(counts.items())))
     if summary.get("by_audience"):
-        table.add_row("audience", ", ".join(f"{audience}={count}" for audience, count in sorted(summary["by_audience"].items())))
+        table.add_row("audience", ", ".join(f"{audience_bucket_label(audience)}={count}" for audience, count in sorted(summary["by_audience"].items())))
     if summary.get("by_trust"):
         table.add_row("trust", ", ".join(_trust_count(state, count) for state, count in sorted(summary["by_trust"].items())))
     duplicate = (summary.get("duplicate_content") or {})
@@ -5360,6 +5262,7 @@ def _interactive_setup(
     paths: list[Path] | None = None,
     agents: list[str] | None = None,
     no_bootstrap: bool = False,
+    project_dir: Path | None = None,
 ) -> None:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print()
@@ -5381,7 +5284,15 @@ def _interactive_setup(
                 print("No approved skills in this setup selection.")
                 return
             print()
-            results = _materialize_reviewed_for_project(approved, state_root=state_root, catalog_root=catalog_root, prompt_prefix="Review complete. ", agents=agents, no_bootstrap=no_bootstrap)
+            results = _materialize_reviewed_for_project(
+                approved,
+                state_root=state_root,
+                catalog_root=catalog_root,
+                prompt_prefix="Review complete. ",
+                agents=agents,
+                no_bootstrap=no_bootstrap,
+                project_dir=project_dir,
+            )
             if results is not None:
                 result_agents = _setup_result_agents(results)
                 _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=result_agents, paths=paths)
@@ -5425,7 +5336,14 @@ def _interactive_setup(
                 _print_action_result(apply_review_action(state_root, high, block_high=True))
         elif choice == "4":
             reviewed = _approved_skills(selected)
-            results = _materialize_reviewed_for_project(reviewed, state_root=state_root, catalog_root=catalog_root, agents=agents, no_bootstrap=no_bootstrap)
+            results = _materialize_reviewed_for_project(
+                reviewed,
+                state_root=state_root,
+                catalog_root=catalog_root,
+                agents=agents,
+                no_bootstrap=no_bootstrap,
+                project_dir=project_dir,
+            )
             if results is not None:
                 result_agents = _setup_result_agents(results)
                 _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=result_agents, paths=paths)
@@ -5457,21 +5375,22 @@ def _approved_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _choose_low_risk_audience_group(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for skill in skills:
-        audience = skill.get("audience_guess", {}).get("audience") or "unknown"
+        audience = audience_bucket(skill)
         groups.setdefault(audience, []).append(skill)
     if len(groups) <= 1:
         return skills
     ordered = sorted(groups)
-    print("Low-risk skills span multiple audiences:")
+    print("Low-risk skills span declared audiences and undeclared skills:")
     for audience in ordered:
-        print(f"  - {audience}: {len(groups[audience])}")
-    answer = _interactive_input("Approve which audience? Enter user/dev/unknown/all, or blank to cancel: ").strip().lower()
+        print(f"  - {audience_bucket_label(audience)}: {len(groups[audience])}")
+    answer = _interactive_input("Approve which group? Enter user/dev/other/all, or blank to cancel: ").strip().lower()
     if not answer:
         return []
     if answer == "all":
         return skills
-    if answer in groups:
-        return groups[answer]
+    audience = _normalize_audience_choice(answer)
+    if audience in groups:
+        return groups[audience]
     print(f"Unknown audience choice: {answer}")
     return []
 
@@ -5517,7 +5436,7 @@ def _interactive_review_skills(
             _print_wrapped("      ", _finding_detail(finding, group_risk=risk), width=_output_width())
         if len(findings) > 3:
             print(f"  ... {len(findings) - 3} more findings")
-        choice = _interactive_input("Approve this skill as reviewed? [y/N/q] ").strip().lower()
+        choice = _interactive_input("Review decision? [y] approve / [s]kip / [b]lock / [q]uit (default: skip): ").strip().lower()
         if choice in {"q", "quit", "exit"}:
             return decided
         decided.add(skill["id"])
@@ -5531,8 +5450,10 @@ def _interactive_review_skills(
                     global_scope=global_scope,
                 )
             )
+        elif choice in {"b", "block"}:
+            _block_review_item(state_root, skill)
         else:
-            print(f"{skill['id']}: not approved")
+            print(f"{skill['id']}: skipped; remains unreviewed")
     return decided
 
 
@@ -5579,15 +5500,15 @@ def _interactive_review_family(
         for risk in sorted(risk_counts, key=_risk_sort_key)
     )
     print()
-    print(_style(f"Review family {index} of {total}", "bold"))
-    print(f"  family: {_agent_variant_family_key(preferred)} ({len(ordered)} variants)")
+    print(_style(f"Review related skills {index} of {total}", "bold"))
+    print(f"  group: {_agent_variant_family_key(preferred)} ({len(ordered)} variants)")
     if _same_content_cross_source_group(ordered):
         print("  duplicate content: same content appears under multiple source keys; approval records each source.")
     print(f"  preferred for {agent or 'this agent'}: {preferred['id']}")
     print(f"  risks: {risk_text}")
     for skill in ordered:
         _print_review_family_variant(skill, preferred=preferred)
-    choice = _interactive_input("Approve this family as reviewed? [y/N/q] ").strip().lower()
+    choice = _interactive_input("Review group? [y] approve / [s]kip / [b]lock / [q]uit (default: skip): ").strip().lower()
     if choice in {"q", "quit", "exit"}:
         return False
     if choice in {"y", "yes"}:
@@ -5600,9 +5521,17 @@ def _interactive_review_family(
                 global_scope=global_scope,
             )
         )
+    elif choice in {"b", "block"}:
+        for skill in ordered:
+            _block_review_item(state_root, skill)
     else:
-        print(f"{_agent_variant_family_key(preferred)}: not approved")
+        print(f"{_agent_variant_family_key(preferred)}: skipped; remains unreviewed")
     return True
+
+
+def _block_review_item(state_root: Path, skill: dict[str, Any]) -> None:
+    set_trust(state_root, skill["id"], "blocked", skill["content_hash"], skill["source"], lint=skill.get("lint"))
+    print(f"{skill['id']}: blocked")
 
 
 def _print_review_family_variant(skill: dict[str, Any], *, preferred: dict[str, Any]) -> None:
@@ -5646,7 +5575,9 @@ def _materialize_reviewed_for_project(
     prompt_prefix: str = "",
     agents: list[str] | None = None,
     no_bootstrap: bool = False,
+    project_dir: Path | None = None,
 ) -> list[dict[str, Any]] | None:
+    project_dir = (project_dir or find_project_root() or Path.cwd()).resolve()
     if not skills:
         print("No reviewed/trusted/pinned skills are ready for project setup.")
         print("Approve low-risk skills first with setup option 2, or review warned/high-risk skills with option 1.")
@@ -5660,7 +5591,7 @@ def _materialize_reviewed_for_project(
     if no_bootstrap:
         _print_setup_bootstrap_reminder(
             _setup_bootstrap_payload(
-                project_dir=Path.cwd().resolve(),
+                project_dir=project_dir,
                 agents=agents,
                 reason="disabled by --no-bootstrap",
                 reason_code=SETUP_BOOTSTRAP_REASON_DISABLED,
@@ -5670,13 +5601,13 @@ def _materialize_reviewed_for_project(
         target_label = " and ".join(agent.title() for agent in agents)
         if not _confirm(f"{prompt_prefix}Install Skillager working skill for {target_label} project scope?"):
             return None
-        bootstrap = _perform_bootstrap(agents=agents, project_dir=Path.cwd().resolve(), dry_run=False, force=False)
+        bootstrap = _perform_bootstrap(agents=agents, project_dir=project_dir, dry_run=False, force=False)
         results = list(bootstrap["artifacts"])
         for item in results:
             line = _setup_bootstrap_artifact_line(item)
             if line:
                 print(line)
-        if _bootstrap_has_local_blocker(results) or not _setup_handoff_ready(Path.cwd().resolve(), agents=agents):
+        if _bootstrap_has_local_blocker(results) or not _setup_handoff_ready(project_dir, agents=agents):
             return None
     native = _choose_native_project_skills(skills, agents=agents)
     if native:
@@ -5684,7 +5615,7 @@ def _materialize_reviewed_for_project(
             native,
             agents=agents,
             scope="project",
-            project_dir=Path.cwd(),
+            project_dir=project_dir,
         )
         for item in native_results:
             line = f"{item['skill_id']}: {item['status']}"
@@ -5775,7 +5706,7 @@ def _choose_native_project_skills(skills: list[dict[str, Any]], *, agents: list[
         print(f"  {_style(skill['id'], 'bold')} [{_risk_label(skill.get('scan', {}).get('risk'))}]")
         variants = skill.get("_family_variants") or []
         if len(variants) > 1:
-            print(f"  family: {skill.get('family_key')} ({len(variants)} variants)")
+            print(f"  variants: {skill.get('family_key')} ({len(variants)} related skills)")
             for variant in variants[:4]:
                 marker = "selected" if variant.get("id") == skill.get("id") and variant.get("entrypoint") == skill.get("entrypoint") else "variant"
                 print(f"    - {marker}: {variant.get('id')} {variant.get('agent_hint') or variant.get('source_type')} {variant.get('status')}")
@@ -5799,7 +5730,7 @@ def _choose_native_project_skills(skills: list[dict[str, Any]], *, agents: list[
 def _native_setup_candidates(skills: list[dict[str, Any]], *, agents: list[str]) -> list[dict[str, Any]]:
     groups: dict[str, list[dict[str, Any]]] = {}
     for skill in skills:
-        if skill.get("source", {}).get("type") == "collection":
+        if skill.get("source", {}).get("type") != "project":
             continue
         key = _native_candidate_key(skill)
         groups.setdefault(key, []).append(skill)
@@ -5838,9 +5769,9 @@ def _family_variant(skill: dict[str, Any], *, representative_hash: str | None) -
 
 def _native_candidate_sort_key(skill: dict[str, Any], agents: list[str]) -> tuple[int, int, int, str]:
     source_type = skill.get("source", {}).get("type")
-    audience = skill.get("audience_guess", {}).get("audience") or "unknown"
+    audience = audience_bucket(skill)
     source_rank = {"project": 0, "python-package": 1, "environment": 2, "global": 3}.get(source_type, 4)
-    audience_rank = {"user": 0, "unknown": 1, "dev": 2}.get(audience, 3)
+    audience_rank = {"user": 0, "user+dev": 1, AUDIENCE_OTHER: 2, "dev": 3}.get(audience, 4)
     agent_hint = _agent_hint(skill)
     target_rank = 0 if agent_hint in set(agents) or agent_hint is None else 1
     return (source_rank, audience_rank, target_rank, skill["id"])
@@ -5961,11 +5892,12 @@ def _setup_result_agents(results: list[dict[str, Any]]) -> list[str]:
 
 
 def _common_audience(skills: list[dict[str, Any]]) -> str | None:
-    audiences = {skill.get("audience_guess", {}).get("audience") for skill in skills}
+    audiences = {audience_bucket(skill) for skill in skills}
     audiences.discard(None)
-    audiences.discard("unknown")
+    audiences.discard(AUDIENCE_OTHER)
     if len(audiences) == 1:
-        return next(iter(audiences))
+        audience = next(iter(audiences))
+        return audience if audience in {"user", "dev"} else None
     return None
 
 
@@ -6098,13 +6030,29 @@ def _finding_detail(finding: dict[str, Any], *, group_risk: str | None = None) -
 
 def _audience_label(skill: dict[str, Any]) -> str:
     guess = skill.get("audience_guess") or {}
-    audience = guess.get("audience") or "unknown"
-    confidence = guess.get("confidence") or "low"
+    audience = guess.get("audience") or audience_bucket(skill)
+    confidence = guess.get("confidence") or "undeclared"
     reasons = guess.get("reasons") or []
-    label = f"{audience} ({confidence})"
+    label = f"{audience_bucket_label(audience)} ({confidence})"
     if reasons:
         label += " - " + "; ".join(str(reason) for reason in reasons[:2])
     return label
+
+
+def _matches_declared_audience(skill: dict[str, Any], audience: str) -> bool:
+    requested = _normalize_audience_choice(audience)
+    if requested == AUDIENCE_OTHER:
+        return not declared_audiences(skill)
+    return requested in declared_audiences(skill)
+
+
+def _normalize_audience_choice(audience: str | None) -> str:
+    value = (audience or "").strip().lower().replace(" ", "_")
+    if value in {"developer", "maintainer", "maintainers"}:
+        return "dev"
+    if value in {"unknown", "undeclared", "everything_else", "everything-else", "other"}:
+        return AUDIENCE_OTHER
+    return value
 
 
 def _shorten(text: str, limit: int) -> str:

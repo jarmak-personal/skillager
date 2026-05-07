@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -254,6 +255,9 @@ def record_doctor_event(
             "lint_blocked": int(((state.get("lint_blocked") or {}).get("count")) or 0),
             "approved_hidden": int(exposure.get("available_on_demand") or 0),
             "exposed": int(exposure.get("exposed") or 0),
+            "native": int(exposure.get("native") or 0),
+            "stubbed": int(exposure.get("stubbed") or 0),
+            "routed": int(exposure.get("routed") or 0),
         },
     }
     return append_event(state_root, meta["session_id"], "doctor_run", payload)
@@ -437,6 +441,17 @@ def list_sessions(state_root: Path, *, agent: str | None = None) -> list[dict[st
                 }
             )
     return sorted(records, key=lambda item: item.get("last_event_at") or "", reverse=True)
+
+
+def clear_sessions(state_root: Path) -> int:
+    root = sessions_root(state_root)
+    if not root.exists():
+        return 0
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError(f"refusing to clear unsafe sessions path: {root}")
+    session_count = len(list(root.glob("sks_*.jsonl")))
+    shutil.rmtree(root)
+    return session_count
 
 
 def redact_session(state_root: Path, session_id: str) -> None:

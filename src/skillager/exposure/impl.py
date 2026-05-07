@@ -212,7 +212,6 @@ skillager status --json
 skillager list --summary-json --agent {agent}
 skillager list --json
 skillager search "<user goal>" --trusted-only --agent {agent} --json
-skillager recommend --goal "<user goal>" --agent {agent} --json
 skillager show <skill-id> --json
 skillager tag show <tag> --json
 skillager project tags --json
@@ -220,11 +219,14 @@ skillager project tags --json
 
 Use these to decide which approved skills are relevant.
 
-## Recommendation Slate
+## Agent Selection Slate
 
-Before curating tags or exposure for a new task, build a scored slate from approved metadata:
+Before curating tags or exposure for a new task, build your own slate from approved metadata and the user's stated goal:
 
-- Start with `skillager recommend --goal "<user goal>" --agent {agent} --json`.
+- Start with `skillager search "<user goal>" --trusted-only --agent {agent} --json`.
+- Run a few focused searches when the goal has multiple facets, for example domain terms, package/project names, and workflow terms.
+- Search JSON is ranked and includes `score`, `score_detail`, and `reasons`; use `--limit <n>` to widen or narrow the slate.
+- Use `skillager list --summary-json --agent {agent}` when you need orientation before a targeted search.
 - Consider 5-20 plausible approved skills or skill groups when enough relevant options exist.
 - A skill group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation.
 - Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task.
@@ -450,7 +452,9 @@ def render_stub_skill(skill: dict[str, Any]) -> str:
 def _stub_display_name(skill: dict[str, Any]) -> str:
     skill_id = str(skill["id"])
     name = str(skill.get("name") or "").strip()
-    if not name or name.lower() in {"arguments", "argument", "skill", "untitled"}:
+    slug_name = name.lower().replace(" ", "-").replace("_", "-")
+    source_slug = skill_id.rsplit("/", 1)[-1].lower()
+    if not name or name.lower() in {"arguments", "argument", "skill", "untitled"} or slug_name == source_slug:
         return skill_id
     return name
 

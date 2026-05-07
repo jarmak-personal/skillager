@@ -8,7 +8,6 @@
     "skillager doctor --agent codex --json",
     "skillager list --summary-json --agent codex",
     "skillager search <query> --trusted-only --agent codex --json",
-    "skillager recommend --goal <goal> --agent codex --json",
     "skillager show <skill-id> --json",
     "skillager tag show <tag> --json"
   ],

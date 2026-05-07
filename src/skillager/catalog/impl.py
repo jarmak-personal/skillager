@@ -314,6 +314,18 @@ def save_project_tags(state_root: Path, data: dict[str, Any]) -> None:
     project_tags_path(state_root).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def clear_project_tags(state_root: Path) -> int:
+    path = project_tags_path(state_root)
+    if not path.exists():
+        return 0
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"refusing to clear unsafe project tags path: {path}")
+    data = load_project_tags(state_root)
+    count = len(data.get("attached_tags") or [])
+    path.unlink()
+    return count
+
+
 def load_collection_migrations(state_root: Path) -> dict[str, Any]:
     path = collection_migrations_path(state_root)
     if not path.exists():

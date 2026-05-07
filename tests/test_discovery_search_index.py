@@ -183,7 +183,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                 included_ids = {skill["id"] for skill in json.loads(output.getvalue())}
                 self.assertIn("global/global", included_ids)
 
-    def test_inventory_summary_keeps_all_ids_and_marks_agent_variant_preference(self) -> None:
+    def test_agent_scoped_inventory_and_search_collapse_nonpreferred_variants(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -200,7 +200,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                 chdir(root),
             ):
                 with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["setup", "--audience", "user", "--no-packages", "--accept-low"]), 0)
+                    self.assertEqual(main(["setup", "--audience", "other", "--no-packages", "--accept-low"]), 0)
 
                 summary_output = StringIO()
                 with redirect_stdout(summary_output):
@@ -210,15 +210,24 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                     self.assertEqual(main(["search", "GIS", "--trusted-only", "--agent", "codex", "--json", "--limit", "0"]), 0)
 
             summary = json.loads(summary_output.getvalue())
-            self.assertEqual(summary["total"], 2)
-            self.assertEqual({skill["id"] for skill in summary["skills"]}, {"project/gis-domain", "project/gis-domain-vibespatial-claude"})
-            self.assertEqual(summary["duplicate_families"][0]["preferred_id"], "project/gis-domain")
+            self.assertEqual(summary["total"], 1)
+            self.assertEqual(summary["total_label"], "agent-visible choices")
+            self.assertEqual(summary["source_entry_count"], 2)
+            self.assertEqual(summary["variant_collapse"]["before"], 2)
+            self.assertEqual(summary["variant_collapse"]["after"], 1)
+            self.assertEqual({skill["id"] for skill in summary["skills"]}, {"project/gis-domain"})
+            self.assertEqual(summary["skills"][0]["agent_variant"]["preferred_id"], "project/gis-domain")
+            self.assertEqual(
+                {variant["id"] for variant in summary["skills"][0]["agent_variant"]["alternatives"]},
+                {"project/gis-domain", "project/gis-domain-vibespatial-claude"},
+            )
 
             search = json.loads(search_output.getvalue())
             self.assertEqual(search[0]["id"], "project/gis-domain")
             self.assertEqual(search[0]["agent_hint"], "codex")
             self.assertTrue(search[0]["agent_variant"]["is_preferred"])
-            self.assertIn("project/gis-domain-vibespatial-claude", {item["id"] for item in search})
+            self.assertNotIn("project/gis-domain-vibespatial-claude", {item["id"] for item in search})
+            self.assertIn("score_detail", search[0])
 
     def test_index_skips_skillager_materialized_project_copies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -260,7 +269,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             self.assertEqual([skill["id"] for skill in data["skills"]], ["path/demo"])
             self.assertEqual(data["errors"], [{"path": str(blocked), "error": "permission denied"}])
 
-    def test_index_adds_conservative_audience_guess(self) -> None:
+    def test_index_uses_declared_audience_without_guessing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -269,13 +278,23 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             user_skill.mkdir(parents=True)
             dev_skill.mkdir(parents=True)
             (user_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts with the library API.\n", encoding="utf-8")
+            (user_skill / "skillager.yaml").write_text(
+                "schema: skillager.skill.v1\n"
+                "audience:\n"
+                "  - user\n"
+                "activation:\n"
+                "  default: manual\n",
+                encoding="utf-8",
+            )
             (dev_skill / "SKILL.md").write_text("# Commit\n\nUse this for commit and pre-land review workflow.\n", encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root):
                     data = build_index(state, include_packages=False)
             by_id = {skill["id"]: skill for skill in data["skills"]}
             self.assertEqual(by_id["project/gis-domain"]["audience_guess"]["audience"], "user")
-            self.assertEqual(by_id["project/commit"]["audience_guess"]["audience"], "dev")
+            self.assertEqual(by_id["project/gis-domain"]["audience_guess"]["confidence"], "declared")
+            self.assertEqual(by_id["project/commit"]["audience_guess"]["audience"], "other")
+            self.assertEqual(by_id["project/commit"]["audience_guess"]["confidence"], "undeclared")
 
     def test_index_search_and_trust_flow(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -383,14 +402,14 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
 
                 reset = StringIO()
                 with chdir(project_b), redirect_stdout(reset):
-                    self.assertEqual(main(["setup", "--source", "collection", "--fresh-all", "--summary-json"]), 0)
+                    self.assertEqual(main(["setup", "--source", "collection", "--fresh-project", "--summary-json"]), 0)
                 reset_data = json.loads(reset.getvalue())
-                self.assertEqual(reset_data["approved"], 0)
-                self.assertEqual(reset_data["review_needed"], 1)
-                self.assertEqual(reset_data["global_approved"], 0)
-                self.assertEqual(reset_data["global_reset"], 1)
+                self.assertEqual(reset_data["approved"], 1)
+                self.assertEqual(reset_data["review_needed"], 0)
+                self.assertEqual(reset_data["global_approved"], 1)
+                self.assertEqual(reset_data["global_reset"], 0)
                 trust_log = json.loads((catalog_state / "trust.json").read_text(encoding="utf-8"))
-                self.assertEqual(trust_log.get("global_approvals", {}), {})
+                self.assertEqual(len(trust_log.get("global_approvals", {})), 1)
 
                 reapproved = StringIO()
                 with chdir(project_b), redirect_stdout(reapproved):

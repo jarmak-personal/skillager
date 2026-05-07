@@ -16,6 +16,17 @@ from skillager.materialize import materialize_skills
 from skillager.trust import content_hash, set_trust
 
 
+def write_manifest(skill_dir: Path, audience: str) -> None:
+    skill_dir.joinpath("skillager.yaml").write_text(
+        "schema: skillager.skill.v1\n"
+        "audience:\n"
+        f"  - {audience}\n"
+        "activation:\n"
+        "  default: manual\n",
+        encoding="utf-8",
+    )
+
+
 class SkillagerMaterializeTests(unittest.TestCase):
 
     def test_materialize_index_mode_is_removed(self) -> None:
@@ -112,6 +123,8 @@ class SkillagerMaterializeTests(unittest.TestCase):
             dev_skill.mkdir(parents=True)
             (user_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
             (dev_skill / "SKILL.md").write_text("# Commit\n\nUse commit workflow guidance.\n", encoding="utf-8")
+            write_manifest(user_skill, "user")
+            write_manifest(dev_skill, "dev")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)

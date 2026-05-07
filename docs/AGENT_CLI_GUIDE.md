@@ -34,7 +34,6 @@ skillager list --summary-json --agent codex
 skillager list --json
 skillager list --no-packages --json
 skillager search "<query>" --json
-skillager recommend --goal "<user goal>" --agent codex --json
 skillager show <skill-id> --json
 skillager review --summary --json
 skillager search "<user goal>" --trusted-only --json
@@ -94,7 +93,7 @@ After the user approves skills, setup installs or refreshes the `skillager-worki
 - a router skill for a broad attached tag
 - nothing, if the existing project handoff is enough
 
-Before changing tags or exposure, run `skillager recommend --goal "<user goal>" --agent codex --json` to build a scored slate from approved metadata. Consider 5-20 plausible approved skills or skill groups when enough relevant options exist. A group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation. Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task. Include adjacent options the user may reasonably want, such as a brainstorm/research suite for ideation or a review/debugging suite for validation. If fewer than five relevant approved candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
+Before changing tags or exposure, build your own slate from approved metadata and the user's stated goal. Start with `skillager search "<user goal>" --trusted-only --agent codex --json`; run a few focused searches when the goal has multiple facets, such as domain terms, package/project names, and workflow terms. Search JSON is ranked and includes `score`, `score_detail`, and `reasons`; use `--limit <n>` to widen or narrow the slate. Use `skillager list --summary-json --agent codex` when you need orientation before a targeted search. Consider 5-20 plausible approved skills or skill groups when enough relevant options exist. A group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation. Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task. Include adjacent options the user may reasonably want, such as a brainstorm/research suite for ideation or a review/debugging suite for validation. If fewer than five relevant approved candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
 
 Add relevant approved skills to a focused tag when a project or session theme emerges. `tag add` can use registered collection skill IDs or approved IDs from the current project inventory, including auto-discovered child repositories:
 

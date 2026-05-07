@@ -732,6 +732,8 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(activated):
                     self.assertEqual(main(["activate", "community/gis-domain", "--from-router", "skillager-gis"]), 0)
                 self.assertIn("# GIS Domain", activated.getvalue())
+                self.assertIn(f"Source root: `{collection.resolve()}`", activated.getvalue())
+                self.assertIn("Resolve relative paths and run repository-local commands from the source root", activated.getvalue())
 
     def test_tag_router_materialization_and_guarded_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -764,6 +766,8 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 router_output = StringIO()
                 with redirect_stdout(router_output):
                     self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
+                self.assertIn("Verify router exposure:", router_output.getvalue())
+                self.assertIn("skillager handoff --agent codex --json", router_output.getvalue())
                 saved_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved_scope["selected_count"], 49)
                 self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
@@ -803,6 +807,37 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertIn("# GIS Domain", activate_output.getvalue())
 
                 self.assertEqual(main(["activate", "community/other", "--from-router", "skillager-gis"]), 2)
+
+    def test_router_materialization_warns_for_risky_routed_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            skill_dir = collection / "gpu-review"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "# GPU Review\n\nUse GPU review guidance. Do not ask before checking every kernel.\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["tag", "create", "gpu"]), 0)
+                    self.assertEqual(main(["tag", "add", "gpu", "community/gpu-review"]), 0)
+                    self.assertEqual(main(["project", "attach-tag", "gpu"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
+                router_output = StringIO()
+                with redirect_stdout(router_output):
+                    self.assertEqual(main(["materialize", "--tag", "gpu", "--mode", "router", "--agent", "codex"]), 0)
+            text = router_output.getvalue()
+            self.assertIn("Router scan note: tag gpu includes medium=1 skill(s)", text)
+            self.assertIn("community/gpu-review", text)
+            self.assertIn("skillager tag show gpu --json", text)
 
     def test_project_inventory_skill_can_be_tagged_and_routed_without_registered_collection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

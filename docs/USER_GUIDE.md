@@ -16,7 +16,9 @@ Run this from the directory where you will start Codex or Claude:
 skillager setup --agent codex
 ```
 
-Use `--agent claude` instead for Claude projects. `setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything. When setup applies review changes with `--agent` or `--all-agents`, it also refreshes the first-party handoff artifacts unless `--no-bootstrap` is passed.
+Use `--agent claude` instead for Claude projects. `setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything. Audience scope uses only declared manifest metadata; skills without it are grouped as "everything else." When setup applies review changes with `--agent` or `--all-agents`, it also refreshes the first-party handoff artifacts unless `--no-bootstrap` is passed.
+
+Install Skillager as a global user tool with `uv tool install skillager` or `pipx install skillager`. It scans the current project's `.venv` and installed packages for skills, but ordinary projects do not need Skillager installed inside their own virtual environment.
 
 At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent starts with `skillager handoff` and can use approved metadata to add useful skills to tags, attach project-relevant tags, and expose narrow native skills, stubs, a compact router skill for a tag, or nothing.
 
@@ -66,14 +68,14 @@ The override is tied to the current content hash and finding identities. Content
 skillager status
 skillager setup --agent codex
 skillager setup --fresh
-skillager setup --fresh-all
+skillager setup --fresh-project --agent codex
 skillager setup --details
 skillager setup --summary-json
 skillager setup --source project --accept-low --agent codex --summary-json
 skillager bootstrap --agent codex
 skillager doctor --agent codex
 skillager list --summary-json --agent codex
-skillager recommend --goal "spatial workflow" --agent codex --json
+skillager search "spatial workflow" --trusted-only --agent codex --json
 skillager setup --source collection --trust-all
 skillager setup --source collection --yolo
 skillager setup --source collection --trust-all --project-only
@@ -92,7 +94,7 @@ skillager materialize --all-reviewed --agent claude --scope project
 skillager materialize <skill-id> --mode stub --agent codex --scope project
 ```
 
-Use `--json` when another program needs stable output. `status --json`, `handoff --json`, `doctor --json`, and `search --json` are compact for agent use; pass `--full-json` for verbose debugging. Use `recommend --goal "<goal>" --agent <agent> --json` when an agent needs a read-only candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `setup --summary-json` for setup automation that only needs counts, IDs, summary buckets, and action results.
+Use `--json` when another program needs stable output. `status --json`, `handoff --json`, `doctor --json`, and `search --json` are compact for agent use; pass `--full-json` for verbose debugging. Agents should use `search --trusted-only --agent <agent> --json`, `list --summary-json --agent <agent>`, and project tag metadata to build their own candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `setup --summary-json` for setup automation that only needs counts, IDs, summary buckets, and action results.
 
 For a project-local automation smoke flow:
 
@@ -111,7 +113,7 @@ Legacy in-tree `<project>/.skillager/` state is ignored by ordinary commands. If
 
 Use `--trust-all` or `--yolo` only for fully trusted sources. They are aliases: both mark all selected skills reviewed, including medium and high-risk findings, but still record the current content hashes.
 
-Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-all` when you want a total re-review of that selected scope; it clears project-local decisions and revokes matching reusable global approvals. It does not delete tags, collections, sessions, or materialized skill files.
+Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-project --agent codex` when you want to reset project-local Skillager state and refresh Codex handoff artifacts in one run: it clears project-local decisions, project tags, session records, and saved setup scope for the selected scope. It reports, but does not delete, retained reusable global approvals, global catalog collections/tags, and materialized skill files.
 
 `skillager list` shows the effective project inventory and hides global native skills unless you pass `--include-global`. Use `skillager list --no-packages` when you want only local project and attached-tag inventory. Use `skillager list --summary-json --agent codex` when an agent needs compact orientation: it includes counts, every listed skill ID, and duplicate native-variant hints. It does not replace full `skillager list --json` visibility.
 

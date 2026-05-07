@@ -159,6 +159,7 @@ def discover_package_skills() -> tuple[list[IndexableSkill], list[dict[str, str]
                 "package": name,
                 "version": version,
                 "editable": "true",
+                "path": str(editable_root),
             }
             if environment is not None:
                 source["environment"] = environment

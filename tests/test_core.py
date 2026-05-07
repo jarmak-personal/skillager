@@ -68,6 +68,7 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertIn("Tag approved skills and expose a narrow router, stub, native skill, or no new exposure", help_text)
         self.assertIn("Do not activate or materialize unreviewed skills", help_text)
         self.assertIn("--catalog-state-dir", help_text)
+        self.assertNotIn("recommend", help_text)
 
     def test_python_module_entrypoint_runs(self) -> None:
         result = subprocess.run(
@@ -91,7 +92,8 @@ class SkillagerCoreTests(unittest.TestCase):
             self.assertIn(f"skillager doctor --agent {name} --json", data["read_only_commands"])
             self.assertIn("skillager doctor --fix", data["deliberately_excluded"])
             self.assertNotIn("skillager doctor --fix", data["read_only_commands"])
-            self.assertIn("skillager recommend --goal <goal> --agent", " ".join(data["read_only_commands"]))
+            self.assertIn(f"skillager search <query> --trusted-only --agent {name} --json", data["read_only_commands"])
+            self.assertNotIn("recommend", " ".join(data["read_only_commands"]))
 
     def test_canonical_agent_variant_slug_strips_repeated_suffixes(self) -> None:
         self.assertEqual(canonical_agent_variant_slug("foo-codex-claude"), "foo")
@@ -124,7 +126,10 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertIn("Use routers for broad recurring tags", text)
         self.assertIn("Tags are agent-maintained curation for approved skills", text)
         self.assertIn("skillager tag add <tag> <skill-id>", text)
-        self.assertIn('skillager recommend --goal "<user goal>" --agent codex --json', text)
+        self.assertIn('skillager search "<user goal>" --trusted-only --agent codex --json', text)
+        self.assertIn("score_detail", text)
+        self.assertIn("use `--limit <n>`", text)
+        self.assertNotIn("skillager recommend", text)
         self.assertIn("Consider 5-20 plausible approved skills or skill groups", text)
         self.assertIn("confidence score from 0-100", text)
         self.assertIn("workflow suite such as ideation, review, debugging, release", text)
@@ -151,6 +156,26 @@ class SkillagerCoreTests(unittest.TestCase):
             with patch.dict(os.environ, {}, clear=True), patch("pathlib.Path.home", return_value=root), chdir(root):
                 self.assertEqual(find_project_root(), root)
                 self.assertEqual(state_root(), project_state_root(root))
+
+    def test_project_root_does_not_climb_to_temp_or_cache_parent_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_root = Path(tmp).resolve()
+            cache_root = temp_root / "cache"
+            project = cache_root / "fresh-project"
+            nested_repo = cache_root / "nested-repo"
+            project.mkdir(parents=True)
+            nested_repo.mkdir()
+            (cache_root / ".git").mkdir()
+            (nested_repo / ".git").mkdir()
+            child = nested_repo / "child"
+            child.mkdir()
+            with (
+                patch.dict(os.environ, {"XDG_CACHE_HOME": str(cache_root)}),
+                patch("tempfile.gettempdir", return_value=str(temp_root)),
+                patch("pathlib.Path.home", return_value=temp_root / "home"),
+            ):
+                self.assertEqual(find_project_root(project), project.resolve())
+                self.assertEqual(find_project_root(child), nested_repo.resolve())
 
     def test_legacy_in_tree_state_is_ignored_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
