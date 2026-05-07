@@ -25,13 +25,13 @@ python -m pip install --user skillager
 python -m skillager setup --agent codex
 ```
 
-Use `--agent claude` instead if this project is for Claude. `setup` is the approval gate. It discovers skills in the current project and environment, scans them, asks what audience you care about, and never trusts a skill unless you approve it. Audience scope uses declared manifest metadata only; undeclared skills are grouped as "everything else." When review changes are applied with an agent target, setup also refreshes Skillager's first-party handoff artifacts.
+Use `--agent claude` instead if this project is for Claude. `setup` is the approval gate. It discovers skills in the current project and environment, scans them, asks what audience you care about, and only makes a skill available after you approve it. Audience scope uses declared manifest metadata only; undeclared skills are grouped as "everything else." When review changes are applied with an agent target, setup also refreshes Skillager's first-party handoff artifacts.
 
 Skillager is intended to be a global user tool. Install it once with `uv tool` or `pipx`; project virtual environments are scanned for package-provided skills, but Skillager does not need to be installed into each project venv.
 
 After setup, restart Codex or Claude in the same directory and tell it what you are doing. Skillager installs a tiny project handoff so the agent knows to run `skillager handoff` once, use available metadata, and ask you to run setup if expected skills are unavailable. If the handoff state looks wrong, run `skillager doctor --agent codex` for the exact next command.
 
-For agent permission prompts, Skillager ships example read-only allowlists in [`examples/codex-allowlist.json`](examples/codex-allowlist.json) and [`examples/claude-allowlist.json`](examples/claude-allowlist.json). They include metadata-only commands such as `status --json`, `handoff --json`, `list --summary-json`, `search --json`, `show --json`, and `tag show --json`; setup, review, doctor, and mutating commands stay user-run diagnostics.
+For agent permission prompts, Skillager ships example read-only allowlists in [`examples/codex-allowlist.json`](examples/codex-allowlist.json) and [`examples/claude-allowlist.json`](examples/claude-allowlist.json). They include metadata-only commands such as `status --json`, `handoff --agent <agent> --json`, `list --summary-json --agent <agent>`, `search --agent <agent> --json`, `show --json`, and `tag show --json`; setup, review, doctor, and mutating commands stay user-run diagnostics.
 
 ## The Problem
 
@@ -61,7 +61,7 @@ An approved skill does not have to be loaded into the agent. It can stay in Skil
 
 This keeps the default context small while still giving agents a deterministic path to available skills.
 
-`skillager materialize` only writes reviewed skill exposure. It requires explicit skill IDs, `--tag`, or `--all-reviewed`; use `skillager bootstrap --agent <agent>` to install or repair Skillager's first-party handoff artifacts.
+`skillager materialize` only exposes available skills. It requires explicit skill IDs, `--tag`, or `--all-reviewed`; use `skillager bootstrap --agent <agent>` to install or repair Skillager's first-party handoff artifacts.
 
 ## For Library Authors
 
