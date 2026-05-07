@@ -63,9 +63,10 @@ def main(argv: list[str] | None = None) -> int:
         env = os.environ.copy()
         state = work / "state"
         env.update({"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"})
-        _run([str(python), "-m", "skillager", "index", "--no-packages"], cwd=project, env=env)
-        listing = _json([str(python), "-m", "skillager", "list", "--json"], cwd=project, env=env)
-        skill_id = _skill_id_for_root(listing, skill_dir, cwd=project)
+        indexed = _json([str(python), "-m", "skillager", "index", "--no-packages", "--json"], cwd=project, env=env)
+        if not isinstance(indexed, dict) or not isinstance(indexed.get("skills"), list):
+            raise SystemExit("expected index JSON object with skills array")
+        skill_id = _skill_id_for_root(indexed["skills"], skill_dir, cwd=project)
         core = _json([str(python), "-m", "skillager", "lint", skill_id, "--json"], cwd=project, env=env)
         _assert_finding(core[0]["lint"]["findings"], "audience_both")
 

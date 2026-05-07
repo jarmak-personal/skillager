@@ -5792,11 +5792,15 @@ def _print_setup_completion_summary(
     agents: list[str],
 ) -> None:
     approved = [skill for skill in skills if skill.get("trust") in TRUSTED_STATES]
-    exposed_ids = {
-        item.get("skill_id")
-        for item in results
-        if item.get("status") in {"materialized", "already_native"} and item.get("skill_id") and item.get("skill_id") != "skillager/working"
-    }
+    exposed_ids: set[str] = set()
+    for item in results:
+        skill_id = item.get("skill_id")
+        if (
+            item.get("status") in {"materialized", "already_native"}
+            and isinstance(skill_id, str)
+            and skill_id != "skillager/working"
+        ):
+            exposed_ids.add(skill_id)
     hidden = [skill for skill in approved if skill["id"] not in exposed_ids]
     if not approved:
         return
