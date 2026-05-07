@@ -215,8 +215,8 @@ class SkillagerBootstrapTests(unittest.TestCase):
             with patch.dict(os.environ, env), chdir(root), redirect_stdout(status_output):
                 self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
             status = json.loads(status_output.getvalue())
-            self.assertEqual(status["approved"], 0)
-            self.assertEqual(status["review_needed"], 1)
+            self.assertEqual(status["available"], 0)
+            self.assertEqual(status["pending_owner_review"], 1)
 
     def test_bootstrap_requires_explicit_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

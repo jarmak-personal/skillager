@@ -5,13 +5,13 @@
   "read_only_commands": [
     "skillager status --json",
     "skillager handoff --agent claude --json",
-    "skillager doctor --agent claude --json",
     "skillager list --summary-json --agent claude",
-    "skillager search <query> --trusted-only --agent claude --json",
+    "skillager search <query> --agent claude --json",
     "skillager show <skill-id> --json",
     "skillager tag show <tag> --json"
   ],
   "deliberately_excluded": [
+    "skillager doctor",
     "skillager doctor --fix",
     "skillager setup",
     "skillager review",
@@ -26,6 +26,6 @@
   "notes": [
     "Adapt these command patterns to the permission format your Claude environment uses.",
     "The listed commands do not approve skills, expose skills, or print skill bodies.",
-    "Doctor and search may record compact local session telemetry unless --no-session-record is added."
+    "Search may record compact local session telemetry unless --no-session-record is added."
   ]
 }

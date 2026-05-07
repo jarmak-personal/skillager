@@ -309,7 +309,7 @@ class SkillagerDoctorTests(unittest.TestCase):
             data = json.loads(output.getvalue())
             status = json.loads(status_output.getvalue())
             self.assertFalse(data["fix"]["applied"])
-            self.assertEqual(status["review_needed"], 1)
+            self.assertEqual(status["pending_owner_review"], 1)
             self.assertFalse((root / ".agents" / "skills" / "project-demo" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
 

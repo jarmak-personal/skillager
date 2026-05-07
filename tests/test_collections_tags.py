@@ -85,31 +85,52 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertEqual(status_data["collections"]["items"][0]["attached_tags"], ["gis"])
                 self.assertEqual(status_data["collection_inventory"]["count"], 1)
                 self.assertEqual(status_data["collection_inventory"]["items"][0]["name"], "community")
-                self.assertEqual(status_data["collection_inventory"]["items"][0]["approved"], 1)
-                self.assertEqual(status_data["scan"]["by_risk"], {"low": 1})
-                self.assertEqual(status_data["manifest_lint"]["by_status"], {"ok": 1})
+                self.assertEqual(status_data["collection_inventory"]["items"][0]["available"], 1)
+                self.assertNotIn("scan", status_data)
+                self.assertNotIn("by_risk", status_data["summary"])
+                self.assertNotIn("manifest_lint", status_data)
+                self.assertNotIn("lint_warned", status_data)
+
+                full_status = StringIO()
+                with redirect_stdout(full_status):
+                    self.assertEqual(main(["status", "--no-packages", "--json", "--full-json"]), 0)
+                full_status_data = json.loads(full_status.getvalue())
+                self.assertEqual(full_status_data["scan"]["by_risk"], {"low": 1})
+                self.assertEqual(full_status_data["manifest_lint"]["by_status"], {"ok": 1})
 
                 status_text = StringIO()
                 with redirect_stdout(status_text):
                     self.assertEqual(main(["status", "--no-packages"]), 0)
                 self.assertIn("registered collection repos: 1", status_text.getvalue())
                 self.assertIn("discovered collection skill repos: 1", status_text.getvalue())
-                self.assertIn("scan risk: LOW=1", status_text.getvalue())
+                self.assertNotIn("scan risk", status_text.getvalue())
 
                 search_output = StringIO()
                 with redirect_stdout(search_output):
-                    self.assertEqual(main(["search", "gis", "--trusted-only", "--json"]), 0)
+                    self.assertEqual(main(["search", "gis", "--json"]), 0)
                 search_data = json.loads(search_output.getvalue())
                 self.assertEqual([skill["id"] for skill in search_data], ["community/gis-domain"])
                 self.assertIn("attached-tag", search_data[0]["availability"])
-                self.assertEqual(search_data[0]["trust"], "reviewed")
+                self.assertTrue(search_data[0]["available"])
+                self.assertNotIn("trust", search_data[0])
+                self.assertNotIn("risk", search_data[0])
+
+                inventory_output = StringIO()
+                with redirect_stdout(inventory_output):
+                    self.assertEqual(main(["list", "--summary-json", "--agent", "codex"]), 0)
+                inventory_data = json.loads(inventory_output.getvalue())
+                self.assertNotIn("by_risk", inventory_data["counts"])
+                self.assertNotIn("risk", inventory_data["skills"][0])
 
                 show_output = StringIO()
                 with redirect_stdout(show_output):
                     self.assertEqual(main(["show", "community/gis-domain", "--json"]), 0)
                 show_data = json.loads(show_output.getvalue())
-                self.assertEqual(show_data["skill"]["trust"], "reviewed")
+                self.assertTrue(show_data["skill"]["available"])
+                self.assertNotIn("trust", show_data["skill"])
                 self.assertIn("attached-tag", show_data["skill"]["availability"])
+                self.assertNotIn("scan", show_data["skill"])
+                self.assertNotIn("lint", show_data["skill"])
 
                 collection_show = StringIO()
                 with redirect_stdout(collection_show):
@@ -164,7 +185,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(tag_output):
                     self.assertEqual(main(["tag", "show", "all", "--json"]), 0)
                 tag_data = json.loads(tag_output.getvalue())
-                self.assertEqual([skill["id"] for skill in tag_data["skills"]], ["community/gis-domain"])
+                self.assertEqual([skill["id"] for skill in tag_data["skills"]], [])
 
     def test_tag_add_from_collection_and_sync(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,7 +211,9 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["tag", "show", "all-community", "--json"]), 0)
             data = json.loads(output.getvalue())
-            self.assertEqual({skill["id"] for skill in data["skills"]}, {"community/first", "community/second"})
+            self.assertEqual(data["skills"], [])
+            tags = json.loads((state / "tags.json").read_text(encoding="utf-8"))
+            self.assertEqual(set(tags["tags"]["all-community"]), {"community/first", "community/second"})
 
     def test_tag_add_from_collection_sync_replaces_existing_members(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -215,9 +238,10 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["tag", "show", "mixed", "--json"]), 0)
             data = json.loads(output.getvalue())
-            self.assertEqual([skill["id"] for skill in data["skills"]], ["community/first"])
+            self.assertEqual(data["skills"], [])
             tags = json.loads((state / "tags.json").read_text(encoding="utf-8"))
             self.assertEqual(tags["tag_metadata"]["mixed"]["source_collections"], ["community"])
+            self.assertEqual(tags["tags"]["mixed"], ["community/first"])
 
     def test_tag_and_project_tag_commands_surface_mixed_trust(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -264,16 +288,14 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
 
             tag_data = json.loads(tag_output.getvalue())
-            self.assertTrue(tag_data["summary"]["mixed_trust"])
-            self.assertEqual(tag_data["summary"]["approved"], 1)
-            self.assertEqual(tag_data["summary"]["review_needed"], 1)
-            self.assertIn("warning: tag mixed contains 1 unreviewed", attach_text.getvalue())
+            self.assertEqual(tag_data["summary"]["available"], 1)
+            self.assertEqual(tag_data["summary"]["pending_owner_review"], 1)
+            self.assertIn("need owner review", attach_text.getvalue())
             project_data = json.loads(project_output.getvalue())
             self.assertEqual(project_data["tag_summaries"][0]["tag"], "mixed")
-            self.assertEqual(project_data["tag_summaries"][0]["review_needed"], 1)
+            self.assertEqual(project_data["tag_summaries"][0]["pending_owner_review"], 1)
             status_data = json.loads(status_output.getvalue())
-            self.assertEqual(status_data["tagging"]["mixed_trust_tag_count"], 1)
-            self.assertEqual(status_data["tagging"]["mixed_trust_tags"][0]["tag"], "mixed")
+            self.assertEqual(status_data["tagging"]["tags_pending_owner_review"], 1)
 
     def test_collection_add_recursively_indexes_repo_tree_with_path_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -497,7 +519,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "status", "--no-packages", "--json"]), 0)
                 status_data = json.loads(status.getvalue())
                 self.assertFalse(status_data["needs_setup"])
-                self.assertEqual(status_data["approved"], 1)
+                self.assertEqual(status_data["available"], 1)
                 new_hash = json.loads((catalog_state / "collections" / "personal.json").read_text(encoding="utf-8"))["skills"][0]["content_hash"]
             self.assertEqual(trust_state(project_state, "personal/python/foo", new_hash), "reviewed")
 
@@ -780,14 +802,14 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
 
                 search_output = StringIO()
                 with redirect_stdout(search_output):
-                    self.assertEqual(main(["search", "gis", "--tag", "gis", "--approved-only", "--json"]), 0)
+                    self.assertEqual(main(["search", "gis", "--tag", "gis", "--json"]), 0)
                 search_data = json.loads(search_output.getvalue())
                 self.assertEqual([item["id"] for item in search_data], ["community/gis-domain"])
                 self.assertEqual(search_data[0]["exposure"], "router")
                 self.assertEqual(search_data[0]["materialized_targets"][0]["kind"], "router")
                 normal_search = StringIO()
                 with redirect_stdout(normal_search):
-                    self.assertEqual(main(["search", "gis", "--trusted-only", "--json"]), 0)
+                    self.assertEqual(main(["search", "gis", "--json"]), 0)
                 normal_search_data = json.loads(normal_search.getvalue())
                 self.assertEqual(normal_search_data[0]["exposure"], "router")
                 self.assertEqual(normal_search_data[0]["materialized_targets"][0]["kind"], "router")
@@ -808,7 +830,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
 
                 self.assertEqual(main(["activate", "community/other", "--from-router", "skillager-gis"]), 2)
 
-    def test_router_materialization_warns_for_risky_routed_skills(self) -> None:
+    def test_router_materialization_does_not_rewarn_for_approved_routed_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -834,10 +856,19 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 router_output = StringIO()
                 with redirect_stdout(router_output):
                     self.assertEqual(main(["materialize", "--tag", "gpu", "--mode", "router", "--agent", "codex"]), 0)
+                tag_output = StringIO()
+                with redirect_stdout(tag_output):
+                    self.assertEqual(main(["tag", "show", "gpu", "--json"]), 0)
             text = router_output.getvalue()
-            self.assertIn("Router scan note: tag gpu includes medium=1 skill(s)", text)
-            self.assertIn("community/gpu-review", text)
-            self.assertIn("skillager tag show gpu --json", text)
+            self.assertNotIn("Router scan note", text)
+            self.assertNotIn("scanner finding", text)
+            tag_data = json.loads(tag_output.getvalue())
+            self.assertNotIn("scan", tag_data["skills"][0])
+            self.assertNotIn("risk", tag_data["skills"][0])
+            router = root / ".agents" / "skills" / "skillager-gpu" / "SKILL.md"
+            router_text = router.read_text(encoding="utf-8")
+            self.assertIn("community/gpu-review", router_text)
+            self.assertNotIn("Risk:", router_text)
 
     def test_project_inventory_skill_can_be_tagged_and_routed_without_registered_collection(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -860,8 +891,8 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(status_output):
                     self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
                 status_data = json.loads(status_output.getvalue())
-                self.assertEqual(status_data["tagging"]["approved_untagged_count"], 1)
-                self.assertEqual(status_data["tagging"]["approved_untagged_collections"][0]["collection"], "vibespatial")
+                self.assertEqual(status_data["tagging"]["available_untagged_count"], 1)
+                self.assertEqual(status_data["tagging"]["available_untagged_collections"][0]["collection"], "vibespatial")
 
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["tag", "add", "gis", "vibespatial/gis-domain"]), 0)
@@ -874,7 +905,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
 
                 search_output = StringIO()
                 with redirect_stdout(search_output):
-                    self.assertEqual(main(["search", "gis", "--tag", "gis", "--approved-only", "--json"]), 0)
+                    self.assertEqual(main(["search", "gis", "--tag", "gis", "--json"]), 0)
                 search_data = json.loads(search_output.getvalue())
                 self.assertEqual([item["id"] for item in search_data], ["vibespatial/gis-domain"])
                 self.assertEqual(search_data[0]["exposure"], "router")
@@ -906,8 +937,8 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["materialize", "--tag", "all", "--mode", "router", "--agent", "codex"]), 0)
             router = root / ".agents" / "skills" / "skillager-all" / "SKILL.md"
             router_text = router.read_text(encoding="utf-8")
-            self.assertIn("This tag contains 21 reviewed skills.", router_text)
-            self.assertIn('skillager search --tag all "<query>" --approved-only', router_text)
+            self.assertIn("This tag contains 21 available skills.", router_text)
+            self.assertIn('skillager search --tag all "<query>" --agent codex', router_text)
             self.assertNotIn("community/skill-00", router_text)
 
     def test_project_discovery_supports_common_skill_roots(self) -> None:

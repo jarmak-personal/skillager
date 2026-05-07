@@ -19,8 +19,8 @@ WORKING_SKILL_ID = "skillager/working"
 WORKING_REASON_LOCAL_CUSTOMIZATION = "target has local customizations"
 WORKING_REASON_UNMANAGED = "target exists without Skillager provenance"
 AGENT_NOTE = (
-    "Run `skillager handoff` at session start. Follow its Next item, use only reviewed/materialized "
-    "Skillager-managed skills, ask before setup or approval changes, run `skillager doctor` if state seems off, "
+    "Run `skillager handoff` at session start. Follow its Next item, use only available/materialized "
+    "Skillager-managed skills, ask before setup or approval changes, ask the user to run `skillager doctor --agent <agent>` if state seems off, "
     "and report curation/exposure changes."
 )
 AGENT_NOTE_SECTION = f"## Skillager\n{AGENT_NOTE}\n"
@@ -28,7 +28,7 @@ LEGACY_AGENT_NOTES = (
     "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
     "ask the user to run `skillager setup` if review is needed.",
     "Skillager-managed skills are installed for this project; run `skillager --help` "
-    "for review/materialization commands, and only use approved materialized skills.",
+    "for review/materialization commands, and only use available materialized skills.",
     "Skillager-managed skills are installed for this project; at session start run `skillager status`, "
     "and if it reports new/unreviewed skills ask the user to run `skillager setup` before using them.",
 )
@@ -77,8 +77,8 @@ def materialize_skills(
 
 def _unreviewed_reason(skill: dict[str, Any]) -> str:
     if skill.get("authored") and skill.get("scan", {}).get("risk") == "low":
-        return f"not reviewed or trusted; to approve authored skill after review: skillager trust {skill.get('id')} --state reviewed"
-    return f"not reviewed or trusted; review first: skillager review {skill.get('id')}"
+        return f"not available; to approve authored skill after owner review: skillager trust {skill.get('id')} --state reviewed"
+    return f"not available; owner review first: skillager review {skill.get('id')}"
 
 
 def materialize_router(
@@ -95,7 +95,7 @@ def materialize_router(
     router_skill = {
         "id": f"skillager/{tag}",
         "name": f"Skillager {tag} Router",
-        "summary": f"Route {tag} tasks to reviewed Skillager-managed skills.",
+        "summary": f"Route {tag} tasks to available Skillager-managed skills.",
         "source": {"type": "skillager-router", "tag": tag},
         "content_hash": content_hashes(reviewed),
         "trust": "reviewed",
@@ -104,7 +104,7 @@ def materialize_router(
     if not reviewed:
         for agent in agents:
             target = target_dir(agent=agent, scope=scope, skill=router_skill, project_dir=project_dir)
-            results.append(_result(router_skill, target, "skipped", "no reviewed skills in tag", agent=agent, scope=scope))
+            results.append(_result(router_skill, target, "skipped", "no available skills in tag", agent=agent, scope=scope))
         return results
     for agent in agents:
         target = target_dir(agent=agent, scope=scope, skill=router_skill, project_dir=project_dir)
@@ -171,14 +171,16 @@ def materialize_working_skill_one(
 def render_working_skill(agent: str = "codex") -> str:
     return f"""---
 name: "Skillager Working"
-description: "Use Skillager safely from an agent: handoff first, approved metadata only, agent-managed tags, guarded activation, and lookback."
+description: "Use Skillager safely from an agent: handoff first, available metadata only, agent-managed tags, guarded activation, and lookback."
 ---
 
 # Skillager Working
 
-Use when starting work in a project that has Skillager-managed skills, when `skillager status` reports available approved skills, or when the user asks you to set up, expose, route, activate, or review skills.
+Use when starting work in a project that has Skillager-managed skills, when `skillager status` reports available skills, or when the user asks you to set up, expose, route, activate, or review skills.
 
 This skill is a protocol for using Skillager safely. It does not approve third-party skills and it does not contain any third-party skill bodies.
+
+Availability is the eligibility gate. If a skill appears in normal Skillager list/search/show/tag output, choose by task relevance. Do not look for or use owner review diagnostics during normal agent work.
 
 ## Session Start
 
@@ -186,7 +188,7 @@ This skill is a protocol for using Skillager safely. It does not approve third-p
 2. Follow the `Next:` item. If handoff reports setup or migration review is needed, ask the user to run the suggested command from the project directory before using Skillager-managed skills.
 3. If handoff reports stale or missing project artifacts, ask the user before refreshing them. Do not overwrite unmanaged artifacts unless the user explicitly approves the exact repair.
 4. If handoff reports lookback pending, ask whether the user wants to review `skillager lookback` before changing shared exposure. Do not apply recommendations without user approval. Active-session lookback signals are only collection-in-progress.
-5. If Skillager state seems off mid-session, run `skillager doctor` before guessing. Re-run handoff after repairs if readiness changes.
+5. If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent {agent}` in their terminal. Re-run handoff after repairs if readiness changes.
 6. If handoff is ready, ask what the user plans to do in this repo before curating tags or materializing additional skills.
 
 ## Query Cadence
@@ -195,8 +197,8 @@ Do not search Skillager on every user message. Search only when:
 
 - The user starts a new domain or task.
 - The current task would benefit from specialized skills not already materialized.
-- You are unsure how to approach the task and an approved skill may contain the right workflow.
-- `skillager status` reports newly reviewed skills.
+- You are unsure how to approach the task and an available skill may contain the right workflow.
+- `skillager status` reports newly available skills.
 - The user asks about available skills.
 
 Once you choose a native skill or router path for a task, keep using that choice until the task changes. Keep Skillager checks quiet unless review, tag curation, materialization, activation, or user approval is needed.
@@ -207,37 +209,35 @@ These commands are safe because they do not reveal full skill bodies:
 
 ```bash
 skillager handoff --agent {agent} --json
-skillager doctor --agent {agent} --json
 skillager status --json
 skillager list --summary-json --agent {agent}
-skillager list --json
-skillager search "<user goal>" --trusted-only --agent {agent} --json
+skillager search "<user goal>" --agent {agent} --json
 skillager show <skill-id> --json
 skillager tag show <tag> --json
 skillager project tags --json
 ```
 
-Use these to decide which approved skills are relevant.
+Use these to decide which available skills are relevant.
 
 ## Agent Selection Slate
 
-Before curating tags or exposure for a new task, build your own slate from approved metadata and the user's stated goal:
+Before curating tags or exposure for a new task, build your own slate from available metadata and the user's stated goal:
 
-- Start with `skillager search "<user goal>" --trusted-only --agent {agent} --json`.
+- Start with `skillager search "<user goal>" --agent {agent} --json`.
 - Run a few focused searches when the goal has multiple facets, for example domain terms, package/project names, and workflow terms.
 - Search JSON is ranked and includes `score`, `score_detail`, and `reasons`; use `--limit <n>` to widen or narrow the slate.
 - Use `skillager list --summary-json --agent {agent}` when you need orientation before a targeted search.
-- Consider 5-20 plausible approved skills or skill groups when enough relevant options exist.
+- Consider 5-20 plausible available skills or skill groups when enough relevant options exist.
 - A skill group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation.
 - Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task.
 - Include both the best direct fit and adjacent options the user may reasonably want, such as a brainstorm/research suite for ideation or a review/debugging suite for validation.
-- If fewer than five relevant approved candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
+- If fewer than five relevant available candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
 - Curate and expose only the narrow final choice that fits the task; keep the broader slate as context for the user.
 
 ## Exposure Policy
 
-- Every approved skill can be activated through Skillager. Not every approved skill should be materialized.
-- Tags are agent-maintained curation for approved skills. Add relevant approved skills to an existing tag or create a focused tag when it helps the current project.
+- Every available skill can be activated through Skillager. Not every available skill should be materialized.
+- Tags are agent-maintained curation for available skills. Add relevant available skills to an existing tag or create a focused tag when it helps the current project.
 - Curate focused tags with:
   `skillager tag add <tag> <skill-id> [<skill-id> ...]`
 - Attach project-relevant tags before router materialization:
@@ -250,12 +250,12 @@ Before curating tags or exposure for a new task, build your own slate from appro
 - Use native exposure for tiny always-relevant project skills:
   `skillager materialize <skill-id> --agent {agent} --scope project`
 - Prefer no new exposure for one-off tasks.
-- You may tag and expose reviewed skills after the user states their task; report what changed and how to adjust it.
-- Never use `--include-unreviewed` or `--force` unless the user explicitly asks for that exact override.
+- You may tag and expose available skills after the user states their task; report what changed and how to adjust it.
+- Never use override flags unless the user explicitly asks for that exact override.
 
 ## Exposure Signals
 
-User naming or explicit request decides exposure. If the user asks for a skill or workflow by name, use the narrowest reviewed path that satisfies that request.
+User naming or explicit request decides exposure. If the user asks for a skill or workflow by name, use the narrowest available path that satisfies that request.
 
 Lookback signal is strong evidence when available. Repeated search, activation, or materialization across sessions can justify a router, stub, native exposure, or no change.
 
@@ -272,19 +272,21 @@ Runtime signals include:
 
 - The user asks for the skill or workflow by name.
 - Repeated search or activation in lookback.
-- The current task clearly matches a specific approved skill.
+- The current task clearly matches a specific available skill.
 
 ## Activation Policy
 
-- Activate only reviewed, trusted, or pinned skills.
+- Activate only available skills.
 - For router-listed skills, use:
   `skillager activate <skill-id> --from-router skillager-<tag>`
-- Do not activate skills outside a router tag unless approved metadata clearly matches the task.
-- If no approved skill fits, continue without activating a Skillager-managed skill.
+- Do not activate skills outside a router tag unless available metadata clearly matches the task.
+- If no available skill fits, continue without activating a Skillager-managed skill.
 
 ## Lookback
 
-At the end of substantial work, run:
+Run lookback only when handoff or status reports `lookback pending`, when the user asks for it, or when recording explicit user feedback. Do not run lookback after setup-only, search-only, tag-only, or materialization-only onboarding.
+
+When lookback is pending, review it with:
 
 ```bash
 skillager lookback
@@ -342,33 +344,33 @@ def render_router_skill(tag: str, skills: list[dict[str, Any]], *, agent: str | 
     lines = [
         "---",
         f"name: \"{_frontmatter_string(f'Skillager {tag} Router')}\"",
-        f"description: \"Route {tag} tasks to reviewed Skillager-managed skills.\"",
+        f"description: \"Route {tag} tasks to available Skillager-managed skills.\"",
         "---",
         "",
         f"# Skillager {tag} Router",
         "",
-        f"Use when the task is related to the `{tag}` skill tag or one of the reviewed skills exposed by this router.",
+        f"Use when the task is related to the `{tag}` skill tag or one of the available skills exposed by this router.",
         "",
-        "This router exposes compact reviewed metadata only. It does not approve new skills.",
+        "This router exposes compact available metadata only. It does not approve new skills.",
         "",
-        "When a reviewed skill exposed by this router is relevant:",
+        "When an available skill exposed by this router is relevant:",
         "",
         f"1. Run `skillager activate <skill-id> --from-router skillager-{slugify(tag)}`.",
-        f"2. Activate only skills listed below or returned by `skillager search --tag {tag} \"<query>\" --approved-only --agent {agent or 'codex'}`.",
+        f"2. Activate only skills listed below or returned by `skillager search --tag {tag} \"<query>\" --agent {agent or 'codex'}`.",
         "3. Never use `--force`.",
         "4. If no exposed skill fits, continue without activating another skill.",
         "",
-        "Available reviewed skills:",
+        "Available skills:",
         "",
     ]
     if not skills:
-        lines.extend(["No reviewed skills are currently available for this tag.", ""])
+        lines.extend(["No skills are currently available for this tag.", ""])
         return "\n".join(lines)
     if len(skills) > 20:
         lines.extend(
             [
-                f"This tag contains {len(skills)} reviewed skills.",
-                f"Use `skillager search --tag {tag} \"<query>\" --approved-only --agent {agent or 'codex'}` to find the right skill, then activate it through this router.",
+                f"This tag contains {len(skills)} available skills.",
+                f"Use `skillager search --tag {tag} \"<query>\" --agent {agent or 'codex'}` to find the right skill, then activate it through this router.",
                 "",
             ]
         )
@@ -376,8 +378,6 @@ def render_router_skill(tag: str, skills: list[dict[str, Any]], *, agent: str | 
     for skill in skills:
         lines.append(f"- `{skill['id']}`")
         lines.append(f"  - Use when: {skill.get('summary', '').strip()}")
-        lines.append(f"  - Risk: {skill.get('scan', {}).get('risk', 'unknown')}")
-        lines.append(f"  - Trust: {skill.get('trust', 'unknown')}")
         for warning in compatibility_warnings(skill, agent):
             lines.append(f"  - Compatibility note: {warning}")
         lines.append("")
@@ -425,7 +425,7 @@ def render_stub_skill(skill: dict[str, Any]) -> str:
         "",
         summary,
         "",
-        "This is a Skillager stub. It exposes only approved metadata, not the full skill body.",
+        "This is a Skillager stub. It exposes only available metadata, not the full skill body.",
         "",
     ]
     warnings = compatibility_warnings(skill)
@@ -436,7 +436,7 @@ def render_stub_skill(skill: dict[str, Any]) -> str:
         lines.append("")
     lines.extend(
         [
-            "Before following the skill instructions, activate the full reviewed skill body:",
+            "Before following the skill instructions, activate the full available skill body:",
             "",
             "```bash",
             f"skillager activate {skill_id} --from-stub {slugify(skill_id)}",
@@ -662,7 +662,7 @@ def _working_skill(agent: str) -> dict[str, Any]:
     return {
         "id": WORKING_SKILL_ID,
         "name": "Skillager Working",
-        "summary": "Use Skillager safely from an agent: handoff first, approved metadata only, agent-managed tags, narrow router/native materialization, guarded activation, and lookback.",
+        "summary": "Use Skillager safely from an agent: handoff first, available metadata only, agent-managed tags, narrow router/native materialization, guarded activation, and lookback.",
         "source": {"type": "skillager-working"},
         "content_hash": source_hash,
         "trust": "reviewed",

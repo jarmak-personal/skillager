@@ -35,30 +35,28 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assert_body_not_exposed(status)
             status_data = status.json()
             self.assertTrue(status_data["needs_setup"])
-            self.assertEqual(status_data["review_needed"], 1)
-            self.assertEqual(status_data["approved"], 0)
+            self.assertEqual(status_data["pending_owner_review"], 1)
+            self.assertEqual(status_data["available"], 0)
 
             search = cli.run("search", "spatial", "--no-session-record", "--json")
             self.assert_code(search, 0)
             self.assert_body_not_exposed(search)
-            search_data = search.json()
-            self.assertEqual(search_data[0]["id"], "project/gis-domain")
-            self.assertEqual(search_data[0]["trust"], "discovered")
+            self.assertEqual(search.json(), [])
 
             show = cli.run("show", "project/gis-domain", "--json")
-            self.assert_code(show, 0)
+            self.assert_code(show, 2)
             self.assert_body_not_exposed(show)
-            self.assertEqual(show.json()["skill"]["id"], "project/gis-domain")
+            self.assertIn("not available", show.stderr)
 
             show_content = cli.run("show", "project/gis-domain", "--content")
             self.assert_code(show_content, 2)
             self.assert_body_not_exposed(show_content)
-            self.assertIn("not available until reviewed", show_content.stderr)
+            self.assertIn("not available", show_content.stderr)
 
             activate = cli.run("activate", "project/gis-domain", "--no-session-record")
             self.assert_code(activate, 2)
             self.assert_body_not_exposed(activate)
-            self.assertIn("not reviewed or trusted", activate.stderr)
+            self.assertIn("not available", activate.stderr)
 
     def test_reviewed_project_skill_can_be_stubbed_and_guarded_activation_emits_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -73,12 +71,13 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assertEqual(setup_data["review_needed"], 0)
             self.assertEqual(setup_data["selected_ids"], ["project/gis-domain"])
 
-            search = cli.run("search", "spatial", "--trusted-only", "--no-session-record", "--json")
+            search = cli.run("search", "spatial", "--no-session-record", "--json")
             self.assert_code(search, 0)
             self.assert_body_not_exposed(search)
             search_data = search.json()
             self.assertEqual(search_data[0]["id"], "project/gis-domain")
-            self.assertEqual(search_data[0]["trust"], "reviewed")
+            self.assertTrue(search_data[0]["available"])
+            self.assertNotIn("trust", search_data[0])
 
             materialize = cli.run("materialize", "project/gis-domain", "--mode", "stub", "--agent", "codex", "--json")
             self.assert_code(materialize, 0)

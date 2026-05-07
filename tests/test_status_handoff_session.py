@@ -50,7 +50,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                 self.assertEqual(main(["status", "--no-packages"]), 0)
                 self.assertEqual(main(["status", "--no-packages", "--exit-code"]), 10)
             text = output.getvalue()
-            self.assertIn("review needed: 1", text)
+            self.assertIn("pending owner review: 1", text)
             self.assertIn("Ask the user to run `skillager setup`", text)
 
     def test_status_reports_available_update(self) -> None:
@@ -109,7 +109,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             data = json.loads(output.getvalue())
             self.assertIsNone(data["agent"])
             self.assertFalse(data["needs_setup"])
-            self.assertEqual(data["review_needed"], 0)
+            self.assertEqual(data["pending_owner_review"], 0)
             self.assertTrue(data["readiness"]["review_ready"])
             self.assertFalse(data["readiness"]["handoff_ready"])
             self.assertFalse(data["readiness"]["ready"])
@@ -272,7 +272,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             data = json.loads(output.getvalue())
             self.assertTrue(data["needs_setup"])
             self.assertEqual(data["selected"], 2)
-            self.assertEqual(data["review_needed"], 1)
+            self.assertEqual(data["pending_owner_review"], 1)
             self.assertEqual(data["scope"]["audience"], "user")
 
             all_output = StringIO()
@@ -287,7 +287,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             all_data = json.loads(all_output.getvalue())
             self.assertTrue(all_data["needs_setup"])
             self.assertEqual(all_data["selected"], 3)
-            self.assertEqual(all_data["review_needed"], 2)
+            self.assertEqual(all_data["pending_owner_review"], 2)
 
     def test_status_ack_migration_without_pending_is_noop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -412,7 +412,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["handoff", "--agent", "codex"]), 0)
             text = output.getvalue()
-            self.assertIn("Setup: needed, 1 unreviewed skill(s)", text)
+            self.assertIn("Setup: needed, 1 skill(s) pending owner review", text)
             self.assertIn("Working skill: missing", text)
             self.assertIn("skillager setup --agent codex", text)
 
@@ -436,10 +436,10 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertEqual(data["state"]["artifacts"]["working_skill"]["status"], "present")
             self.assertEqual(data["next"]["command"], None)
             self.assertIn("scored slate", data["next"]["message"])
-            self.assertIn("tag approved skills", data["next"]["message"])
+            self.assertIn("tag available skills", data["next"]["message"])
             self.assertIn("router, stub, native skill, or no new exposure", data["next"]["message"])
             self.assertIn("skillager list --summary-json --agent codex", data["next"]["next_commands"])
-            self.assertIn('skillager search "<user-goal>" --trusted-only --agent codex --json', data["next"]["next_commands"])
+            self.assertIn('skillager search "<user-goal>" --agent codex --json', data["next"]["next_commands"])
             self.assertIn("skillager materialize --tag <task-tag> --mode router --agent codex --scope project", data["next"]["next_commands"])
 
             text = StringIO()
@@ -490,7 +490,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                     self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
             handoff = json.loads(output.getvalue())
             self.assertEqual(handoff["status"], "setup-needed")
-            self.assertEqual(handoff["state"]["setup"]["unreviewed"], 1)
+            self.assertEqual(handoff["state"]["setup"]["pending_owner_review"], 1)
             self.assertIn("skillager setup --agent codex", handoff["next"]["next_commands"])
 
     def test_handoff_explains_same_content_duplicate_review(self) -> None:
@@ -517,8 +517,8 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                     self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
             handoff = json.loads(output.getvalue())
             self.assertEqual(handoff["status"], "setup-needed")
-            self.assertIn("source-key approval", handoff["next"]["message"])
-            self.assertEqual(handoff["state"]["duplicate_content"]["review_needed_ids"], ["demo-pkg/mapping"])
+            self.assertNotIn("source-key approval", handoff["next"]["message"])
+            self.assertNotIn("duplicate_content", handoff["state"])
 
     def test_handoff_reports_stale_working_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -658,7 +658,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertEqual(data["state"]["materialized_router_tags"], ["gis"])
             self.assertEqual(data["state"]["unmaterialized_attached_tags"], [])
             self.assertIn("Existing materialized router tag(s)", data["next"]["message"])
-            self.assertIn('skillager search "<user-goal>" --tag gis --approved-only --agent codex --json', data["next"]["next_commands"])
+            self.assertIn('skillager search "<user-goal>" --tag gis --agent codex --json', data["next"]["next_commands"])
             self.assertIn("Materialized router tags: gis", text_output.getvalue())
 
     def test_handoff_exposure_breakdown_reports_routed_and_stubbed_skills(self) -> None:
@@ -701,9 +701,9 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertEqual(exposure["stubbed"], 1)
             self.assertEqual(exposure["native"], 0)
             self.assertEqual(exposure["available_on_demand"], 0)
-            self.assertEqual(exposure["count_basis"], "approved source entries")
+            self.assertEqual(exposure["count_basis"], "available source entries")
             self.assertEqual(exposure["available_source_entries_on_demand"], 0)
-            self.assertIn("2 exposed entries (1 router tag(s), 1 routed, 1 stubbed), 0 approved entries on demand", text_output.getvalue())
+            self.assertIn("2 exposed entries (1 router tag(s), 1 routed, 1 stubbed), 0 available entries on demand", text_output.getvalue())
 
     def test_handoff_prioritizes_lookback_over_unmaterialized_attached_tags(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -5,7 +5,7 @@ Agent skills are useful. Loading all of them into every chat is not.
 Skillager is a local CLI that lets projects, Python libraries, tools, and personal skill repos ship useful agent skills without turning every session into a wall of instructions. It discovers skills, scans them, asks for human approval, and gives agents a small, fast way to find the right skill only when the task needs it.
 
 ```text
-install package -> discover skills -> approve safety -> agent uses approved metadata -> expose only what matters
+install package -> discover skills -> approve safety -> agent sees available metadata -> expose only what matters
 ```
 
 ## Quickstart
@@ -29,9 +29,9 @@ Use `--agent claude` instead if this project is for Claude. `setup` is the appro
 
 Skillager is intended to be a global user tool. Install it once with `uv tool` or `pipx`; project virtual environments are scanned for package-provided skills, but Skillager does not need to be installed into each project venv.
 
-After setup, restart Codex or Claude in the same directory and tell it what you are doing. Skillager installs a tiny project handoff so the agent knows to run `skillager handoff` once, use approved metadata, and avoid loading unapproved skill bodies. If the handoff state looks wrong, run `skillager doctor --agent codex` for the exact next command.
+After setup, restart Codex or Claude in the same directory and tell it what you are doing. Skillager installs a tiny project handoff so the agent knows to run `skillager handoff` once, use available metadata, and ask you to run setup if expected skills are unavailable. If the handoff state looks wrong, run `skillager doctor --agent codex` for the exact next command.
 
-For agent permission prompts, Skillager ships example read-only allowlists in [`examples/codex-allowlist.json`](examples/codex-allowlist.json) and [`examples/claude-allowlist.json`](examples/claude-allowlist.json). They include metadata-only commands such as `status --json`, `handoff --json`, `doctor --json`, `list --summary-json`, `search --trusted-only --json`, `show --json`, and `tag show --json`; mutating flags such as `doctor --fix` are deliberately excluded.
+For agent permission prompts, Skillager ships example read-only allowlists in [`examples/codex-allowlist.json`](examples/codex-allowlist.json) and [`examples/claude-allowlist.json`](examples/claude-allowlist.json). They include metadata-only commands such as `status --json`, `handoff --json`, `list --summary-json`, `search --json`, `show --json`, and `tag show --json`; setup, review, doctor, and mutating commands stay user-run diagnostics.
 
 ## The Problem
 
@@ -53,13 +53,13 @@ Skillager keeps two decisions separate:
 - **Approval:** the user reviewed a skill at its current content hash.
 - **Exposure:** the skill is available to an agent in the current project.
 
-An approved skill does not have to be loaded into the agent. It can stay in Skillager's index until a task needs it. When it should be available, Skillager writes one of three project-level representations:
+An approved skill does not have to be loaded into the agent. It can stay in Skillager's index until a task needs it. When it should be agent-available, Skillager writes one of three project-level representations:
 
-- `native`: the full reviewed skill directory copied into the agent's project skill directory
+- `native`: the full available skill directory copied into the agent's project skill directory
 - `stub`: a tiny native handle that activates the full skill through Skillager on demand
 - `router`: one compact native skill for a curated tag like `gis`, `workflows`, or `release`
 
-This keeps the default context small while still giving agents a deterministic path to approved skills.
+This keeps the default context small while still giving agents a deterministic path to available skills.
 
 `skillager materialize` only writes reviewed skill exposure. It requires explicit skill IDs, `--tag`, or `--all-reviewed`; use `skillager bootstrap --agent <agent>` to install or repair Skillager's first-party handoff artifacts.
 
@@ -102,9 +102,9 @@ See the [library author guide](docs/LIBRARY_AUTHORS.md) for metadata and packagi
 - Discovers skills from projects, `.venv`, installed packages, global agent dirs, and skill repos.
 - Scans full skill directories before approval.
 - Lint-blocks invalid manifests and requires an audited override before approval.
-- Tracks trust by skill ID and content hash.
-- Keeps search/list/show metadata safe and compact for agents.
-- Materializes only reviewed skills into Codex or Claude native skill directories.
+- Tracks approvals by source key and content hash.
+- Keeps search/list/show metadata safe, compact, and available-only for agents.
+- Materializes only available skills into Codex or Claude native skill directories.
 - Supports stubs and routers for large skill collections.
 - Records compact local usage signals for lookback, without storing transcripts or skill bodies.
 - Keeps direct native skills behind review unless their current content is approved.
@@ -115,7 +115,7 @@ The built-in scanner is deterministic and local. It looks for common agent-risk 
 
 **It is not a proof of safety. It is a review aid.**
 
-The hard rule is simpler: agents should not activate, materialize, or rely on skills that have not been approved by the user or project trust store.
+The hard rule is simpler: human review decides availability. Agent-facing commands only surface available skills, and setup/review/doctor keep the security details on the human side.
 
 ## Skill Repos Without Context Flooding
 
@@ -128,7 +128,7 @@ skillager setup --agent codex
 skillager materialize --tag workflows --mode router --agent codex --scope project
 ```
 
-`collection enable` creates or updates a catalog tag for the collection and attaches that tag to the current project. The agent sees one router skill, not the whole repo. It activates a specific reviewed skill only when the task calls for it.
+`collection enable` creates or updates a catalog tag for the collection and attaches that tag to the current project. The agent sees one router skill, not the whole repo. It activates a specific available skill only when the task calls for it.
 
 ## Lookback
 

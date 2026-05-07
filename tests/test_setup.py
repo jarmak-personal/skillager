@@ -347,13 +347,13 @@ class SkillagerSetupTests(unittest.TestCase):
                     self.assertEqual(main(["setup", str(external), "--accept-low", "--no-packages"]), 0)
                 listed = StringIO()
                 with redirect_stdout(listed):
-                    self.assertEqual(main(["list", "--trust", "reviewed", "--json"]), 0)
+                    self.assertEqual(main(["list", "--json"]), 0)
                 listed_data = json.loads(listed.getvalue())
                 self.assertEqual([skill["id"] for skill in listed_data], ["path/gis-domain"])
 
                 searched = StringIO()
                 with redirect_stdout(searched):
-                    self.assertEqual(main(["search", "spatial", "--trusted-only", "--json"]), 0)
+                    self.assertEqual(main(["search", "spatial", "--json"]), 0)
                 searched_data = json.loads(searched.getvalue())
                 self.assertEqual(searched_data[0]["id"], "path/gis-domain")
 
@@ -370,7 +370,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(status):
                     self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
                 status_data = json.loads(status.getvalue())
-                self.assertEqual(status_data["approved"], 1)
+                self.assertEqual(status_data["available"], 1)
                 self.assertEqual(status_data["setup_scope_count"], 1)
 
     def test_setup_discovers_child_skill_repos_without_project_marker(self) -> None:
@@ -404,9 +404,10 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(status_data["collections"]["count"], 0)
             self.assertEqual(status_data["collection_inventory"]["count"], 1)
             self.assertEqual(status_data["collection_inventory"]["items"][0]["name"], "vibespatial")
-            self.assertEqual(status_data["collection_inventory"]["approved"], 1)
-            self.assertEqual(status_data["manifest_lint"]["by_status"], {"ok": 1})
-            self.assertEqual(status_data["scan"]["by_risk"], {"low": 1})
+            self.assertEqual(status_data["collection_inventory"]["available"], 1)
+            self.assertNotIn("manifest_lint", status_data)
+            self.assertNotIn("scan", status_data)
+            self.assertNotIn("by_risk", status_data["summary"])
 
     def test_interactive_setup_writes_reusable_approvals_and_fresh_project_retains_them(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

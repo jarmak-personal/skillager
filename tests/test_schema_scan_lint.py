@@ -385,7 +385,7 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
                     search_output = StringIO()
                     with redirect_stdout(search_output):
-                        self.assertEqual(main(["search", "teams", "--agent", "codex", "--trusted-only", "--json"]), 0)
+                        self.assertEqual(main(["search", "teams", "--agent", "codex", "--json"]), 0)
                     data = json.loads(search_output.getvalue())
                     self.assertIsNone(data[0]["compatibility"]["problem"])
                     self.assertIn("Claude Agent Teams", data[0]["compatibility"]["activation_warnings"][0])
