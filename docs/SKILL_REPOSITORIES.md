@@ -24,7 +24,7 @@ skillager collection enable community
 skillager setup --source collection --agent codex
 ```
 
-`collection enable` creates or updates a reusable catalog tag with the collection's visible skills and attaches that tag to the current project. Blocked and lint-blocked skills are not added by the default enable flow. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path; `--yolo` is the same trusted-source shortcut with a blunter name. For untrusted repositories, use the normal review flow.
+`collection enable` creates or updates a reusable catalog tag with the collection's visible skills and attaches that tag to the current project. Blocked and lint-blocked skills are not added by the default enable flow. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path; `--yolo` is the same trusted-source shortcut with a blunter name. Both trusted-source shortcuts review selected lint-blocked skills with an audited shortcut override. For untrusted repositories, use the normal review flow.
 
 `setup --source collection --agent <agent>` reviews collection skills attached to the current project and refreshes that agent's first-party handoff artifacts after approval. Registered collections that have not been enabled or attached stay as catalog inventory. If review is complete but handoff still reports missing or stale artifacts, run `skillager doctor --agent <agent>` for the exact repair command.
 

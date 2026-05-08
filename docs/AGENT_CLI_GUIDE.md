@@ -139,6 +139,7 @@ skillager setup --agent claude
 skillager setup --source collection --trust-all
 skillager setup --source collection --yolo
 skillager review <skill-id> --trust-selected reviewed
+skillager review <skill-id> --override-lint --reason "<why this is acceptable>"
 skillager trust <skill-id>
 skillager trust <skill-id> --override-lint --reason "<why this is acceptable>"
 skillager trust <skill-id> --project-only

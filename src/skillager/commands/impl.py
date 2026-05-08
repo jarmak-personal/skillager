@@ -861,12 +861,12 @@ def add_review_filters(parser: argparse.ArgumentParser, *, include_lint_flag: bo
 
 def add_review_actions(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--accept-low", action="store_true", help="Mark selected low-risk skills as reviewed.")
-    parser.add_argument("--yolo", action="store_true", help="Mark all selected skills reviewed, including high-risk findings. Same behavior as --trust-all; use only for fully trusted sources.")
-    parser.add_argument("--trust-all", action="store_true", help="Mark all selected skills reviewed, including high-risk findings. Use only for fully trusted sources.")
+    parser.add_argument("--yolo", action="store_true", help="Mark all selected skills reviewed, including high-risk and lint-blocked findings. Same behavior as --trust-all; use only for fully trusted sources.")
+    parser.add_argument("--trust-all", action="store_true", help="Mark all selected skills reviewed, including high-risk and lint-blocked findings. Use only for fully trusted sources.")
     parser.add_argument("--trust-selected", choices=["reviewed", "trusted", "pinned"], help="Trust selected skills after review.")
     parser.add_argument("--project-only", action="store_true", help="Store approval decisions only in this project state instead of the reusable global catalog.")
     parser.add_argument("--block-high", action="store_true", help="Block selected high-risk skills.")
-    parser.add_argument("--override-lint", action="store_true", help="Allow approval of lint-blocked skills with an audit reason.")
+    parser.add_argument("--override-lint", action="store_true", help="Approve selected lint-blocked skills with an audit reason, or allow them with another review action.")
     parser.add_argument("--reason", help="Required reason when --override-lint is used.")
 
 
@@ -4663,6 +4663,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     extra_skills = _review_extra_skills(args)
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
+    review_include_lint_blocked = args.include_lint_blocked or args.override_lint or args.yolo
     skills = select_visible_skills(
         data.get("skills", []),
         skill_ids=args.skill_ids,
@@ -4671,13 +4672,13 @@ def cmd_review(args: argparse.Namespace) -> int:
         package=args.package,
         activation=args.activation,
         include_blocked=args.include_blocked,
-        include_lint_blocked=args.include_lint_blocked or args.override_lint,
+        include_lint_blocked=review_include_lint_blocked,
         include_global=args.include_global,
     )
     duplicate_context = select_visible_skills(
         data.get("skills", []),
         include_blocked=args.include_blocked,
-        include_lint_blocked=args.include_lint_blocked or args.override_lint,
+        include_lint_blocked=review_include_lint_blocked,
         include_global=args.include_global,
     )
     skills = annotate_duplicate_content(skills, context=duplicate_context)

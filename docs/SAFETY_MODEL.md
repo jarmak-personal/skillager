@@ -51,6 +51,8 @@ Approving a lint-blocked skill requires:
 skillager review <skill-id> --trust-selected reviewed --override-lint --reason "<why this is acceptable>"
 ```
 
+For fully trusted sources, `--trust-all` and `--yolo` also approve selected lint-blocked skills and store a standard audited shortcut reason.
+
 The override is stored in `trust.json` with the reason, timestamp, content hash, and the accepted finding identities. Content changes or new blocking finding identities drop the skill back to `lint_blocked`.
 
 ## Compatibility Gate

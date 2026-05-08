@@ -12,6 +12,7 @@ from .audience import audience_bucket
 
 
 APPROVED_REVIEW_STATES = {"reviewed", "trusted", "pinned"}
+YOLO_LINT_OVERRIDE_REASON = "accepted by --yolo/--trust-all trusted-source shortcut"
 
 
 def review_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
@@ -227,12 +228,13 @@ def apply_review_action(
         raise ValueError("--reason is required with --override-lint")
     changed: list[dict[str, str]] = []
     skipped: list[dict[str, str]] = []
+    override_lint_only = override_lint and not any((accept_low, yolo, trust_state, block_high))
     for skill in skills:
         risk = skill.get("scan", {}).get("risk")
         lint_override = None
         if skill.get("trust") == "lint_blocked":
-            if override_lint:
-                lint_override = make_lint_override(reason or "", skill.get("lint") or {})
+            if override_lint or yolo:
+                lint_override = make_lint_override(reason or YOLO_LINT_OVERRIDE_REASON, skill.get("lint") or {})
             elif not block_high:
                 skipped.append({"skill_id": skill["id"], "reason": "lint-blocked; fix source or use --override-lint --reason"})
                 continue
@@ -259,6 +261,17 @@ def apply_review_action(
                 state_root,
                 skill,
                 trust_state,
+                lint_override=lint_override,
+                approval_root=approval_root,
+                global_scope=global_scope,
+            )
+            changed.append(_review_action_item(skill, record))
+            continue
+        if override_lint_only and lint_override:
+            record = _set_review_trust(
+                state_root,
+                skill,
+                "reviewed",
                 lint_override=lint_override,
                 approval_root=approval_root,
                 global_scope=global_scope,
@@ -338,6 +351,7 @@ def setup_environment(
     approval_root: Path | None = None,
     global_scope: bool = False,
 ) -> dict[str, Any]:
+    review_include_lint_blocked = include_lint_blocked or override_lint or yolo
     data = build_index(state_root, paths, include_packages=include_packages, approval_root=approval_root, extra_paths=extra_paths)
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
@@ -352,7 +366,7 @@ def setup_environment(
         package=package,
         activation=activation,
         include_blocked=include_blocked,
-        include_lint_blocked=include_lint_blocked,
+        include_lint_blocked=review_include_lint_blocked,
         include_global=include_global,
     )
     skills = annotate_duplicate_content(skills)
@@ -372,7 +386,7 @@ def setup_environment(
             package=package,
             activation=activation,
             include_blocked=include_blocked,
-            include_lint_blocked=include_lint_blocked,
+            include_lint_blocked=review_include_lint_blocked,
             include_global=include_global,
         )
         skills = annotate_duplicate_content(skills)
@@ -400,7 +414,7 @@ def setup_environment(
         package=package,
         activation=activation,
         include_blocked=include_blocked or block_high,
-        include_lint_blocked=include_lint_blocked or override_lint,
+        include_lint_blocked=review_include_lint_blocked,
         include_global=include_global,
     )
     selected = annotate_duplicate_content(selected)

@@ -57,6 +57,7 @@ Lint output reports finding codes, fields, and safe details. It does not print s
 
 ```bash
 skillager trust <skill-id> --override-lint --reason "Reviewed manifest and accepted the finding"
+skillager review <skill-id> --override-lint --reason "Reviewed manifest and accepted the finding"
 ```
 
 The override is tied to the current content hash and finding identities. Content changes or new blocking lint findings require a new review.
@@ -110,7 +111,7 @@ Skillager does not require git. In a plain directory, it treats the current dire
 
 Legacy in-tree `<project>/.skillager/` state is ignored by ordinary commands. If you intentionally want to import reviewed local state from an older Skillager version, run `skillager state migrate` from the project and review the records it will copy. Legacy reusable `global_approvals` require the separate `skillager state import-global-approvals` command.
 
-Use `--trust-all` or `--yolo` only for fully trusted sources. They are aliases: both mark all selected skills reviewed, including medium and high-risk findings, but still record the current content hashes.
+Use `--trust-all` or `--yolo` only for fully trusted sources. They are aliases: both mark all selected skills reviewed, including medium, high-risk, and lint-blocked findings, and record the current content hashes. For lint-blocked skills they write an audited shortcut override reason.
 
 Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-project --agent codex` when you want to reset project-local Skillager state and refresh Codex handoff artifacts in one run: it clears project-local decisions, project tags, session records, and saved setup scope for the selected scope. It reports, but does not delete, retained reusable global approvals, global catalog collections/tags, and materialized skill files.
 

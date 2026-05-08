@@ -102,6 +102,32 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                 trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
                 self.assertEqual(trust_log["skills"]["project/demo"]["lint_override"]["reason"], "local test fixture")
 
+    def test_review_override_lint_reason_approves_selected_lint_blocked_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                "schema: skillager.skill.v1\nsummary: lint bait\naudience:\n  - user\nactivation:\n  default: manual\n",
+                encoding="utf-8",
+            )
+            with (
+                redirect_stdout(StringIO()),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                build_index(state, include_packages=False)
+                self.assertEqual(main(["review", "project/demo", "--override-lint", "--reason", "known good"]), 0)
+
+            trusted = load_index(state)["skills"][0]
+            self.assertEqual(trusted["trust"], "reviewed")
+            trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
+            self.assertEqual(trust_log["skills"]["project/demo"]["lint_override"]["reason"], "known good")
+
     def test_lint_output_sanitizes_author_controlled_manifest_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
