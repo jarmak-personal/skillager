@@ -31,7 +31,7 @@ class SkillagerBootstrapTests(unittest.TestCase):
             note = root / "AGENTS.md"
             self.assertTrue((working / "SKILL.md").exists())
             self.assertTrue((working / "skillager.materialized.yaml").exists())
-            self.assertIn("skillager handoff", note.read_text(encoding="utf-8"))
+            self.assertIn("skillager working", note.read_text(encoding="utf-8"))
             self.assertFalse((root / "CLAUDE.md").exists())
             self.assertIn("codex working_skill: materialized", output.getvalue())
             self.assertIn("codex project_note: materialized", output.getvalue())
@@ -56,7 +56,7 @@ class SkillagerBootstrapTests(unittest.TestCase):
                 self.assertEqual(main(["bootstrap", "--agent", "codex"]), 0)
             text = (root / "AGENTS.md").read_text(encoding="utf-8")
             self.assertEqual(text.count("## Skillager"), 1)
-            self.assertIn("skillager handoff", text)
+            self.assertIn("skillager working", text)
             self.assertNotIn("skillager status", text)
             self.assertIn("Other notes stay.", text)
 
@@ -88,7 +88,7 @@ class SkillagerBootstrapTests(unittest.TestCase):
             working = root / ".claude" / "skills" / "skillager-working"
             self.assertTrue((working / "SKILL.md").exists())
             self.assertTrue((working / "skillager.materialized.yaml").exists())
-            self.assertIn("skillager handoff", (root / "CLAUDE.md").read_text(encoding="utf-8"))
+            self.assertIn("skillager working", (root / "CLAUDE.md").read_text(encoding="utf-8"))
             self.assertFalse((root / "AGENTS.md").exists())
 
     def test_bootstrap_all_agents_writes_both_agent_artifacts(self) -> None:
@@ -101,8 +101,8 @@ class SkillagerBootstrapTests(unittest.TestCase):
             claude_working = root / ".claude" / "skills" / "skillager-working"
             self.assertTrue((codex_working / "SKILL.md").exists())
             self.assertTrue((claude_working / "SKILL.md").exists())
-            self.assertIn("skillager handoff", (root / "AGENTS.md").read_text(encoding="utf-8"))
-            self.assertIn("skillager handoff", (root / "CLAUDE.md").read_text(encoding="utf-8"))
+            self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertIn("skillager working", (root / "CLAUDE.md").read_text(encoding="utf-8"))
 
     def test_bootstrap_dry_run_json_does_not_write_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -194,7 +194,7 @@ class SkillagerBootstrapTests(unittest.TestCase):
                 self.assertEqual(main(["bootstrap", "--agent", "codex", "--force"]), 0)
             self.assertTrue((target / "skillager.materialized.yaml").exists())
             self.assertIn("Skillager Working", (target / "SKILL.md").read_text(encoding="utf-8"))
-            self.assertIn("skillager handoff", (root / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
 
     def test_bootstrap_does_not_trust_project_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

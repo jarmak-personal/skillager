@@ -246,7 +246,7 @@ class SkillagerDoctorTests(unittest.TestCase):
             self.assertIsNone(data["fix"]["reason"])
             self.assertEqual(data["fix"]["reason_code"], "working_missing")
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
-            self.assertIn("skillager handoff", (root / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
             current = json.loads((state / "sessions" / "current.json").read_text(encoding="utf-8"))
             event = next(item for item in read_events(state, current["session_id"]) if item["event"] == "doctor_run")
             self.assertTrue(event["fix"])

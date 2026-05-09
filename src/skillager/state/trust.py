@@ -135,11 +135,14 @@ def _record_trust_info(
     if lint_blocked and not valid_lint_override(record, lint):
         return None
     if state in TRUST_STATES - {"discovered", "lint_blocked"}:
-        return {
+        info = {
             "state": state,
             "scope": scope,
             "source": record.get("source"),
         }
+        if record.get("reason"):
+            info["reason"] = record["reason"]
+        return info
     return None
 
 
@@ -152,6 +155,7 @@ def set_trust(
     *,
     lint: dict[str, Any] | None = None,
     lint_override: dict[str, Any] | None = None,
+    reason: str | None = None,
     approval_key: str | None = None,
     approval_root: Path | None = None,
     global_scope: bool = False,
@@ -173,6 +177,8 @@ def set_trust(
         record["approval_key"] = approval_key
     if lint_override:
         record["lint_override"] = lint_override
+    if reason:
+        record["reason"] = reason
     if use_global:
         record["skill_id"] = skill_id
         data.setdefault("global_approvals", {})[approval_key] = record

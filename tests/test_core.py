@@ -62,11 +62,12 @@ class SkillagerCoreTests(unittest.TestCase):
 
     def test_top_level_help_points_agents_to_agentic_setup_flow(self) -> None:
         help_text = build_parser().format_help()
+        self.assertIn("skillager working", help_text)
         self.assertIn("skillager handoff", help_text)
-        self.assertIn("Ask the user what they plan to do", help_text)
+        self.assertIn("Continue silently unless new external skills need owner review", help_text)
         self.assertIn("Tag available skills and expose a narrow router, stub, native skill, or no new exposure", help_text)
         self.assertIn("Do not activate or materialize unavailable skills", help_text)
-        self.assertIn("pending owner review", help_text)
+        self.assertIn("owner review", help_text)
         self.assertIn("--catalog-state-dir", help_text)
         self.assertNotIn("recommend", help_text)
 
@@ -111,15 +112,15 @@ class SkillagerCoreTests(unittest.TestCase):
 
     def test_working_skill_has_session_query_cadence(self) -> None:
         text = render_working_skill("codex")
-        self.assertIn("Run `skillager handoff --agent codex` once", text)
+        self.assertIn("Run `skillager working --agent codex` after context resets", text)
         self.assertIn("Availability is the eligibility gate", text)
         self.assertNotIn("skillager list --json", text)
         self.assertIn("ask the user to run `skillager doctor --agent codex`", text)
-        self.assertIn("Re-run handoff after repairs", text)
+        self.assertIn("Re-run `skillager working --agent codex` after repairs", text)
         self.assertIn("Do not search Skillager on every user message", text)
         self.assertIn("You are unsure how to approach the task", text)
         self.assertIn("until the task changes", text)
-        self.assertIn("handoff reports lookback pending", text)
+        self.assertIn("Use `skillager handoff --agent codex` only after setup", text)
         self.assertIn("Do not run lookback after setup-only", text)
 
     def test_working_skill_has_exposure_signal_hierarchy(self) -> None:
@@ -151,6 +152,7 @@ class SkillagerCoreTests(unittest.TestCase):
 
     def test_working_skill_preview_defaults_to_codex(self) -> None:
         text = render_working_skill()
+        self.assertIn("skillager working --agent codex", text)
         self.assertIn("skillager handoff --agent codex", text)
         self.assertNotIn("--agent agent", text)
 

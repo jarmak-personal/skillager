@@ -190,7 +190,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(data["bootstrap"]["agents"], ["codex"])
             self.assertEqual(data["bootstrap"]["summary"]["by_status"], {"materialized": 2})
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
-            self.assertIn("skillager handoff", (root / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
             status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
             self.assertEqual(status_scope["agents"], ["codex"])
             with (
@@ -275,7 +275,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages"]), 0)
             text = output.getvalue()
-            self.assertIn("Handoff not ready: run skillager bootstrap --agent codex", text)
+            self.assertIn("Working artifacts not ready: run skillager bootstrap --agent codex", text)
             self.assertNotIn("Next step: tell your agent what you plan to do", text)
             status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
             self.assertEqual(status_scope["agents"], ["codex"])
@@ -325,8 +325,8 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(data["bootstrap"]["agents"], ["codex", "claude"])
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "skillager-working" / "SKILL.md").exists())
-            self.assertIn("skillager handoff", (root / "AGENTS.md").read_text(encoding="utf-8"))
-            self.assertIn("skillager handoff", (root / "CLAUDE.md").read_text(encoding="utf-8"))
+            self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertIn("skillager working", (root / "CLAUDE.md").read_text(encoding="utf-8"))
 
     def test_setup_explicit_path_inventory_remains_available_afterward(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -757,8 +757,8 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("Next step", text)
             self.assertIn(f"Skills were written to: {root / '.agents' / 'skills'}", text)
             self.assertIn(f"Restart Codex in this directory: {root}", text)
-            self.assertIn(f"Project handoff note: {root / 'AGENTS.md'}", text)
-            self.assertIn("native skill directory", text)
+            self.assertIn(f"Project working note: {root / 'AGENTS.md'}", text)
+            self.assertIn("skillager working", text)
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-low" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-high" / "SKILL.md").exists())
@@ -871,11 +871,11 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["setup", "--audience", "other", "--no-packages", "--agent", "codex", "--no-bootstrap"]), 0)
             text = stdout.getvalue()
-            self.assertIn("Handoff not ready: run skillager bootstrap --agent codex", text)
+            self.assertIn("Working artifacts not ready: run skillager bootstrap --agent codex", text)
             self.assertIn("Native skill selection", text)
             self.assertIn("project/gis-domain: materialized", text)
             self.assertIn("Skillager-managed native skills from the native skill directory", text)
-            self.assertNotIn("Project handoff note:", text)
+            self.assertNotIn("Project working note:", text)
             self.assertTrue((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertFalse((root / "AGENTS.md").exists())

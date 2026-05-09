@@ -789,7 +789,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(router_output):
                     self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
                 self.assertIn("Verify router exposure:", router_output.getvalue())
-                self.assertIn("skillager handoff --agent codex --json", router_output.getvalue())
+                self.assertIn("skillager status --agent codex --json", router_output.getvalue())
                 saved_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
                 self.assertEqual(saved_scope["selected_count"], 49)
                 self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())

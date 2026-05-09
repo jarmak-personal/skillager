@@ -129,6 +129,9 @@ DOCTOR_EXIT_LOOKBACK_PENDING = 15
 SETUP_BOOTSTRAP_REASON_NO_APPROVED = "no_approved_skills"
 SETUP_BOOTSTRAP_REASON_DISABLED = "bootstrap_disabled"
 SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED = "agent_not_specified"
+WORKING_AUTO_PROJECT_REASON = "working_project_local_user_added"
+WORKING_STATE_SCHEMA = "skillager.working-state.v1"
+WORKING_RESULT_SCHEMA = "skillager.working.v1"
 _WORKING_DRIFT_REASON_CODES = {
     "local customization": HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
     "target is not Skillager Working": HANDOFF_REASON_WORKING_WRONG_SOURCE,
@@ -161,20 +164,21 @@ def build_parser() -> argparse.ArgumentParser:
             Skillager is a pure CLI registry and materialization tool for agent skills.
 
             Agent-safe default workflow:
-              1. skillager handoff
-              2. Ask the user what they plan to do in the repo
-              3. Inspect available metadata with search/list/show
+              1. skillager working
+              2. Continue silently unless new external skills need owner review
+              3. Inspect available metadata with search/list/show when the task may benefit
               4. Tag available skills and expose a narrow router, stub, native skill, or no new exposure
-              5. Ask before `skillager lookback --agent codex --external-session-id <id>`
+              5. Use skillager handoff only for explicit post-setup curation/onboarding
 
             Important rules:
               - Do not activate or materialize unavailable skills unless the user explicitly asks.
-              - Agents should start with `skillager handoff`; it is metadata-only and safe.
-              - Agents should ask the user to run `skillager setup` when handoff reports pending owner review.
+              - Agents should run `skillager working` after context resets; it is silent on normal success.
+              - Agents should ask the user to run `skillager setup` when external skills need owner review.
               - Prefer project scope inside repos so users can inspect and customize local copies.
               - Use --json when another program or agent needs stable machine-readable output.
 
             Agent command contract:
+              working syncs project-local user-added skills after setup and does not emit skill bodies.
               handoff/status/search/list/show without --content are safe metadata commands.
               setup/review/trust/block change approval state and need user intent.
               tag/project/materialize may curate or expose only available skills; report changes.
@@ -191,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_setup_parser(sub)
     add_status_parser(sub)
     add_doctor_parser(sub)
+    add_working_parser(sub)
     add_handoff_parser(sub)
     add_bootstrap_parser(sub)
     add_collection_parser(sub)
@@ -447,8 +452,9 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
               skillager setup --summary-json
 
             Next step after trust changes:
-              Restart the chosen agent in this project, then tell it what you plan
-              to do; Skillager Working will guide native/stub/router/no-exposure decisions.
+              Restart the chosen agent in this project. It should run `skillager working`
+              after context resets. Run `skillager handoff` when you want explicit
+              post-setup curation/onboarding guidance.
             """
         ),
     )
@@ -464,9 +470,9 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     add_review_filters(p)
     add_review_actions(p)
     target = p.add_mutually_exclusive_group()
-    target.add_argument("--agent", action="append", choices=["codex", "claude"], help="Bootstrap this agent's first-party project handoff artifacts after setup. Repeat to target multiple agents.")
-    target.add_argument("--all-agents", action="store_true", help="Bootstrap first-party project handoff artifacts for both Codex and Claude after setup.")
-    p.add_argument("--no-bootstrap", action="store_true", help="Review setup scope without writing first-party handoff artifacts.")
+    target.add_argument("--agent", action="append", choices=["codex", "claude"], help="Bootstrap this agent's first-party project working artifacts after setup. Repeat to target multiple agents.")
+    target.add_argument("--all-agents", action="store_true", help="Bootstrap first-party project working artifacts for both Codex and Claude after setup.")
+    p.add_argument("--no-bootstrap", action="store_true", help="Review setup scope without writing first-party working artifacts.")
     p.add_argument("--details", action="store_true", help="Print every selected skill. Default output is compact.")
     p.add_argument("--non-interactive", action="store_true", help="Print report only; do not prompt for choices.")
     p.add_argument("--json", action="store_true", help="Emit setup report as JSON.")
@@ -477,7 +483,7 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
 def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "status",
-        help="Check Skillager availability and handoff readiness.",
+        help="Check Skillager availability and working artifact readiness.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
@@ -486,9 +492,10 @@ def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             explicit owner diagnostics. This command does not activate skills,
             emit skill bodies, approve anything, or materialize anything.
 
-            Agents can run this at session start from a project with a Skillager
-            handoff note. If review is needed, ask the user to run `skillager setup`.
-            If lookback is pending, ask before running `skillager lookback`.
+            Agents should prefer `skillager working` after context resets. Use status
+            for explicit readiness diagnostics. If review is needed, ask the user to
+            run `skillager setup`. If lookback is pending, ask before running
+            `skillager lookback`.
             """
         ),
         epilog=textwrap.dedent(
@@ -508,9 +515,9 @@ def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills. Defaults to local/environment/package skills only.")
     p.add_argument("--include-lint-blocked", action="store_true", help="Include lint-blocked skills in diagnostic counts.")
     p.add_argument("--all", action="store_true", help="Ignore the saved setup scope and report all selected skills.")
-    p.add_argument("--agent", choices=["codex", "claude"], help="Check first-party handoff readiness for this agent.")
+    p.add_argument("--agent", choices=["codex", "claude"], help="Check first-party working artifact readiness for this agent.")
     p.add_argument("--quiet", action="store_true", help="Print one concise line.")
-    p.add_argument("--exit-code", action="store_true", help="Exit 10 when review is needed, or 11 when approved skills exist but handoff artifacts need repair.")
+    p.add_argument("--exit-code", action="store_true", help="Exit 10 when review is needed, or 11 when approved skills exist but working artifacts need repair.")
     p.add_argument("--ack-migration", action="store_true", help="Acknowledge the current collection ID migration report.")
     p.add_argument("--migration-details", action="store_true", help="Print collection ID migration details for review before acking.")
     p.add_argument("--json", action="store_true", help="Emit status as JSON.")
@@ -527,7 +534,7 @@ def add_doctor_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             """\
             Diagnose the current project readiness without approving skills,
             activating skills, or exposing third-party content. Doctor rebuilds
-            metadata, reports review and handoff readiness, and chooses one exact
+            metadata, reports review and working artifact readiness, and chooses one exact
             next action. With --fix, doctor may repair first-party bootstrap
             artifacts only.
             """
@@ -541,13 +548,40 @@ def add_doctor_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             """
         ),
     )
-    p.add_argument("--agent", choices=["codex", "claude"], help="Agent target for handoff readiness and bootstrap repairs.")
+    p.add_argument("--agent", choices=["codex", "claude"], help="Agent target for working artifact readiness and bootstrap repairs.")
     p.add_argument("--fix", action="store_true", help="Repair first-party bootstrap artifacts when that is the selected next action. Requires --agent to write.")
     p.add_argument("--no-packages", action="store_true", help="Skip installed package skill discovery.")
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills in diagnostics.")
     p.add_argument("--no-session-record", action="store_true", help="Do not record a compact local doctor event for lookback telemetry.")
     p.add_argument("--json", action="store_true", help="Emit doctor results as JSON.")
     p.set_defaults(func=cmd_doctor)
+
+
+def add_working_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    p = sub.add_parser(
+        "working",
+        help="Quietly sync Skillager state for an active agent session.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=textwrap.dedent(
+            """\
+            Refresh Skillager's local inventory for a resumed agent session.
+            After setup, project-local user-added skills are silently trusted.
+            External package, collection, environment, and global skills still
+            require review before body access, activation, or materialization.
+            """
+        ),
+        epilog=textwrap.dedent(
+            """\
+            Examples:
+              skillager working
+              skillager working --agent codex
+              skillager working --json
+            """
+        ),
+    )
+    p.add_argument("--agent", choices=["codex", "claude"], help="Agent target for compact readiness metadata.")
+    p.add_argument("--json", action="store_true", help="Emit compact sync results as JSON.")
+    p.set_defaults(func=cmd_working)
 
 
 def add_handoff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -557,11 +591,11 @@ def add_handoff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
-            Report the current Skillager state for an agent without approving skills,
-            activating skills, or fixing materialized files. Handoff lists all relevant
-            conditions and chooses one highest-priority next action. It is read-only
-            except for completing pending collection trust migrations from earlier
-            collection refreshes.
+            Report the current Skillager state for explicit post-setup curation or
+            onboarding without approving skills, activating skills, or fixing
+            materialized files. Handoff lists relevant conditions and chooses one
+            highest-priority next action. It is read-only except for completing pending
+            collection trust migrations from earlier collection refreshes.
             """
         ),
         epilog=textwrap.dedent(
@@ -581,11 +615,11 @@ def add_handoff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
 def add_bootstrap_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "bootstrap",
-        help="Install or refresh Skillager's first-party project handoff artifacts.",
+        help="Install or refresh Skillager's first-party project working artifacts.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
-            Install or refresh Skillager Working and the project handoff note for
+            Install or refresh Skillager Working and the project working note for
             a selected agent. Bootstrap is first-party plumbing only: it does not
             approve, activate, or expose third-party skills.
             """
@@ -810,8 +844,8 @@ def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentPars
             provenance. Stub materialization writes a tiny native handle that
             tells the agent how to activate the full available body through
             Skillager on demand. Materialization does not install or repair
-            Skillager Working or project handoff notes; use `skillager bootstrap`
-            or `skillager doctor --fix` for first-party handoff artifacts.
+            Skillager Working or project working notes; use `skillager bootstrap`
+            or `skillager doctor --fix` for first-party working artifacts.
             Customized local copies are not overwritten unless --force is used.
             """
         ),
@@ -1298,6 +1332,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         report["fresh_project_reset"] = fresh_project_reset
     report["no_manifest_skills"] = _no_manifest_skill_summary(report["selected"])
     _remember_setup_paths(root(args), args.paths or None)
+    _mark_setup_complete(root(args), project_dir=project_dir)
     if args.summary_json or args.json:
         bootstrap = _setup_bootstrap_after_review(
             args,
@@ -1391,7 +1426,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 if bootstrap.get("performed") and bootstrap.get("handoff_ready"):
                     _print_agent_next_steps(list(bootstrap.get("artifacts") or []))
             if bootstrap is None or not _setup_already_printed_specific_guidance(bootstrap):
-                print("Next step: tell your agent what you plan to do; it can inspect available metadata with `skillager search --json`, tag relevant available skills, and expose a narrow router, stub, native skill, or no new exposure.")
+                print("Next step: restart or clear the agent; it should run `skillager working`, then continue with your request. Run `skillager handoff` when you want explicit curation guidance.")
     return 0
 
 
@@ -1788,7 +1823,7 @@ def _handoff_repair_action(artifacts: dict[str, Any], *, agent: str | None) -> d
             "kind": "agent-required",
             "reason": "agent not specified",
             "reason_code": HANDOFF_REASON_AGENT_REQUIRED,
-            "message": "Pass --agent codex or --agent claude to check first-party handoff artifacts.",
+            "message": "Pass --agent codex or --agent claude to check first-party working artifacts.",
             "command": None,
         }
     working = artifacts.get("working_skill") or {}
@@ -1818,7 +1853,7 @@ def _handoff_repair_action(artifacts: dict[str, Any], *, agent: str | None) -> d
         status = str(stale_note.get("status") or "unknown")
         return _bootstrap_repair_action(agent, f"project note {status}", reason_code=_project_note_reason_code(status))
     if _artifacts_need_attention(artifacts):
-        return _bootstrap_repair_action(agent, "handoff artifacts need refresh", reason_code=HANDOFF_REASON_HANDOFF_ARTIFACTS)
+        return _bootstrap_repair_action(agent, "working artifacts need refresh", reason_code=HANDOFF_REASON_HANDOFF_ARTIFACTS)
     return None
 
 
@@ -1844,7 +1879,7 @@ def _bootstrap_repair_action(agent: str, reason: str, *, reason_code: str) -> di
         "kind": "bootstrap",
         "reason": reason,
         "reason_code": reason_code,
-        "message": f"Run `{command}` to refresh Skillager's first-party project handoff artifacts.",
+        "message": f"Run `{command}` to refresh Skillager's first-party project working artifacts.",
         "command": command,
     }
 
@@ -1950,6 +1985,248 @@ def cmd_status(args: argparse.Namespace) -> int:
         if agent and not readiness["handoff_ready"] and readiness.get("exposure", {}).get("approved"):
             return 11
     return 0
+
+
+def cmd_working(args: argparse.Namespace) -> int:
+    state_root = root(args)
+    approval_root = catalog_root(args)
+    project_dir = (find_project_root() or Path.cwd()).resolve()
+    result = _build_working_result(
+        state_root,
+        catalog_root=approval_root,
+        project_dir=project_dir,
+        agent=args.agent or _detect_agent_optional(),
+    )
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    elif result.get("new_external_review_count"):
+        _print_working_external_notice(result)
+    return 0
+
+
+def _build_working_result(
+    state_root: Path,
+    *,
+    catalog_root: Path,
+    project_dir: Path,
+    agent: str | None,
+) -> dict[str, Any]:
+    data = build_index(
+        state_root,
+        include_packages=True,
+        approval_root=catalog_root,
+        extra_paths=_active_setup_paths(state_root),
+    )
+    setup_complete = _working_setup_complete(state_root)
+    auto_approved: list[dict[str, Any]] = []
+    if setup_complete:
+        auto_approved = _working_auto_approve_project_skills(state_root, data.get("skills", []), project_dir=project_dir)
+        if auto_approved:
+            data = build_index(
+                state_root,
+                include_packages=True,
+                approval_root=catalog_root,
+                extra_paths=_active_setup_paths(state_root),
+            )
+    _save_native_inventory(state_root, _effective_project_skills(state_root, catalog_root=catalog_root, include_lint_blocked=True))
+    pending_external = _working_pending_external_review(data.get("skills", []))
+    new_external = _working_sync_external_seen(state_root, pending_external)
+    return {
+        "schema": WORKING_RESULT_SCHEMA,
+        "status": "ok",
+        "project": str(project_dir),
+        "agent": agent,
+        "setup_complete": setup_complete,
+        "auto_approved_project_count": len(auto_approved),
+        "auto_approved_project_skills": auto_approved,
+        "pending_external_review_count": len(pending_external),
+        "pending_external_review": [_working_sync_item(skill) for skill in pending_external],
+        "new_external_review_count": len(new_external),
+        "new_external_review": [_working_sync_item(skill) for skill in new_external],
+    }
+
+
+def _working_auto_approve_project_skills(
+    state_root: Path,
+    skills: list[dict[str, Any]],
+    *,
+    project_dir: Path,
+) -> list[dict[str, Any]]:
+    approved: list[dict[str, Any]] = []
+    for skill in sorted(skills, key=lambda item: str(item.get("id") or "")):
+        if skill.get("trust") in TRUSTED_STATES or skill.get("trust") == "blocked":
+            continue
+        if not _working_is_project_local_skill(skill, project_dir=project_dir):
+            continue
+        lint_override = None
+        if skill.get("trust") == "lint_blocked":
+            lint_override = make_lint_override(WORKING_AUTO_PROJECT_REASON, skill.get("lint") or {})
+        record = set_trust(
+            state_root,
+            skill["id"],
+            "reviewed",
+            skill["content_hash"],
+            skill["source"],
+            lint=skill.get("lint"),
+            lint_override=lint_override,
+            reason=WORKING_AUTO_PROJECT_REASON,
+            global_scope=False,
+        )
+        item = _working_sync_item(skill)
+        item["state"] = record.get("state")
+        item["reason"] = WORKING_AUTO_PROJECT_REASON
+        approved.append(item)
+    return approved
+
+
+def _working_is_project_local_skill(skill: dict[str, Any], *, project_dir: Path) -> bool:
+    if (skill.get("source") or {}).get("type") != "project":
+        return False
+    if not skill.get("id") or not skill.get("content_hash"):
+        return False
+    root_value = skill.get("root")
+    if not root_value:
+        return False
+    try:
+        root_path = Path(root_value).resolve()
+        project = project_dir.resolve()
+        root_path.relative_to(project)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    for base in _working_project_skill_bases(project):
+        try:
+            root_path.relative_to(base.resolve())
+        except (OSError, RuntimeError, ValueError):
+            continue
+        return True
+    return False
+
+
+def _working_project_skill_bases(project: Path) -> list[Path]:
+    roots: list[Path] = [project / ".skills", project / "skills"]
+    for root_paths in _project_skill_roots(project).values():
+        roots.extend(root_paths)
+    deduped: list[Path] = []
+    for path in roots:
+        if path not in deduped:
+            deduped.append(path)
+    return deduped
+
+
+def _working_pending_external_review(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        skill
+        for skill in sorted(skills, key=lambda item: str(item.get("id") or ""))
+        if (skill.get("source") or {}).get("type") != "project"
+        and skill.get("trust") in {"discovered", "lint_blocked"}
+        and skill.get("id")
+    ]
+
+
+def _working_state_path(state_root: Path) -> Path:
+    return state_root / "working.json"
+
+
+def _load_working_state(state_root: Path) -> dict[str, Any]:
+    path = _working_state_path(state_root)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _working_setup_path(state_root: Path) -> Path:
+    return state_root / "setup.json"
+
+
+def _mark_setup_complete(state_root: Path, *, project_dir: Path) -> None:
+    state_root.mkdir(parents=True, exist_ok=True)
+    _working_setup_path(state_root).write_text(
+        json.dumps(
+            {
+                "schema": "skillager.setup-state.v1",
+                "project": str(project_dir),
+                "setup_completed_at": session_now(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _working_setup_complete(state_root: Path) -> bool:
+    if _working_setup_path(state_root).exists():
+        return True
+    if _load_status_scope(state_root):
+        return True
+    trust = load_trust(state_root)
+    return bool(trust.get("skills"))
+
+
+def _working_sync_external_seen(state_root: Path, pending_external: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    state = _load_working_state(state_root)
+    has_baseline = "seen_external_pending" in state
+    seen = {str(item) for item in state.get("seen_external_pending") or []}
+    new_external = [skill for skill in pending_external if _working_notice_key(skill) not in seen] if has_baseline else []
+    state_root.mkdir(parents=True, exist_ok=True)
+    _working_state_path(state_root).write_text(
+        json.dumps(
+            {
+                "schema": WORKING_STATE_SCHEMA,
+                "updated_at": session_now(),
+                "seen_external_pending": [_working_notice_key(skill) for skill in pending_external],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return new_external
+
+
+def _working_notice_key(skill: dict[str, Any]) -> str:
+    source = skill.get("source") or {}
+    source_bits = [
+        str(source.get("type") or ""),
+        str(source.get("collection") or ""),
+        str(source.get("package") or ""),
+        str(source.get("environment") or ""),
+        str(source.get("path") or ""),
+    ]
+    return "|".join([str(skill.get("id") or ""), str(skill.get("content_hash") or ""), *source_bits])
+
+
+def _working_sync_item(skill: dict[str, Any]) -> dict[str, Any]:
+    source = skill.get("source") or {}
+    return {
+        "id": skill.get("id"),
+        "trust": skill.get("trust"),
+        "source": {
+            key: value
+            for key, value in source.items()
+            if key in {"type", "collection", "package", "environment", "agent"}
+        },
+        "path": skill.get("root"),
+    }
+
+
+def _print_working_external_notice(result: dict[str, Any]) -> None:
+    new_external = result.get("new_external_review") or []
+    ids = [str(item.get("id")) for item in new_external if item.get("id")]
+    shown = ", ".join(ids[:5])
+    if len(ids) > 5:
+        shown += f", ... {len(ids) - 5} more"
+    print(
+        f"Skillager found {len(ids)} new external skill(s) pending review"
+        f"{f': {shown}' if shown else ''}. "
+        "Run `skillager setup` or `skillager review --summary` when you want to inspect them."
+    )
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -2088,7 +2365,7 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
         return _doctor_issue(
             "manual-artifact-repair-needed",
             DOCTOR_EXIT_MANUAL_REPAIR,
-            handoff_action.get("message") or "Repair local Skillager handoff artifacts manually before refreshing.",
+            handoff_action.get("message") or "Repair local Skillager working artifacts manually before refreshing.",
             None,
         )
     if view["review_needed"]:
@@ -2110,7 +2387,7 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
             return _doctor_issue(
                 "agent-required",
                 DOCTOR_EXIT_BOOTSTRAP_REPAIR,
-                "Review is complete. Choose which agent's handoff artifacts to check.",
+                "Review is complete. Choose which agent's working artifacts to check.",
                 None,
                 next_commands=["skillager doctor --agent codex", "skillager doctor --agent claude"],
             )
@@ -2118,7 +2395,7 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
         return _doctor_issue(
             "artifact-attention-needed",
             DOCTOR_EXIT_BOOTSTRAP_REPAIR,
-            handoff_action.get("message") or "Refresh Skillager's first-party project handoff artifacts.",
+            handoff_action.get("message") or "Refresh Skillager's first-party project working artifacts.",
             str(command) if command else None,
         )
     lookback = view["lookback"]
@@ -2574,7 +2851,7 @@ def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any
     if handoff_action.get("kind") == "manual":
         return {
             "status": "manual-artifact-repair-needed",
-            "message": handoff_action.get("message") or "Repair local Skillager handoff artifacts manually before refreshing.",
+            "message": handoff_action.get("message") or "Repair local Skillager working artifacts manually before refreshing.",
             "command": None,
             "next_commands": [],
         }
@@ -2592,7 +2869,7 @@ def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any
         command = handoff_action.get("command") or f"skillager bootstrap --agent {agent}"
         return {
             "status": "artifact-attention-needed",
-            "message": handoff_action.get("message") or f"Refresh Skillager's project handoff artifacts for {agent}.",
+            "message": handoff_action.get("message") or f"Refresh Skillager's project working artifacts for {agent}.",
             "command": command,
             "next_commands": [command],
         }
@@ -3326,11 +3603,11 @@ def _status_message(
     if readiness and not readiness.get("handoff_ready") and (readiness.get("exposure") or {}).get("approved"):
         handoff = readiness.get("handoff") or {}
         if handoff.get("kind") == "agent-required":
-            return "Skillager: review is complete. Run `skillager status --agent codex` or `skillager status --agent claude` to check handoff readiness."
+            return "Skillager: review is complete. Run `skillager status --agent codex` or `skillager status --agent claude` to check working artifact readiness."
         command = handoff.get("command")
         if command:
-            return f"Skillager: review is complete, but handoff artifacts need refresh. Run `{command}`."
-        return f"Skillager: review is complete, but handoff artifacts need manual repair. {handoff.get('message', '').strip()}"
+            return f"Skillager: review is complete, but working artifacts need refresh. Run `{command}`."
+        return f"Skillager: review is complete, but working artifacts need manual repair. {handoff.get('message', '').strip()}"
     if collection_summary and collection_summary.get("unattached_count"):
         return "Skillager: registered collections are not attached to this project. Run `skillager collection enable <name>` before setup."
     if lookback_summary and lookback_summary.get("pending"):
@@ -3518,6 +3795,7 @@ def _clear_fresh_project_state(state_root: Path) -> dict[str, Any]:
         "project_tags": clear_project_tags(state_root),
         "sessions": clear_sessions(state_root),
         "status_scope": _clear_status_scope(state_root),
+        "setup_state": _clear_setup_state(state_root),
     }
 
 
@@ -3538,6 +3816,16 @@ def _clear_status_scope(state_root: Path) -> bool:
         return False
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"refusing to clear unsafe status scope path: {path}")
+    path.unlink()
+    return True
+
+
+def _clear_setup_state(state_root: Path) -> bool:
+    path = _working_setup_path(state_root)
+    if not path.exists():
+        return False
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"refusing to clear unsafe setup state path: {path}")
     path.unlink()
     return True
 
@@ -4818,7 +5106,7 @@ def _require_materialize_selection(args: argparse.Namespace) -> None:
         return
     raise ValueError(
         "materialize requires explicit skill IDs, --tag, or --all-reviewed. "
-        "To refresh first-party handoff artifacts, run skillager bootstrap --agent <agent>."
+        "To refresh first-party working artifacts, run skillager bootstrap --agent <agent>."
     )
 
 
@@ -4873,7 +5161,7 @@ def _print_router_verification(tag: str, agents: list[str], results: list[dict[s
     print()
     print("Verify router exposure:")
     for agent in current_agents or agents:
-        print(f"  skillager handoff --agent {agent} --json")
+        print(f"  skillager status --agent {agent} --json")
 
 
 def _agent_notes_ready(project_dir: Path, *, agents: list[str]) -> bool:
@@ -5357,7 +5645,15 @@ def _print_setup_bootstrap_result(result: dict[str, Any]) -> None:
         if line:
             print(line)
     if result.get("handoff_ready"):
-        print("Handoff ready.")
+        agents = list(result.get("agents") or [])
+        print("Hand Skillager skill discovery, tagging, materialization, and router/stub/native exposure to the agent so it can shape the project's skill surface:")
+        if len(agents) == 1:
+            print(f"  skillager handoff --agent {agents[0]}")
+        elif agents:
+            for agent in agents:
+                print(f"  - skillager handoff --agent {agent}")
+        else:
+            print("  skillager handoff")
     else:
         _print_setup_bootstrap_reminder(result)
 
@@ -5380,9 +5676,9 @@ def _setup_bootstrap_artifact_line(item: dict[str, Any]) -> str | None:
 def _print_setup_bootstrap_reminder(result: dict[str, Any]) -> None:
     commands = result.get("next_commands") or []
     if len(commands) == 1:
-        print(f"Handoff not ready: run {commands[0]}")
+        print(f"Working artifacts not ready: run {commands[0]}")
     elif commands:
-        print("Handoff not ready. Run one of:")
+        print("Working artifacts not ready. Run one of:")
         for command in commands:
             print(f"  - {command}")
 
@@ -5981,15 +6277,15 @@ def _print_agent_next_steps(results: list[dict[str, Any]]) -> None:
         if first_party_handoff:
             notes = agent_note_paths(project_dir, agents=agents)
             if len(notes) == 1:
-                print(f"  - Project handoff note: {notes[0]}")
+                print(f"  - Project working note: {notes[0]}")
             else:
-                print("  - Project handoff notes:")
+                print("  - Project working notes:")
                 for note in notes:
                     print(f"    - {note}")
     else:
         print(f"  - Restart {_agent_label(agents)} in the directory where you ran Skillager.")
     if first_party_handoff:
-        print("  - The agent will discover Skillager-managed skills from the project note and native skill directory.")
+        print("  - The agent should run `skillager working` after context resets; run `skillager handoff` only for explicit curation.")
     else:
         print("  - The agent will discover Skillager-managed native skills from the native skill directory.")
 

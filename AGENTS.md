@@ -54,7 +54,7 @@ Do not blindly execute every fenced command in docs. Examples with placeholders,
 - Environment and package discovery: skills shipped in a project `.venv`, editable package source tree, or installed package are discovered without importing the package and still go through review before activation.
 - Reviewed project skill path: setup approves low-risk content, search returns trusted metadata, stub/native materialization writes project files, and guarded activation emits the reviewed body.
 - Router path: collection or tag inventory can be exposed through one compact router without loading every skill body.
-- Handoff loop: agents start with `skillager handoff`, ask what the user plans to do, then curate tags or exposure narrowly.
+- Working loop: agents run `skillager working` after context resets or resumed sessions; `handoff` is explicit post-setup curation/onboarding, not an automatic first prompt ritual.
 - Lookback: session signals are compact behavioral hints, not automatic approval or exposure decisions.
 
 ## Release Notes

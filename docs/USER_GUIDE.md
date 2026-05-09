@@ -5,7 +5,7 @@ Skillager is a CLI gate between discovered skills and agent-native skill directo
 The normal loop is:
 
 ```text
-setup --agent <agent> -> restart agent -> handoff -> describe goal
+setup --agent <agent> -> restart agent -> working -> describe goal
 ```
 
 ## First Run In A Project
@@ -16,11 +16,11 @@ Run this from the directory where you will start Codex or Claude:
 skillager setup --agent codex
 ```
 
-Use `--agent claude` instead for Claude projects. `setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything. Audience scope uses only declared manifest metadata; skills without it are grouped as "everything else." When setup applies review changes with `--agent` or `--all-agents`, it also refreshes the first-party handoff artifacts unless `--no-bootstrap` is passed.
+Use `--agent claude` instead for Claude projects. `setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything. Audience scope uses only declared manifest metadata; skills without it are grouped as "everything else." When setup applies review changes with `--agent` or `--all-agents`, it also refreshes the first-party working artifacts unless `--no-bootstrap` is passed.
 
 Install Skillager as a global user tool with `uv tool install skillager` or `pipx install skillager`. It scans the current project's `.venv` and installed packages for skills, but ordinary projects do not need Skillager installed inside their own virtual environment.
 
-At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent starts with `skillager handoff` and can use available metadata to add useful skills to tags, attach project-relevant tags, and expose narrow native skills, stubs, a compact router skill for a tag, or nothing.
+At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working` after context resets and can use available metadata to add useful skills to tags, attach project-relevant tags, and expose narrow native skills, stubs, a compact router skill for a tag, or nothing. Run `skillager handoff` when you want explicit post-setup curation guidance.
 
 Setup does not materialize every approved skill by default. Approval makes a skill available for consideration; tagging and exposure are reversible project ergonomics based on what you are doing.
 
@@ -105,7 +105,7 @@ skillager setup --source project --accept-low --agent codex --no-packages --summ
 skillager search "spatial" --no-session-record --json
 ```
 
-The setup summary JSON includes a compact `bootstrap` object when setup attempted or skipped first-party handoff refresh. Automation can check `bootstrap.handoff_ready` and follow `bootstrap.next_commands` without parsing human text.
+The setup summary JSON includes a compact `bootstrap` object when setup attempted or skipped first-party working artifact refresh. Automation can check `bootstrap.handoff_ready` and follow `bootstrap.next_commands` without parsing human text.
 
 Skillager does not require git. In a plain directory, it treats the current directory as the project root. Project state is user-local at `${XDG_STATE_HOME:-~/.local/state}/skillager/projects/<sha256(project_path)>/`, or `SKILLAGER_STATE_DIR` when explicitly set. Reusable catalog state is separate at `${XDG_CONFIG_HOME:-~/.config}/skillager/`, or `SKILLAGER_CATALOG_STATE_DIR` / `--catalog-state-dir` when explicitly set.
 
@@ -113,7 +113,7 @@ Legacy in-tree `<project>/.skillager/` state is ignored by ordinary commands. If
 
 Use `--trust-all` or `--yolo` only for fully trusted sources. They are aliases: both mark all selected skills reviewed, including medium, high-risk, and lint-blocked findings, and record the current content hashes. For lint-blocked skills they write an audited shortcut override reason.
 
-Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-project --agent codex` when you want to reset project-local Skillager state and refresh Codex handoff artifacts in one run: it clears project-local decisions, project tags, session records, and saved setup scope for the selected scope. It reports, but does not delete, retained reusable global approvals, global catalog collections/tags, and materialized skill files.
+Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-project --agent codex` when you want to reset project-local Skillager state and refresh Codex working artifacts in one run: it clears project-local decisions, project tags, session records, and saved setup scope for the selected scope. It reports, but does not delete, retained reusable global approvals, global catalog collections/tags, and materialized skill files.
 
 `skillager list` shows the effective project inventory and hides global native skills unless you pass `--include-global`. Use `skillager list --no-packages` when you want only local project and attached-tag inventory. Use `skillager list --summary-json --agent codex` when an agent needs compact orientation: it includes counts, every listed skill ID, and duplicate native-variant hints. Use `skillager list --json --full-json` only for verbose Skillager diagnostics.
 
@@ -123,7 +123,7 @@ Tags are reusable curation. Users can curate them manually, and agents can maint
 
 `skillager status` checks PyPI for Skillager updates at most once per day and prints `uv tool upgrade skillager` when a newer release is available. Network failures are silent. Set `SKILLAGER_NO_UPDATE_CHECK=1` to disable this check.
 
-Use `skillager bootstrap --agent <agent>` when review is already complete but handoff artifacts are missing or stale. Use `skillager materialize` directly when you already know a reviewed skill or tag should be exposed to the agent. `materialize` requires explicit skill IDs, `--tag`, or `--all-reviewed`; it does not install or repair Skillager Working or project handoff notes.
+Use `skillager bootstrap --agent <agent>` when review is already complete but working artifacts are missing or stale. Use `skillager materialize` directly when you already know a reviewed skill or tag should be exposed to the agent. `materialize` requires explicit skill IDs, `--tag`, or `--all-reviewed`; it does not install or repair Skillager Working or project working notes.
 
 Use `--mode stub` for skills you want visible by name without loading the full skill body into every session. A stub contains only the skill summary and an activation command; the full body still comes through Skillager's approval gate. After setup, Skillager prints numbered available-but-hidden stub candidates so you can say “please stub 1, 5, 8.”
 
@@ -131,7 +131,7 @@ Use `--mode stub` for skills you want visible by name without loading the full s
 
 ## Lookback
 
-Lookback is an asynchronous review loop, not a required first-run step. You can ignore it until `handoff`, `status`, or `doctor` reports pending evidence.
+Lookback is an asynchronous review loop, not a required first-run step. You can ignore it until `status`, explicit `handoff`, or `doctor` reports pending evidence.
 
 Track a session when the agent exposes a session ID:
 
@@ -148,7 +148,7 @@ Lookback recommendations use three actions:
 
 By default, lookback computes recommendations from the most recent 10 sessions plus active sessions. This keeps parallel sessions from fighting over shared project-native skills and makes promotion/demotion depend on repeated evidence instead of one isolated task.
 
-You do not need to remember to run lookback before exiting. The next `skillager handoff` reports a compact pending lookback summary when completed-session or explicit-feedback evidence is ready for review. Active-session search and activation events are collected quietly and do not interrupt first handoff. After `skillager lookback` is reviewed, the same evidence is acknowledged until new lookback evidence appears.
+You do not need to remember to run lookback before exiting. `skillager status` and explicit `skillager handoff` report a compact pending lookback summary when completed-session or explicit-feedback evidence is ready for review. Active-session search and activation events are collected quietly and do not interrupt `skillager working`. After `skillager lookback` is reviewed, the same evidence is acknowledged until new lookback evidence appears.
 
 Skillager also records compact local search/materialization events so lookback can spot behavior-based overlap, such as two skills repeatedly appearing in the same searches or sessions. These events do not include skill bodies, chat transcripts, command output, or full search text; search queries are stored as a hash plus a short preview.
 

@@ -19,12 +19,15 @@ WORKING_SKILL_ID = "skillager/working"
 WORKING_REASON_LOCAL_CUSTOMIZATION = "target has local customizations"
 WORKING_REASON_UNMANAGED = "target exists without Skillager provenance"
 AGENT_NOTE = (
-    "Run `skillager handoff` at session start. Follow its Next item, use only available/materialized "
+    "Run `skillager working` after context resets or resumed sessions. It silently syncs project-local skills; use only available/materialized "
     "Skillager-managed skills, ask before setup or approval changes, ask the user to run `skillager doctor --agent <agent>` if state seems off, "
     "and report curation/exposure changes."
 )
 AGENT_NOTE_SECTION = f"## Skillager\n{AGENT_NOTE}\n"
 LEGACY_AGENT_NOTES = (
+    "Run `skillager handoff` at session start. Follow its Next item, use only available/materialized "
+    "Skillager-managed skills, ask before setup or approval changes, ask the user to run `skillager doctor --agent <agent>` if state seems off, "
+    "and report curation/exposure changes.",
     "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
     "ask the user to run `skillager setup` if review is needed.",
     "Skillager-managed skills are installed for this project; run `skillager --help` "
@@ -171,7 +174,7 @@ def materialize_working_skill_one(
 def render_working_skill(agent: str = "codex") -> str:
     return f"""---
 name: "Skillager Working"
-description: "Use Skillager safely from an agent: handoff first, available metadata only, agent-managed tags, guarded activation, and lookback."
+description: "Use Skillager safely from an agent: quiet working sync, available metadata only, agent-managed tags, guarded activation, and lookback."
 ---
 
 # Skillager Working
@@ -184,12 +187,11 @@ Availability is the eligibility gate. If a skill appears in normal Skillager lis
 
 ## Session Start
 
-1. Run `skillager handoff --agent {agent}` once.
-2. Follow the `Next:` item. If handoff reports setup or migration review is needed, ask the user to run the suggested command from the project directory before using Skillager-managed skills.
-3. If handoff reports stale or missing project artifacts, ask the user before refreshing them. Do not overwrite unmanaged artifacts unless the user explicitly approves the exact repair.
-4. If handoff reports lookback pending, ask whether the user wants to review `skillager lookback` before changing shared exposure. Do not apply recommendations without user approval. Active-session lookback signals are only collection-in-progress.
-5. If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent {agent}` in their terminal. Re-run handoff after repairs if readiness changes.
-6. If handoff is ready, ask what the user plans to do in this repo before curating tags or materializing additional skills.
+1. Run `skillager working --agent {agent}` after context resets or resumed sessions.
+2. If it prints nothing, continue with the user's request. Do not mention Skillager unless the task needs a skill, review, curation, materialization, activation, or repair.
+3. If it reports newly discovered external skills, tell the user briefly. External package, environment, collection, and global skills still require owner review before body access or activation.
+4. Use `skillager handoff --agent {agent}` only after setup or when the user explicitly wants curation/onboarding guidance.
+5. If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent {agent}` in their terminal. Re-run `skillager working --agent {agent}` after repairs if readiness changes.
 
 ## Query Cadence
 
@@ -198,7 +200,7 @@ Do not search Skillager on every user message. Search only when:
 - The user starts a new domain or task.
 - The current task would benefit from specialized skills not already materialized.
 - You are unsure how to approach the task and an available skill may contain the right workflow.
-- `skillager status` reports newly available skills.
+- `skillager working` reports newly available external skills or the user adds project-local skills.
 - The user asks about available skills.
 
 Once you choose a native skill or router path for a task, keep using that choice until the task changes. Keep Skillager checks quiet unless review, tag curation, materialization, activation, or user approval is needed.
@@ -208,6 +210,7 @@ Once you choose a native skill or router path for a task, keep using that choice
 These commands are safe because they do not reveal full skill bodies:
 
 ```bash
+skillager working --agent {agent} --json
 skillager handoff --agent {agent} --json
 skillager status --json
 skillager list --summary-json --agent {agent}
@@ -662,7 +665,7 @@ def _working_skill(agent: str) -> dict[str, Any]:
     return {
         "id": WORKING_SKILL_ID,
         "name": "Skillager Working",
-        "summary": "Use Skillager safely from an agent: handoff first, available metadata only, agent-managed tags, narrow router/native materialization, guarded activation, and lookback.",
+        "summary": "Use Skillager safely from an agent: quiet working sync, available metadata only, agent-managed tags, narrow router/native materialization, guarded activation, and lookback.",
         "source": {"type": "skillager-working"},
         "content_hash": source_hash,
         "trust": "reviewed",
