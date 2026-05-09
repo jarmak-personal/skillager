@@ -19,6 +19,7 @@ ensure_agent_notes = _impl.ensure_agent_notes
 materialize_router = _impl.materialize_router
 materialize_skills = _impl.materialize_skills
 materialize_working_skill = _impl.materialize_working_skill
+refresh_legacy_agent_notes = _impl.refresh_legacy_agent_notes
 render_working_skill = _impl.render_working_skill
 target_dir = _impl.target_dir
 working_source_hash = _impl.working_source_hash
@@ -49,6 +50,7 @@ __all__ = [
     "materialize_router",
     "materialize_skills",
     "materialize_working_skill",
+    "refresh_legacy_agent_notes",
     "render_working_skill",
     "target_dir",
     "working_source_hash",

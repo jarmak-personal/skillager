@@ -591,6 +591,28 @@ def ensure_agent_notes(project_dir: Path | None = None, *, agents: list[str] | N
     return paths
 
 
+def refresh_legacy_agent_notes(project_dir: Path | None = None, *, agents: list[str] | None = None) -> list[dict[str, str]]:
+    updates: list[dict[str, str]] = []
+    for path in agent_note_paths(project_dir, agents=agents):
+        updated = _refresh_legacy_agent_note(path)
+        if updated:
+            updates.append({"path": str(path), "status": "updated"})
+    return updates
+
+
+def _refresh_legacy_agent_note(path: Path) -> bool:
+    if not path.exists():
+        return False
+    content = path.read_text(encoding="utf-8")
+    if AGENT_NOTE in content:
+        return False
+    for legacy in LEGACY_AGENT_NOTES:
+        if legacy in content:
+            path.write_text(_replace_legacy_agent_note(content, legacy), encoding="utf-8")
+            return True
+    return False
+
+
 def _ensure_agent_note(path: Path) -> None:
     if path.exists():
         content = path.read_text(encoding="utf-8")

@@ -30,6 +30,13 @@ def write_manifest(skill_dir: Path, audience: str) -> None:
     )
 
 
+OLD_HANDOFF_NOTE = (
+    "Run `skillager handoff` at session start. Follow its Next item, use only available/materialized "
+    "Skillager-managed skills, ask before setup or approval changes, ask the user to run `skillager doctor --agent <agent>` if state seems off, "
+    "and report curation/exposure changes."
+)
+
+
 class SkillagerStatusHandoffSessionTests(unittest.TestCase):
 
     def test_status_reports_unreviewed_skills_without_activation(self) -> None:
@@ -170,6 +177,41 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertEqual(status["readiness"], handoff["readiness"])
             self.assertTrue(status["readiness"]["ready"])
             self.assertEqual(status["readiness"]["exposure"]["available_on_demand"], 1)
+
+    def test_handoff_refreshes_legacy_project_note_to_working_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            note = root / "AGENTS.md"
+            note.write_text(
+                f"Existing notes.\n## Skillager\n{OLD_HANDOFF_NOTE}\nOther notes stay.\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                json_output = StringIO()
+                with redirect_stdout(json_output):
+                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
+                note.write_text(
+                    f"Existing notes.\n## Skillager\n{OLD_HANDOFF_NOTE}\nOther notes stay.\n",
+                    encoding="utf-8",
+                )
+                text_output = StringIO()
+                with redirect_stdout(text_output):
+                    self.assertEqual(main(["handoff", "--agent", "codex"]), 0)
+            updated = note.read_text(encoding="utf-8")
+            self.assertEqual(updated.count("## Skillager"), 1)
+            self.assertIn("skillager working", updated)
+            self.assertNotIn(OLD_HANDOFF_NOTE, updated)
+            self.assertIn("Other notes stay.", updated)
+            data = json.loads(json_output.getvalue())
+            self.assertEqual(data["note_updates"], [{"path": str(note), "status": "updated"}])
+            self.assertEqual(data["state"]["artifacts"]["project_notes"][0]["status"], "present")
+            self.assertIn("Updated project note:", text_output.getvalue())
+            self.assertIn(str(note), text_output.getvalue())
 
     def test_status_reports_pending_lookback_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

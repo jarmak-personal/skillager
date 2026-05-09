@@ -57,6 +57,7 @@ from ..materialize import (
     ensure_agent_notes,
     materialize_skills,
     materialize_working_skill,
+    refresh_legacy_agent_notes,
 )
 from ..materialize import materialize_router
 from ..materialize import target_dir, working_source_hash
@@ -2496,7 +2497,9 @@ def _print_doctor_result(result: dict[str, Any]) -> None:
 def cmd_handoff(args: argparse.Namespace) -> int:
     agent = args.agent or _detect_agent()
     project_dir = find_project_root() or Path.cwd()
+    note_updates = refresh_legacy_agent_notes(project_dir, agents=[agent])
     handoff = _build_handoff(root(args), catalog_root=catalog_root(args), project_dir=project_dir, agent=agent)
+    handoff["note_updates"] = note_updates
     if args.json:
         print(json.dumps(handoff, indent=2, sort_keys=True))
     else:
@@ -2979,6 +2982,12 @@ def _readiness_next_actions(readiness: dict[str, Any]) -> list[str]:
 def _print_handoff(handoff: dict[str, Any]) -> None:
     state = handoff["state"]
     print(_style("Skillager handoff complete", "bold"))
+    note_updates = handoff.get("note_updates") or []
+    if note_updates:
+        print()
+        print("Updated project note:")
+        for item in note_updates:
+            print(f"  {item.get('path')}")
     print()
     readiness = handoff.get("readiness") or {}
     exposure = readiness.get("exposure") or {}
