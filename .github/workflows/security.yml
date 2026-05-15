@@ -21,7 +21,7 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v6.0.2
-      - uses: actions/dependency-review-action@v4.9.0
+      - uses: actions/dependency-review-action@v5.0.0
 
   codeql:
     runs-on: ubuntu-latest
