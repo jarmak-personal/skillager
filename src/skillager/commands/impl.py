@@ -1098,7 +1098,7 @@ def cmd_tag_sync(args: argparse.Namespace) -> int:
         raise ValueError("no destination projects found")
     source_tags = project_tags.load_tags(source)
     selected = _select_sync_tags(source_tags, args.tag)
-    results = []
+    results: list[dict[str, Any]] = []
     for destination in destinations:
         if destination == source:
             continue
@@ -1294,13 +1294,13 @@ def cmd_state_migrate_tags(args: argparse.Namespace) -> int:
             print("No legacy global tags found.")
         return 0
     projects = _migration_projects(catalog_root(args), _current_project_dir())
-    results = []
+    results: list[dict[str, Any]] = []
     migrated = 0
     for project in projects:
         attached = _legacy_attached_tags_for_project(project)
         if not attached:
             continue
-        project_results = []
+        project_results: list[dict[str, Any]] = []
         for tag in attached:
             skill_ids = global_tags.get(tag)
             if not skill_ids:
@@ -1314,9 +1314,9 @@ def cmd_state_migrate_tags(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        for project in results:
-            tags = ", ".join(f"{item['tag']}={item['skills']}" for item in project["tags"])
-            print(f"{project['project']}: {tags}")
+        for result in results:
+            tags = ", ".join(f"{item['tag']}={item['skills']}" for item in result["tags"])
+            print(f"{result['project']}: {tags}")
         if not results:
             print("No legacy project tag attachments found.")
     return 0
@@ -4345,11 +4345,11 @@ def _effective_project_skills(
         item["availability"] = sorted(set(item.get("availability", [])) | {"attached-tag"})
         _merge_skill_inventory(by_id, item)
     for skill_id, tags in tag_membership.items():
-        item = by_id.get(skill_id)
-        if not item:
+        existing = by_id.get(skill_id)
+        if not existing:
             continue
-        item["tags"] = sorted(set(item.get("tags", [])) | tags)
-        item["availability"] = sorted(set(item.get("availability", [])) | {"attached-tag"})
+        existing["tags"] = sorted(set(existing.get("tags", [])) | tags)
+        existing["availability"] = sorted(set(existing.get("availability", [])) | {"attached-tag"})
     return [by_id[skill_id] for skill_id in sorted(by_id)]
 
 
