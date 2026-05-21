@@ -19,6 +19,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .. import __version__
+from .. import project_registry
 from .. import project_tags
 from ..authored import record_authored_skill
 from ..audience import AUDIENCE_OTHER, audience_bucket, audience_bucket_label, declared_audiences
@@ -52,7 +53,7 @@ from ..materialize import (
 from ..materialize import materialize_router
 from ..materialize import target_dir, working_source_hash
 from ..manifest import init_manifests
-from ..paths import cache_root, catalog_state_root, find_project_root, legacy_project_state_root, state_root
+from ..paths import cache_root, catalog_state_root, find_project_root, legacy_project_state_root, project_state_root, state_root
 from ..render import render_skill
 from ..review import (
     annotate_duplicate_content,
@@ -639,6 +640,7 @@ def add_tag_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
               skillager tag show gis
               skillager tag remove gis community/gis-domain
               skillager tag delete gis
+              skillager tag sync --from ../other-project --to .
             """
         ),
     )
@@ -660,6 +662,15 @@ def add_tag_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
     delete = tag_sub.add_parser("delete")
     delete.add_argument("tag")
     delete.set_defaults(func=cmd_tag_delete)
+    sync = tag_sub.add_parser("sync")
+    sync.add_argument("--from", dest="from_project", required=True, type=Path, help="Source project directory to copy tags from.")
+    target = sync.add_mutually_exclusive_group()
+    target.add_argument("--to", dest="to_project", type=Path, help="Destination project directory. Defaults to the current project.")
+    target.add_argument("--to-all", action="store_true", help="Copy to every known project in the registry.")
+    sync.add_argument("--tag", help="Sync only one tag.")
+    sync.add_argument("--replace", action="store_true", help="Replace destination tag contents instead of merging.")
+    sync.add_argument("--json", action="store_true")
+    sync.set_defaults(func=cmd_tag_sync)
     list_cmd = tag_sub.add_parser("list")
     list_cmd.add_argument("--json", action="store_true")
     list_cmd.set_defaults(func=cmd_tag_list)
@@ -709,6 +720,10 @@ def add_state_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     migrate.set_defaults(func=cmd_state_migrate)
     import_global = state_sub.add_parser("import-global-approvals", help="Import legacy in-tree reusable approvals after explicit review.")
     import_global.set_defaults(func=cmd_state_import_global_approvals)
+    migrate_tags = state_sub.add_parser("migrate-tags", help="Copy legacy global tag attachments into project-local tag files.")
+    migrate_tags.add_argument("--to", choices=["projects"], required=True)
+    migrate_tags.add_argument("--json", action="store_true")
+    migrate_tags.set_defaults(func=cmd_state_migrate_tags)
 
 
 def add_new_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -839,7 +854,7 @@ def root(args: argparse.Namespace) -> Path:
         resolved = args.state_dir.resolve()
     else:
         resolved = state_root()
-        if os.environ.get("SKILLAGER_STATE_DIR") is None and getattr(args, "func", None) not in {cmd_state_migrate, cmd_state_import_global_approvals}:
+        if os.environ.get("SKILLAGER_STATE_DIR") is None and getattr(args, "func", None) not in {cmd_state_migrate, cmd_state_import_global_approvals, cmd_state_migrate_tags}:
             _warn_legacy_project_state(resolved)
     setattr(args, "_skillager_state_root", resolved)
     return resolved
@@ -1071,6 +1086,50 @@ def cmd_tag_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tag_sync(args: argparse.Namespace) -> int:
+    source = args.from_project.expanduser().resolve()
+    if not source.exists():
+        raise ValueError(f"source project does not exist: {source}")
+    if args.to_all:
+        destinations = [project for project in project_registry.known_projects(catalog_root(args)) if project != source]
+    else:
+        destinations = [(args.to_project or _current_project_dir()).expanduser().resolve()]
+    if not destinations:
+        raise ValueError("no destination projects found")
+    source_tags = project_tags.load_tags(source)
+    selected = _select_sync_tags(source_tags, args.tag)
+    results = []
+    for destination in destinations:
+        if destination == source:
+            continue
+        for tag, entry in selected.items():
+            updated = project_tags.set_tag_skills(
+                destination,
+                tag,
+                list(entry.get("skills") or []),
+                sync=args.replace,
+                catalog_state_dir=catalog_root(args),
+            )
+            results.append({"project": str(destination), "tag": updated["tag"], "skills": len(updated["skills"])})
+    payload = {"schema": "skillager.tag-sync.v1", "source": str(source), "results": results}
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        for item in results:
+            print(f"{item['project']}: {item['tag']} {item['skills']} skill(s)")
+    return 0
+
+
+def _select_sync_tags(data: dict[str, Any], tag: str | None) -> dict[str, dict[str, Any]]:
+    tags = data.get("tags") or {}
+    if tag is None:
+        return dict(tags)
+    tag_key = project_tags.normalize_tag(tag)
+    if tag_key not in tags:
+        raise KeyError(f"tag not found in source project: {tag_key}")
+    return {tag_key: dict(tags[tag_key])}
+
+
 def cmd_tag_list(args: argparse.Namespace) -> int:
     data = project_tags.load_tags(_current_project_dir())
     if args.json:
@@ -1223,6 +1282,65 @@ def cmd_state_import_global_approvals(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_state_migrate_tags(args: argparse.Namespace) -> int:
+    if args.to != "projects":
+        raise ValueError("--to must be projects")
+    global_tags = load_tags(catalog_root(args)).get("tags") or {}
+    if not global_tags:
+        payload = {"schema": "skillager.tag-migration.v1", "projects": [], "migrated": 0}
+        if args.json:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        else:
+            print("No legacy global tags found.")
+        return 0
+    projects = _migration_projects(catalog_root(args), _current_project_dir())
+    results = []
+    migrated = 0
+    for project in projects:
+        attached = _legacy_attached_tags_for_project(project)
+        if not attached:
+            continue
+        project_results = []
+        for tag in attached:
+            skill_ids = global_tags.get(tag)
+            if not skill_ids:
+                continue
+            updated = project_tags.set_tag_skills(project, tag, list(skill_ids), sync=True, catalog_state_dir=catalog_root(args))
+            migrated += 1
+            project_results.append({"tag": tag, "skills": len(updated["skills"])})
+        if project_results:
+            results.append({"project": str(project), "tags": project_results})
+    payload = {"schema": "skillager.tag-migration.v1", "projects": results, "migrated": migrated}
+    if args.json:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        for project in results:
+            tags = ", ".join(f"{item['tag']}={item['skills']}" for item in project["tags"])
+            print(f"{project['project']}: {tags}")
+        if not results:
+            print("No legacy project tag attachments found.")
+    return 0
+
+
+def _migration_projects(catalog_root: Path, current_project: Path) -> list[Path]:
+    projects = [current_project.expanduser().resolve()]
+    projects.extend(project_registry.known_projects(catalog_root))
+    return sorted(dict.fromkeys(projects))
+
+
+def _legacy_attached_tags_for_project(project: Path) -> list[str]:
+    state_path = project_state_root(project) / "project_tags.json"
+    if not state_path.exists() and project.resolve() == _current_project_dir():
+        state_path = state_root(project) / "project_tags.json"
+    if not state_path.exists():
+        return []
+    try:
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return sorted(str(tag) for tag in data.get("attached_tags") or [])
+
+
 def _copy_legacy_project_state(legacy: Path, destination: Path, *, project_trust: dict[str, Any]) -> None:
     if destination.exists() and any(destination.iterdir()):
         raise ValueError(f"destination state already exists and is not empty: {destination}")
@@ -1320,6 +1438,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     report["no_manifest_skills"] = _no_manifest_skill_summary(report["selected"])
     _remember_setup_paths(root(args), args.paths or None)
     _mark_setup_complete(root(args), project_dir=project_dir)
+    _record_project_registry(args, project_dir)
     if args.summary_json or args.json:
         bootstrap = _setup_bootstrap_after_review(
             args,
@@ -2331,6 +2450,8 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     agents = _bootstrap_agents(args)
     project_dir = (find_project_root() or Path.cwd()).resolve()
     bootstrap = _perform_bootstrap(agents=agents, project_dir=project_dir, dry_run=args.dry_run, force=args.force)
+    if not args.dry_run:
+        _record_project_registry(args, project_dir)
     result = {
         "schema": "skillager.bootstrap.v1",
         "project": str(project_dir),
@@ -2344,6 +2465,10 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     else:
         _print_bootstrap_result(result)
     return 11 if _bootstrap_has_local_blocker(bootstrap["artifacts"]) else 0
+
+
+def _record_project_registry(args: argparse.Namespace, project_dir: Path) -> None:
+    project_registry.record_project(catalog_root(args), project_dir, state_dir=root(args))
 
 
 def _bootstrap_agents(args: argparse.Namespace) -> list[str]:

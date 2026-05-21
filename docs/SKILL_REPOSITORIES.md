@@ -41,10 +41,13 @@ skillager tag add gis vibespatial/gis-domain
 skillager tag add all-community --from-collection community
 skillager tag add all-community --from-collection community --sync
 skillager tag show gis
+skillager tag sync --from ../other-project --to .
 ```
 
 Tags live in `<project>/.skillager/tags.json`. `tag add` accepts available registered collection skill IDs and available current project inventory IDs. This lets agents maintain useful project tags after setup while user-authority review stays in the global trust/catalog state.
 Tag show/search commands hide lint-blocked skills unless you pass `--include-lint-blocked` for diagnostics. That flag only changes read-only visibility; it never approves or exposes a skill.
+
+Project tags do not broadcast live across repositories. Use `tag sync --from <project> --to <project>` for an explicit copy, or `--to-all` to copy to known projects recorded by setup/bootstrap.
 
 ## Project Tags
 
@@ -56,6 +59,14 @@ skillager project tags
 ```
 
 A tag belongs to a project by existing in that project's tag file. `project attach-tag` remains as a compatibility alias for old workflows, but new flows should create or update tags directly. When a project tag is created while using an external catalog location, Skillager records that catalog path in the tag file so later `search`, `show`, and guarded `activate` commands work without repeating `--catalog-state-dir`.
+
+For older global-tag installs, run this once from a user shell after setup has recorded your projects:
+
+```bash
+skillager state migrate-tags --to projects
+```
+
+This copies legacy global tag attachments into project-local tag files and leaves the old global tag data in place for rollback.
 
 After review, keep most large-repository skills searchable behind Skillager. Materialize only a small native set that is always relevant to the project, use stub mode for approved commands that should be visible by name, or use router mode for a curated tag when the agent needs broad access without loading every skill. Agents may update tags and scoped exposure after you tell them what you are working on; they should report the changes they made.
 
