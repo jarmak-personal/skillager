@@ -25,6 +25,7 @@ def build_index(
     include_packages: bool = True,
     approval_root: Path | None = None,
     extra_paths: list[Path] | None = None,
+    persist: bool = True,
 ) -> dict[str, Any]:
     approval_root = approval_root or state_root
     skills, errors = discover(paths, include_packages=include_packages, extra_paths=extra_paths)
@@ -47,16 +48,17 @@ def build_index(
         entries.append(entry)
     entries.sort(key=lambda item: item["id"])
     data = {"version": 1, "skills": entries, "errors": errors}
-    state_root.mkdir(parents=True, exist_ok=True)
-    index_path(state_root).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if persist:
+        state_root.mkdir(parents=True, exist_ok=True)
+        index_path(state_root).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return data
 
 
-def load_index(state_root: Path, *, approval_root: Path | None = None) -> dict[str, Any]:
+def load_index(state_root: Path, *, approval_root: Path | None = None, persist_missing: bool = True) -> dict[str, Any]:
     approval_root = approval_root or state_root
     path = index_path(state_root)
     if not path.exists():
-        return build_index(state_root, approval_root=approval_root)
+        return build_index(state_root, approval_root=approval_root, persist=persist_missing)
     data = json.loads(path.read_text(encoding="utf-8"))
     for skill in data.get("skills", []):
         if skill.get("id") and skill.get("content_hash"):

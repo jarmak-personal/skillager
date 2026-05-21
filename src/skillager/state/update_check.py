@@ -21,6 +21,7 @@ def check_for_update(
     ttl_seconds: int = DEFAULT_TTL_SECONDS,
     timeout_seconds: float = 1.5,
     now: float | None = None,
+    write_cache: bool = True,
 ) -> dict[str, Any]:
     if os.environ.get("SKILLAGER_NO_UPDATE_CHECK"):
         return _result(current_version=current_version, checked=False, enabled=False)
@@ -28,6 +29,10 @@ def check_for_update(
     cached = _load_cache(cache_dir)
     if cached and now - float(cached.get("checked_at", 0)) < ttl_seconds:
         return _result_from_record(cached, current_version=current_version, cached=True)
+    if not write_cache:
+        if cached:
+            return _result_from_record(cached, current_version=current_version, cached=True)
+        return _result(current_version=current_version, checked=False, cached=False)
     try:
         latest = _fetch_latest_version(package, timeout_seconds=timeout_seconds)
     except (OSError, URLError, TimeoutError, ValueError, json.JSONDecodeError):

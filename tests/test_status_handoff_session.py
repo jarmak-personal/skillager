@@ -167,7 +167,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertTrue(status["readiness"]["ready"])
             self.assertEqual(status["readiness"]["exposure"]["available_on_demand"], 1)
 
-    def test_handoff_refreshes_legacy_project_note_to_working_note(self) -> None:
+    def test_handoff_reports_legacy_project_note_without_rewriting_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -184,23 +184,17 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                 json_output = StringIO()
                 with redirect_stdout(json_output):
                     self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
-                note.write_text(
-                    f"Existing notes.\n## Skillager\n{OLD_HANDOFF_NOTE}\nOther notes stay.\n",
-                    encoding="utf-8",
-                )
                 text_output = StringIO()
                 with redirect_stdout(text_output):
                     self.assertEqual(main(["handoff", "--agent", "codex"]), 0)
             updated = note.read_text(encoding="utf-8")
             self.assertEqual(updated.count("## Skillager"), 1)
-            self.assertIn("skillager working", updated)
-            self.assertNotIn(OLD_HANDOFF_NOTE, updated)
+            self.assertIn(OLD_HANDOFF_NOTE, updated)
             self.assertIn("Other notes stay.", updated)
             data = json.loads(json_output.getvalue())
-            self.assertEqual(data["note_updates"], [{"path": str(note), "status": "updated"}])
-            self.assertEqual(data["state"]["artifacts"]["project_notes"][0]["status"], "present")
-            self.assertIn("Updated project note:", text_output.getvalue())
-            self.assertIn(str(note), text_output.getvalue())
+            self.assertEqual(data["note_updates"], [])
+            self.assertEqual(data["state"]["artifacts"]["project_notes"][0]["status"], "stale")
+            self.assertNotIn("Updated project note:", text_output.getvalue())
 
     def test_status_respects_materialized_setup_audience_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

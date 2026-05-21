@@ -56,7 +56,6 @@ from ..materialize import (
     ensure_agent_notes,
     materialize_skills,
     materialize_working_skill,
-    refresh_legacy_agent_notes,
 )
 from ..materialize import materialize_router
 from ..materialize import target_dir, working_source_hash
@@ -1558,6 +1557,7 @@ def _build_visible_skill_view(
         include_packages=include_packages,
         approval_root=catalog_root,
         extra_paths=_active_setup_paths(state_root, paths),
+        persist=False,
     )
     extra_skills = select_attached_tag_skills(
         state_root,
@@ -1851,7 +1851,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     tagging_summary = view["tagging"]
     migration_summary = view["migration"]
     duplicate_content = view["duplicate_content"]
-    update = check_for_update(cache_root(), current_version=__version__)
+    update = check_for_update(cache_root(), current_version=__version__, write_cache=False)
     readiness = view["readiness"]
     status = {
         "indexed": len(data.get("skills", [])),
@@ -1940,6 +1940,7 @@ def _build_working_result(
         include_packages=True,
         approval_root=catalog_root,
         extra_paths=_active_setup_paths(state_root),
+        persist=False,
     )
     setup_complete = _working_setup_complete(state_root)
     pending_external = _working_pending_external_review(data.get("skills", []))
@@ -2262,9 +2263,8 @@ def _print_doctor_result(result: dict[str, Any]) -> None:
 def cmd_handoff(args: argparse.Namespace) -> int:
     agent = args.agent or _detect_agent()
     project_dir = find_project_root() or Path.cwd()
-    note_updates = refresh_legacy_agent_notes(project_dir, agents=[agent])
     handoff = _build_handoff(root(args), catalog_root=catalog_root(args), project_dir=project_dir, agent=agent)
-    handoff["note_updates"] = note_updates
+    handoff["note_updates"] = []
     if args.json:
         print(json.dumps(handoff, indent=2, sort_keys=True))
     else:
@@ -4082,7 +4082,7 @@ def cmd_activate(args: argparse.Namespace) -> int:
 def cmd_scan(args: argparse.Namespace) -> int:
     reports = []
     if args.all:
-        for skill in load_index(root(args), approval_root=catalog_root(args)).get("skills", []):
+        for skill in load_index(root(args), approval_root=catalog_root(args), persist_missing=False).get("skills", []):
             report = scan_path(Path(skill["root"]), allow_tools=False)
             reports.append({"skill_id": skill["id"], **report})
     elif args.target:
@@ -4152,9 +4152,9 @@ def _effective_project_skills(
     exposure = _project_exposure(project_dir)
     extra_paths = _active_setup_paths(state_root)
     if extra_paths:
-        data = build_index(state_root, include_packages=True, approval_root=catalog_root, extra_paths=extra_paths)
+        data = build_index(state_root, include_packages=True, approval_root=catalog_root, extra_paths=extra_paths, persist=False)
     else:
-        data = load_index(state_root, approval_root=catalog_root)
+        data = load_index(state_root, approval_root=catalog_root, persist_missing=False)
     by_id: dict[str, dict[str, Any]] = {}
     for skill in data.get("skills", []):
         item = _with_project_inventory_fields(skill, exposure)
