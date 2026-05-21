@@ -64,11 +64,12 @@ class SkillagerCoreTests(unittest.TestCase):
         help_text = build_parser().format_help()
         self.assertIn("skillager working", help_text)
         self.assertIn("skillager handoff", help_text)
-        self.assertIn("Continue silently unless new external skills need owner review", help_text)
+        self.assertIn("Continue silently unless the task may benefit from a skill", help_text)
         self.assertIn("Tag available skills and expose a narrow router, stub, native skill, or no new exposure", help_text)
         self.assertIn("Do not activate or materialize unavailable skills", help_text)
         self.assertIn("owner review", help_text)
         self.assertIn("--catalog-state-dir", help_text)
+        self.assertNotIn("lookback", help_text)
         self.assertNotIn("recommend", help_text)
 
     def test_python_module_entrypoint_runs(self) -> None:
@@ -121,7 +122,7 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertIn("You are unsure how to approach the task", text)
         self.assertIn("until the task changes", text)
         self.assertIn("Use `skillager handoff --agent codex` only after setup", text)
-        self.assertIn("Do not run lookback after setup-only", text)
+        self.assertNotIn("lookback", text.lower())
 
     def test_working_skill_has_exposure_signal_hierarchy(self) -> None:
         text = render_working_skill("codex")
@@ -143,9 +144,8 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertIn("Use native exposure for tiny always-relevant project skills", text)
         self.assertIn("Prefer no new exposure for one-off tasks", text)
         self.assertIn("User naming or explicit request decides exposure", text)
-        self.assertIn("Lookback signal is strong evidence when available", text)
-        self.assertIn("Static metadata hints are weak evidence", text)
-        self.assertIn("Concordant static hints raise confidence", text)
+        self.assertIn("User naming and task fit are the strongest exposure signals", text)
+        self.assertIn("Static metadata hints are supporting evidence", text)
         self.assertIn("`user-invokable` metadata", text)
         self.assertIn("Native agent provenance", text)
         self.assertIn("The current task clearly matches a specific available skill", text)
@@ -429,34 +429,6 @@ class SkillagerCoreTests(unittest.TestCase):
                     self.assertEqual(main(["index", "--no-packages"]), 0)
                 data = load_index(state)
             self.assertEqual(data["skills"][0]["name"], "CLI Skill")
-
-    def test_cli_session_start_current(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = Path(tmp) / ".skillager"
-            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
-                self.assertEqual(main(["session", "start", "--agent", "claude", "--external-session-id", "claude-1"]), 0)
-            current = json.loads((state / "sessions" / "current.json").read_text(encoding="utf-8"))
-            self.assertEqual(current["agent"], "claude")
-            self.assertEqual(current["external_session_id"], "claude-1")
-
-    def test_cli_session_end_accepts_matching_agent_and_external_id(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = Path(tmp) / ".skillager"
-            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}), redirect_stdout(StringIO()):
-                self.assertEqual(main(["session", "start", "--agent", "codex", "--external-session-id", "codex-1"]), 0)
-                self.assertEqual(main(["session", "end", "--agent", "codex", "--external-session-id", "codex-1"]), 0)
-            current = json.loads((state / "sessions" / "current.json").read_text(encoding="utf-8"))
-            self.assertIsNotNone(current["ended_at"])
-
-    def test_cli_session_end_mismatch_prints_useful_hint(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = Path(tmp) / ".skillager"
-            stderr = StringIO()
-            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}), redirect_stdout(StringIO()), redirect_stderr(stderr):
-                self.assertEqual(main(["session", "start", "--agent", "codex", "--external-session-id", "codex-1"]), 0)
-                self.assertEqual(main(["session", "end", "--agent", "claude", "--external-session-id", "codex-1"]), 2)
-            self.assertIn("skillager session current --json", stderr.getvalue())
-
 
 class SkillagerPackagingTests(unittest.TestCase):
     """Verify build artifacts (wheel + sdist) match the invariants we need.

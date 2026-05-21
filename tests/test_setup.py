@@ -511,7 +511,9 @@ class SkillagerSetupTests(unittest.TestCase):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
                     self.assertEqual(main(["collection", "enable", "community"]), 0)
                     self.assertEqual(main(["setup", "--source", "collection", "--accept-low"]), 0)
-                    self.assertEqual(main(["session", "start", "--agent", "codex"]), 0)
+                sessions = state / "sessions"
+                sessions.mkdir(parents=True)
+                (sessions / "sks_deadbeef.jsonl").write_text("{}\n", encoding="utf-8")
                 (state / "status_scope.json").write_text(json.dumps({"schema": "skillager.status-scope.v1", "paths": [str(collection)]}) + "\n", encoding="utf-8")
                 output = StringIO()
                 with redirect_stdout(output):

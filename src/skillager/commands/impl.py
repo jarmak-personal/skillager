@@ -9,7 +9,7 @@ import sys
 import tempfile
 import textwrap
 from collections import Counter, defaultdict
-from hashlib import sha256
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -46,7 +46,6 @@ from ..collections import (
 )
 from ..families import agent_variant_family_key, canonical_agent_variant_slug
 from ..index import build_index, find_skill, load_index
-from ..lookback import build_lookback, record_feedback, render_lookback
 from ..materialize import (
     AGENT_NOTE,
     TRUSTED_STATES,
@@ -75,20 +74,6 @@ from ..review import (
 from ..scan import scan_path
 from ..search import search as search_index
 from ..selection import select_visible_skills
-from ..session import (
-    current_session,
-    clear_sessions,
-    end_session,
-    prune_sessions,
-    read_events,
-    record_doctor_event,
-    record_materialize_events,
-    record_search_event,
-    record_skill_event,
-    redact_session,
-    now as session_now,
-    start_session,
-)
 from ..simple_yaml import YamlError, load_mapping
 from ..trust import content_hash, load_trust, make_lint_override, save_trust, set_trust
 from ..update_check import check_for_update
@@ -126,12 +111,9 @@ DOCTOR_EXIT_BOOTSTRAP_REPAIR = 11
 DOCTOR_EXIT_LINT_BLOCKED = 12
 DOCTOR_EXIT_MIGRATION_NEEDED = 13
 DOCTOR_EXIT_MANUAL_REPAIR = 14
-DOCTOR_EXIT_LOOKBACK_PENDING = 15
 SETUP_BOOTSTRAP_REASON_NO_APPROVED = "no_approved_skills"
 SETUP_BOOTSTRAP_REASON_DISABLED = "bootstrap_disabled"
 SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED = "agent_not_specified"
-WORKING_AUTO_PROJECT_REASON = "working_project_local_user_added"
-WORKING_STATE_SCHEMA = "skillager.working-state.v1"
 WORKING_RESULT_SCHEMA = "skillager.working.v1"
 _WORKING_DRIFT_REASON_CODES = {
     "local customization": HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
@@ -142,6 +124,10 @@ _PROJECT_NOTE_REASON_CODES = {
     "missing": HANDOFF_REASON_PROJECT_NOTE_MISSING,
     "stale": HANDOFF_REASON_PROJECT_NOTE_STALE,
 }
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -166,8 +152,8 @@ def build_parser() -> argparse.ArgumentParser:
 
             Agent-safe default workflow:
               1. skillager working
-              2. Continue silently unless new external skills need owner review
-              3. Inspect available metadata with search/list/show when the task may benefit
+              2. Continue silently unless the task may benefit from a skill
+              3. Inspect available metadata with search/list/show when useful
               4. Tag available skills and expose a narrow router, stub, native skill, or no new exposure
               5. Use skillager handoff only for explicit post-setup curation/onboarding
 
@@ -179,7 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
               - Use --json when another program or agent needs stable machine-readable output.
 
             Agent command contract:
-              working syncs project-local user-added skills after setup and does not emit skill bodies.
+              working is a pure-read readiness check and does not emit skill bodies.
               handoff/status/search/list/show without --content are safe metadata commands.
               setup/review/trust/block change approval state and need user intent.
               tag/project/materialize may curate or expose only available skills; report changes.
@@ -255,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent", choices=["codex", "claude"], help="Include compatibility warnings for this agent.")
     p.add_argument("--compatible-only", action="store_true", help="Hide skills explicitly marked incompatible with --agent. Skills without metadata are assumed compatible.")
     p.add_argument("--limit", type=int, default=10, help="Maximum search results to return. Use 0 for no limit.")
-    p.add_argument("--no-session-record", action="store_true", help="Do not record this search in the compact local session log.")
+    p.add_argument("--no-session-record", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--json", action="store_true", help="Emit search results as JSON.")
     p.add_argument("--full-json", action="store_true", help="Emit full indexed metadata instead of compact agent-facing search results.")
     p.set_defaults(func=cmd_search)
@@ -279,7 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit full skill content.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Emit full skill content to stdout. Activation requires an available skill unless an explicit owner override is used.",
-        epilog="Examples:\n  skillager activate fastapi/fastapi\n  skillager activate fastapi/fastapi --from-stub fastapi-fastapi\n  skillager activate fastapi/fastapi --format codex\n  skillager activate fastapi/fastapi --agent codex --external-session-id <id>",
+        epilog="Examples:\n  skillager activate fastapi/fastapi\n  skillager activate fastapi/fastapi --from-stub fastapi-fastapi\n  skillager activate fastapi/fastapi --format codex",
     )
     p.add_argument("skill_id")
     p.add_argument("--format", choices=["markdown", "codex", "claude", "json"], default="markdown")
@@ -287,9 +273,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-incompatible", action="store_true", help="Allow activation even when skill metadata explicitly excludes this agent.")
     p.add_argument("--from-router", help="Router skill slug, e.g. skillager-gis. Refuses skills outside the attached router tag.")
     p.add_argument("--from-stub", help="Stub skill slug, e.g. fastapi-fastapi. Refuses activation unless that stub is materialized in this project.")
-    p.add_argument("--agent", help="Agent name for session tracking, e.g. codex or claude.")
-    p.add_argument("--external-session-id", help="Codex/Claude session ID for lookback tracking.")
-    p.add_argument("--no-session-record", action="store_true", help="Do not record this activation in the current Skillager session.")
+    p.add_argument("--agent", help="Agent name for compatibility checks, e.g. codex or claude.")
+    p.add_argument("--external-session-id", help=argparse.SUPPRESS)
+    p.add_argument("--no-session-record", action="store_true", help=argparse.SUPPRESS)
     p.set_defaults(func=cmd_activate)
 
     p = sub.add_parser(
@@ -343,58 +329,6 @@ def build_parser() -> argparse.ArgumentParser:
     add_review_parser(sub)
     add_materialize_parser(sub)
     add_manifest_parser(sub)
-
-    p = sub.add_parser(
-        "session",
-        help="Manage Skillager sessions.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Track Skillager usage against a Codex or Claude session ID for later lookback.",
-        epilog="Examples:\n  skillager session start --agent codex --external-session-id <id>\n  skillager session current --json\n  skillager session events\n  skillager session prune",
-    )
-    session_sub = p.add_subparsers(required=True)
-    start = session_sub.add_parser("start")
-    start.add_argument("--agent", default="unknown", help="Agent name, usually codex or claude.")
-    start.add_argument("--external-session-id", help="Codex/Claude session ID.")
-    start.add_argument("--external-conversation-id", help="Optional secondary conversation ID.")
-    start.set_defaults(func=cmd_session_start)
-    end = session_sub.add_parser("end")
-    end.add_argument("--agent", help="Require the current session to match this agent before ending.")
-    end.add_argument("--external-session-id", help="Require the current session to match this external session ID before ending.")
-    end.set_defaults(func=cmd_session_end)
-    current = session_sub.add_parser("current")
-    current.add_argument("--json", action="store_true", help="Emit current session metadata as JSON.")
-    current.set_defaults(func=cmd_session_current)
-    events = session_sub.add_parser("events")
-    events.add_argument("session_id", nargs="?")
-    events.add_argument("--json", action="store_true", help="Emit session events as JSON.")
-    events.set_defaults(func=cmd_session_events)
-    redact = session_sub.add_parser("redact")
-    redact.add_argument("session_id")
-    redact.set_defaults(func=cmd_session_redact)
-    prune = session_sub.add_parser("prune")
-    prune.add_argument("--days", type=int, help="Delete sessions whose last event is older than this many days.")
-    prune.add_argument("--max-mb", type=int, help="Maximum total session event storage in MB.")
-    prune.add_argument("--max-events-per-session", type=int, help="Maximum events retained in each session file.")
-    prune.add_argument("--json", action="store_true", help="Emit prune result as JSON.")
-    prune.set_defaults(func=cmd_session_prune)
-
-    p = sub.add_parser(
-        "lookback",
-        help="Generate session lookback or record feedback.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Summarize what skills were used in a session and record explicit feedback.",
-        epilog="Examples:\n  skillager lookback --agent codex --external-session-id <id>\n  skillager lookback --recent 20 --json\n  skillager lookback --feedback useful --skill-id fastapi/fastapi\n  skillager lookback --feedback route-only --skill-id fastapi/fastapi\n  skillager lookback --json",
-    )
-    p.add_argument("--session-id")
-    p.add_argument("--agent")
-    p.add_argument("--external-session-id")
-    p.add_argument("--recent", type=int, default=10, help="Include this many most-recent sessions when computing promotion/demotion recommendations.")
-    p.add_argument("--no-active", action="store_true", help="Do not add currently active sessions outside the recent window to recommendation evidence.")
-    p.add_argument("--feedback", choices=["useful", "not_useful", "harmful", "materialize", "route-only", "block"])
-    p.add_argument("--skill-id")
-    p.add_argument("--note")
-    p.add_argument("--json", action="store_true", help="Emit lookback report as JSON.")
-    p.set_defaults(func=cmd_lookback)
 
     return parser
 
@@ -466,7 +400,7 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     p.add_argument(
         "--fresh-project",
         action="store_true",
-        help="Reset this project's Skillager state before setup. Clears project trust decisions, tags, sessions, and saved setup scope; keeps reusable global approvals, global catalog entries, and materialized skill files.",
+        help="Reset this project's Skillager state before setup. Clears project trust decisions, tags, legacy session files, and saved setup scope; keeps reusable global approvals, global catalog entries, and materialized skill files.",
     )
     add_review_filters(p)
     add_review_actions(p)
@@ -495,8 +429,7 @@ def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 
             Agents should prefer `skillager working` after context resets. Use status
             for explicit readiness diagnostics. If review is needed, ask the user to
-            run `skillager setup`. If lookback is pending, ask before running
-            `skillager lookback`.
+            run `skillager setup`.
             """
         ),
         epilog=textwrap.dedent(
@@ -553,7 +486,7 @@ def add_doctor_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--fix", action="store_true", help="Repair first-party bootstrap artifacts when that is the selected next action. Requires --agent to write.")
     p.add_argument("--no-packages", action="store_true", help="Skip installed package skill discovery.")
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills in diagnostics.")
-    p.add_argument("--no-session-record", action="store_true", help="Do not record a compact local doctor event for lookback telemetry.")
+    p.add_argument("--no-session-record", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--json", action="store_true", help="Emit doctor results as JSON.")
     p.set_defaults(func=cmd_doctor)
 
@@ -561,12 +494,11 @@ def add_doctor_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 def add_working_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "working",
-        help="Quietly sync Skillager state for an active agent session.",
+        help="Quietly check Skillager readiness for an active agent session.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
-            Refresh Skillager's local inventory for a resumed agent session.
-            After setup, project-local user-added skills are silently trusted.
+            Read Skillager's local inventory for a resumed agent session.
             External package, collection, environment, and global skills still
             require review before body access, activation, or materialization.
             """
@@ -581,7 +513,7 @@ def add_working_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         ),
     )
     p.add_argument("--agent", choices=["codex", "claude"], help="Agent target for compact readiness metadata.")
-    p.add_argument("--json", action="store_true", help="Emit compact sync results as JSON.")
+    p.add_argument("--json", action="store_true", help="Emit compact readiness results as JSON.")
     p.set_defaults(func=cmd_working)
 
 
@@ -1362,7 +1294,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 f"project trust decisions cleared={report.get('fresh_reset', 0)}, "
                 "reusable global approvals retained. "
                 f"Project tags detached={((report.get('fresh_project_reset') or {}).get('project_tags', 0))}, "
-                f"sessions cleared={((report.get('fresh_project_reset') or {}).get('sessions', 0))}, "
+                f"legacy sessions cleared={((report.get('fresh_project_reset') or {}).get('sessions', 0))}, "
                 f"saved setup scope cleared={int(bool((report.get('fresh_project_reset') or {}).get('status_scope')))}. "
                 "Retained global state: "
                 f"{retained.get('global_approvals', 0)} approval(s), "
@@ -1375,7 +1307,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             print(
                 "Fresh reset: "
                 f"project trust decisions cleared={report.get('fresh_reset', 0)}. "
-                "Reusable global approvals, tags, collections, sessions, and materialized skill files were retained."
+                "Reusable global approvals, tags, collections, and materialized skill files were retained."
             )
         if report.get("global_approved"):
             print(f"Applied {report['global_approved']} reusable global approval(s).")
@@ -1657,7 +1589,6 @@ def _build_visible_skill_view(
     materialized_project_counts = _materialized_project_counts(project_dir)
     unmaterialized_attached_tags = sorted(tag for tag in attached_tags if tag not in set(materialized_router_tags))
     migration = collection_migration_summary(catalog_root)
-    lookback = _status_lookback_summary(state_root)
     tagging = _status_tagging_summary(state_root, catalog_root)
     readiness = _build_readiness(
         review_needed=review_needed,
@@ -1687,7 +1618,6 @@ def _build_visible_skill_view(
         "artifacts": artifacts,
         "materialized_project_counts": materialized_project_counts,
         "migration": migration,
-        "lookback": lookback,
         "tagging": tagging,
         "duplicate_content": duplicate_content_summary(skills),
         "readiness": readiness,
@@ -1905,7 +1835,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     data = view["index"]
     skills = view["skills"]
     saved_scope = view.get("saved_scope")
-    _save_native_inventory(state_root, _effective_project_skills(state_root, catalog_root=approval_root))
     summary = review_summary(skills)
     materialized = view["materialized_project_counts"]
     review_needed = view["review_needed"]
@@ -1917,7 +1846,6 @@ def cmd_status(args: argparse.Namespace) -> int:
     global_approved = [skill for skill in approved if skill.get("trust_reason") == "global-approval"]
     authored_unreviewed = view["authored_unreviewed"]
     blocked = view["blocked"]
-    lookback_summary = view["lookback"]
     collection_summary = _status_collection_summary(state_root, approval_root)
     collection_inventory = _status_collection_inventory(skills)
     tagging_summary = view["tagging"]
@@ -1953,8 +1881,6 @@ def cmd_status(args: argparse.Namespace) -> int:
         "readiness": readiness,
         "inventory": _available_inventory_summary(skills, agent=agent, project_exposure=view["project_exposure"]),
         "needs_setup": not readiness["review_ready"],
-        "lookback_pending": lookback_summary["pending"],
-        "lookback_summary": lookback_summary,
         "collections": collection_summary,
         "collection_inventory": collection_inventory,
         "tagging": tagging_summary,
@@ -1966,7 +1892,6 @@ def cmd_status(args: argparse.Namespace) -> int:
         "message": _status_message(
             review_needed,
             lint_blocked=lint_blocked,
-            lookback_summary=lookback_summary,
             collection_summary=collection_summary,
             migration_summary=migration_summary,
             duplicate_content=duplicate_content,
@@ -2000,8 +1925,6 @@ def cmd_working(args: argparse.Namespace) -> int:
     )
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
-    elif result.get("new_external_review_count"):
-        _print_working_external_notice(result)
     return 0
 
 
@@ -2019,99 +1942,20 @@ def _build_working_result(
         extra_paths=_active_setup_paths(state_root),
     )
     setup_complete = _working_setup_complete(state_root)
-    auto_approved: list[dict[str, Any]] = []
-    if setup_complete:
-        auto_approved = _working_auto_approve_project_skills(state_root, data.get("skills", []), project_dir=project_dir)
-        if auto_approved:
-            data = build_index(
-                state_root,
-                include_packages=True,
-                approval_root=catalog_root,
-                extra_paths=_active_setup_paths(state_root),
-            )
-    _save_native_inventory(state_root, _effective_project_skills(state_root, catalog_root=catalog_root, include_lint_blocked=True))
     pending_external = _working_pending_external_review(data.get("skills", []))
-    new_external = _working_sync_external_seen(state_root, pending_external)
     return {
         "schema": WORKING_RESULT_SCHEMA,
         "status": "ok",
         "project": str(project_dir),
         "agent": agent,
         "setup_complete": setup_complete,
-        "auto_approved_project_count": len(auto_approved),
-        "auto_approved_project_skills": auto_approved,
+        "auto_approved_project_count": 0,
+        "auto_approved_project_skills": [],
         "pending_external_review_count": len(pending_external),
         "pending_external_review": [_working_sync_item(skill) for skill in pending_external],
-        "new_external_review_count": len(new_external),
-        "new_external_review": [_working_sync_item(skill) for skill in new_external],
+        "new_external_review_count": 0,
+        "new_external_review": [],
     }
-
-
-def _working_auto_approve_project_skills(
-    state_root: Path,
-    skills: list[dict[str, Any]],
-    *,
-    project_dir: Path,
-) -> list[dict[str, Any]]:
-    approved: list[dict[str, Any]] = []
-    for skill in sorted(skills, key=lambda item: str(item.get("id") or "")):
-        if skill.get("trust") in TRUSTED_STATES or skill.get("trust") == "blocked":
-            continue
-        if not _working_is_project_local_skill(skill, project_dir=project_dir):
-            continue
-        lint_override = None
-        if skill.get("trust") == "lint_blocked":
-            lint_override = make_lint_override(WORKING_AUTO_PROJECT_REASON, skill.get("lint") or {})
-        record = set_trust(
-            state_root,
-            skill["id"],
-            "reviewed",
-            skill["content_hash"],
-            skill["source"],
-            lint=skill.get("lint"),
-            lint_override=lint_override,
-            reason=WORKING_AUTO_PROJECT_REASON,
-            global_scope=False,
-        )
-        item = _working_sync_item(skill)
-        item["state"] = record.get("state")
-        item["reason"] = WORKING_AUTO_PROJECT_REASON
-        approved.append(item)
-    return approved
-
-
-def _working_is_project_local_skill(skill: dict[str, Any], *, project_dir: Path) -> bool:
-    if (skill.get("source") or {}).get("type") != "project":
-        return False
-    if not skill.get("id") or not skill.get("content_hash"):
-        return False
-    root_value = skill.get("root")
-    if not root_value:
-        return False
-    try:
-        root_path = Path(root_value).resolve()
-        project = project_dir.resolve()
-        root_path.relative_to(project)
-    except (OSError, RuntimeError, ValueError):
-        return False
-    for base in _working_project_skill_bases(project):
-        try:
-            root_path.relative_to(base.resolve())
-        except (OSError, RuntimeError, ValueError):
-            continue
-        return True
-    return False
-
-
-def _working_project_skill_bases(project: Path) -> list[Path]:
-    roots: list[Path] = [project / ".skills", project / "skills"]
-    for root_paths in _project_skill_roots(project).values():
-        roots.extend(root_paths)
-    deduped: list[Path] = []
-    for path in roots:
-        if path not in deduped:
-            deduped.append(path)
-    return deduped
 
 
 def _working_pending_external_review(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2122,21 +1966,6 @@ def _working_pending_external_review(skills: list[dict[str, Any]]) -> list[dict[
         and skill.get("trust") in {"discovered", "lint_blocked"}
         and skill.get("id")
     ]
-
-
-def _working_state_path(state_root: Path) -> Path:
-    return state_root / "working.json"
-
-
-def _load_working_state(state_root: Path) -> dict[str, Any]:
-    path = _working_state_path(state_root)
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
 
 
 def _working_setup_path(state_root: Path) -> Path:
@@ -2150,7 +1979,7 @@ def _mark_setup_complete(state_root: Path, *, project_dir: Path) -> None:
             {
                 "schema": "skillager.setup-state.v1",
                 "project": str(project_dir),
-                "setup_completed_at": session_now(),
+                "setup_completed_at": _now_iso(),
             },
             indent=2,
             sort_keys=True,
@@ -2169,40 +1998,6 @@ def _working_setup_complete(state_root: Path) -> bool:
     return bool(trust.get("skills"))
 
 
-def _working_sync_external_seen(state_root: Path, pending_external: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    state = _load_working_state(state_root)
-    has_baseline = "seen_external_pending" in state
-    seen = {str(item) for item in state.get("seen_external_pending") or []}
-    new_external = [skill for skill in pending_external if _working_notice_key(skill) not in seen] if has_baseline else []
-    state_root.mkdir(parents=True, exist_ok=True)
-    _working_state_path(state_root).write_text(
-        json.dumps(
-            {
-                "schema": WORKING_STATE_SCHEMA,
-                "updated_at": session_now(),
-                "seen_external_pending": [_working_notice_key(skill) for skill in pending_external],
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return new_external
-
-
-def _working_notice_key(skill: dict[str, Any]) -> str:
-    source = skill.get("source") or {}
-    source_bits = [
-        str(source.get("type") or ""),
-        str(source.get("collection") or ""),
-        str(source.get("package") or ""),
-        str(source.get("environment") or ""),
-        str(source.get("path") or ""),
-    ]
-    return "|".join([str(skill.get("id") or ""), str(skill.get("content_hash") or ""), *source_bits])
-
-
 def _working_sync_item(skill: dict[str, Any]) -> dict[str, Any]:
     source = skill.get("source") or {}
     return {
@@ -2215,19 +2010,6 @@ def _working_sync_item(skill: dict[str, Any]) -> dict[str, Any]:
         },
         "path": skill.get("root"),
     }
-
-
-def _print_working_external_notice(result: dict[str, Any]) -> None:
-    new_external = result.get("new_external_review") or []
-    ids = [str(item.get("id")) for item in new_external if item.get("id")]
-    shown = ", ".join(ids[:5])
-    if len(ids) > 5:
-        shown += f", ... {len(ids) - 5} more"
-    print(
-        f"Skillager found {len(ids)} new external skill(s) pending review"
-        f"{f': {shown}' if shown else ''}. "
-        "Run `skillager setup` or `skillager review --summary` when you want to inspect them."
-    )
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -2243,7 +2025,6 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         include_packages=not args.no_packages,
         include_global=args.include_global,
     )
-    observed_result = result
     fix_result: dict[str, Any] | None = None
     if args.fix:
         fix_result = _doctor_apply_fix(result, project_dir=project_dir, agent=args.agent)
@@ -2257,13 +2038,6 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 include_global=args.include_global,
             )
         result["fix"] = fix_result
-    record_doctor_event(
-        state_root,
-        result=observed_result,
-        fix_result=fix_result,
-        agent=agent,
-        no_record=args.no_session_record,
-    )
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
@@ -2322,7 +2096,6 @@ def _doctor_state(view: dict[str, Any]) -> dict[str, Any]:
         },
         "migration": view["migration"],
         "artifacts": view["artifacts"],
-        "lookback": view["lookback"],
         "duplicate_content": view["duplicate_content"],
     }
 
@@ -2398,14 +2171,6 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
             DOCTOR_EXIT_BOOTSTRAP_REPAIR,
             handoff_action.get("message") or "Refresh Skillager's first-party project working artifacts.",
             str(command) if command else None,
-        )
-    lookback = view["lookback"]
-    if lookback.get("pending"):
-        return _doctor_issue(
-            "lookback-pending",
-            DOCTOR_EXIT_LOOKBACK_PENDING,
-            "Lookback evidence is ready for review.",
-            "skillager lookback",
         )
     return _doctor_issue("ready", DOCTOR_EXIT_READY, "Skillager is ready.", None)
 
@@ -2697,7 +2462,6 @@ def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, a
     review_needed = view["review_needed"]
     lint_blocked = view["lint_blocked"]
     migration = view["migration"]
-    lookback = view["lookback"]
     artifacts = view["artifacts"]
     tagging = view["tagging"]
     readiness = view["readiness"]
@@ -2710,7 +2474,6 @@ def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, a
         "setup": {"needed": not readiness["review_ready"], "pending_owner_review": len(review_needed) + len(lint_blocked)},
         "migration": migration,
         "artifacts": artifacts,
-        "lookback": lookback,
         "tagging": _compact_tagging_summary(tagging),
         "attached_tags": view["attached_tags"],
         "materialized_router_tags": view["materialized_router_tags"],
@@ -2876,14 +2639,6 @@ def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any
             "command": command,
             "next_commands": [command],
         }
-    lookback = state.get("lookback") or {}
-    if lookback.get("pending"):
-        return {
-            "status": "lookback-pending",
-            "message": "Ask the user whether to review Skillager lookback before starting.",
-            "command": "skillager lookback",
-            "next_commands": ["skillager lookback"],
-        }
     materialized_router_tags = state.get("materialized_router_tags") or []
     if materialized_router_tags:
         return {
@@ -3015,16 +2770,6 @@ def _print_handoff(handoff: dict[str, Any]) -> None:
     print(f"  Working skill: {artifacts['working_skill'].get('status')}")
     note_statuses = ", ".join(f"{Path(note['path']).name}={note['status']}" for note in artifacts.get("project_notes", []))
     print(f"  Project note: {note_statuses or 'missing'}")
-    lookback = state["lookback"]
-    if lookback.get("pending"):
-        lookback_status = "pending"
-    elif lookback.get("reviewed"):
-        lookback_status = "reviewed"
-    elif lookback.get("collecting"):
-        lookback_status = "collecting"
-    else:
-        lookback_status = "none pending"
-    print(f"  Lookback: {lookback_status}")
     print(f"  Attached tags: {', '.join(state['attached_tags']) if state['attached_tags'] else 'none'}")
     print(f"  Materialized router tags: {', '.join(state['materialized_router_tags']) if state['materialized_router_tags'] else 'none'}")
     print(
@@ -3180,153 +2925,6 @@ def _compact_review_summary(summary: dict[str, Any]) -> dict[str, Any]:
             for source, counts in by_source.items()
         }
     return compact
-
-
-def _status_lookback_summary(state_root: Path) -> dict[str, Any]:
-    try:
-        report = build_lookback(state_root)
-    except Exception:
-        return {
-            "pending": False,
-            "available": False,
-            "collecting": False,
-            "reviewed": False,
-            "recommendations": 0,
-            "raw_recommendations": 0,
-            "observed_overlaps": 0,
-            "raw_observed_overlaps": 0,
-            "candidate_sessions": 0,
-            "active_candidate_sessions": 0,
-            "completed_candidate_sessions": 0,
-        }
-    recommendations = report.get("recommendations") or []
-    overlaps = report.get("observed_overlaps") or []
-    ready_recommendations, ready_overlaps = _lookback_ready_evidence(report)
-    fingerprint = _lookback_fingerprint(ready_recommendations, ready_overlaps)
-    reviewed = bool(fingerprint and _load_lookback_review(state_root).get("fingerprint") == fingerprint)
-    actions: dict[str, int] = {}
-    for rec in ready_recommendations:
-        action = str(rec.get("action") or "unknown")
-        actions[action] = actions.get(action, 0) + 1
-    available = bool(ready_recommendations or ready_overlaps)
-    pending = bool(available and not reviewed)
-    return {
-        "pending": pending,
-        "available": available,
-        "collecting": bool((recommendations or overlaps) and not available),
-        "reviewed": reviewed,
-        "recommendations": len(ready_recommendations),
-        "raw_recommendations": len(recommendations),
-        "observed_overlaps": len(ready_overlaps),
-        "raw_observed_overlaps": len(overlaps),
-        "candidate_sessions": report.get("candidate_session_count", 0),
-        "active_candidate_sessions": report.get("active_candidate_sessions", 0),
-        "completed_candidate_sessions": report.get("completed_candidate_sessions", 0),
-        "actions": actions,
-        "fingerprint": fingerprint,
-    }
-
-
-def _lookback_ready_evidence(report: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    recommendations = [
-        rec
-        for rec in report.get("recommendations") or []
-        if _lookback_recommendation_ready(rec)
-    ]
-    overlaps = [
-        overlap
-        for overlap in report.get("observed_overlaps") or []
-        if _lookback_overlap_ready(overlap)
-    ]
-    return recommendations, overlaps
-
-
-def _lookback_recommendation_ready(rec: dict[str, Any]) -> bool:
-    if _lookback_has_explicit_feedback(rec):
-        return True
-    if rec.get("action") == "block":
-        return True
-    return _completed_session_count(rec) >= 2
-
-
-def _lookback_overlap_ready(overlap: dict[str, Any]) -> bool:
-    return _completed_session_count(overlap) >= 2
-
-
-def _completed_session_count(item: dict[str, Any]) -> int:
-    total = int(item.get("session_count") or 0)
-    active = int(item.get("active_session_count") or 0)
-    return max(0, total - active)
-
-
-def _lookback_has_explicit_feedback(rec: dict[str, Any]) -> bool:
-    events = rec.get("events") or {}
-    return any(str(name).startswith("feedback_") and count for name, count in events.items())
-
-
-def _lookback_fingerprint(recommendations: list[dict[str, Any]], overlaps: list[dict[str, Any]]) -> str | None:
-    if not recommendations and not overlaps:
-        return None
-    payload = {
-        "recommendations": [
-            {
-                "skill_id": rec.get("skill_id"),
-                "action": rec.get("action"),
-                "events": rec.get("events") or {},
-                "sessions": rec.get("sessions") or [],
-            }
-            for rec in recommendations
-        ],
-        "overlaps": [
-            {
-                "skills": [skill.get("id") for skill in overlap.get("skills") or []],
-                "score": overlap.get("score"),
-                "sessions": overlap.get("sessions") or [],
-            }
-            for overlap in overlaps
-        ],
-    }
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return sha256(raw).hexdigest()
-
-
-def _lookback_review_path(state_root: Path) -> Path:
-    return state_root / "lookback_review.json"
-
-
-def _load_lookback_review(state_root: Path) -> dict[str, Any]:
-    path = _lookback_review_path(state_root)
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _mark_lookback_reviewed(state_root: Path, report: dict[str, Any]) -> str | None:
-    recommendations, overlaps = _lookback_ready_evidence(report)
-    fingerprint = _lookback_fingerprint(recommendations, overlaps)
-    if not fingerprint:
-        return None
-    state_root.mkdir(parents=True, exist_ok=True)
-    _lookback_review_path(state_root).write_text(
-        json.dumps(
-            {
-                "schema": "skillager.lookback-review.v1",
-                "fingerprint": fingerprint,
-                "reviewed_at": session_now(),
-                "recommendations": len(recommendations),
-                "observed_overlaps": len(overlaps),
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    return fingerprint
 
 
 def _status_collection_summary(state_root: Path, catalog_root: Path) -> dict[str, Any]:
@@ -3583,7 +3181,6 @@ def _status_message(
     review_needed: list[dict[str, Any]],
     *,
     lint_blocked: list[dict[str, Any]] | None = None,
-    lookback_summary: dict[str, Any] | None = None,
     collection_summary: dict[str, Any] | None = None,
     migration_summary: dict[str, Any] | None = None,
     duplicate_content: dict[str, Any] | None = None,
@@ -3619,10 +3216,6 @@ def _status_message(
         return f"Skillager: review is complete, but working artifacts need manual repair. {handoff.get('message', '').strip()}"
     if collection_summary and collection_summary.get("unattached_count"):
         return "Skillager: registered collections are not attached to this project. Run `skillager collection enable <name>` before setup."
-    if lookback_summary and lookback_summary.get("pending"):
-        recs = lookback_summary.get("recommendations", 0)
-        overlaps = lookback_summary.get("observed_overlaps", 0)
-        return f"Skillager: no skills pending owner review. Lookback available: {recs} recommendation(s), {overlaps} overlap hint(s) (behavioral signals, not decisions). Run `skillager lookback`."
     return "Skillager: no skills pending owner review. Use only available materialized skills."
 
 
@@ -3732,13 +3325,6 @@ def _print_status(status: dict[str, Any]) -> None:
     if status.get("exposure_count"):
         print(f"  - exposure detail: {_exposure_summary_text(exposure)}")
     _print_inventory_block(status.get("inventory") or {}, indent="  - ")
-    lookback = status.get("lookback_summary") or {}
-    if lookback.get("pending"):
-        print(
-            "  - lookback pending: "
-            f"{lookback.get('recommendations', 0)} recommendation(s), "
-            f"{lookback.get('observed_overlaps', 0)} overlap hint(s) (behavioral signals, not decisions)"
-        )
     update = status.get("update") or {}
     if update.get("available"):
         print(f"  - update available: skillager {update.get('latest_version')} (run `{update.get('command')}`)")
@@ -3802,10 +3388,21 @@ def _status_scope_path(state_root: Path) -> Path:
 def _clear_fresh_project_state(state_root: Path) -> dict[str, Any]:
     return {
         "project_tags": clear_project_tags(state_root),
-        "sessions": clear_sessions(state_root),
+        "sessions": _clear_legacy_sessions(state_root),
         "status_scope": _clear_status_scope(state_root),
         "setup_state": _clear_setup_state(state_root),
     }
+
+
+def _clear_legacy_sessions(state_root: Path) -> int:
+    root = state_root / "sessions"
+    if not root.exists():
+        return 0
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError(f"refusing to clear unsafe legacy sessions path: {root}")
+    session_count = len(list(root.glob("sks_*.jsonl")))
+    shutil.rmtree(root)
+    return session_count
 
 
 def _fresh_project_retained_global_state(catalog_root: Path, project_dir: Path) -> dict[str, Any]:
@@ -3837,26 +3434,6 @@ def _clear_setup_state(state_root: Path) -> bool:
         raise ValueError(f"refusing to clear unsafe setup state path: {path}")
     path.unlink()
     return True
-
-
-def _native_inventory_path(state_root: Path) -> Path:
-    return state_root / "native_inventory.json"
-
-
-def _save_native_inventory(state_root: Path, skills: list[dict[str, Any]]) -> None:
-    entries = []
-    for skill in skills:
-        for target in skill.get("materialized_targets", []):
-            if target.get("kind") in {"native", "stub"}:
-                entries.append(
-                    {
-                        "skill_id": skill.get("id"),
-                        "family_key": skill.get("family_key") or _native_candidate_key(skill),
-                        **target,
-                    }
-                )
-    state_root.mkdir(parents=True, exist_ok=True)
-    _native_inventory_path(state_root).write_text(json.dumps({"schema": "skillager.native-inventory.v1", "skills": entries}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _load_status_scope(state_root: Path) -> dict[str, Any] | None:
@@ -4129,16 +3706,6 @@ def cmd_search(args: argparse.Namespace) -> int:
         results = _sort_agent_variant_search(results, args.agent)
     if args.limit:
         results = results[: args.limit]
-    record_search_event(
-        root(args),
-        query=args.query,
-        results=results,
-        agent=args.agent,
-        tag=args.tag,
-        trusted_only=True,
-        limit=args.limit,
-        no_record=args.no_session_record,
-    )
     if args.json:
         payload = results if args.full_json else [_compact_search_result(skill, agent=args.agent) for skill in results]
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -4467,10 +4034,6 @@ def cmd_show(args: argparse.Namespace) -> int:
         raise ValueError(f"skill content is not available while lint-blocked: {args.skill_id}")
     if args.content and skill.get("trust") not in {"reviewed", "trusted", "pinned"}:
         raise ValueError(f"skill content is not available: {args.skill_id}; {_approval_hint(skill)}")
-    if args.activate:
-        record_skill_event(root(args), "skill_activated", skill)
-    elif args.content:
-        record_skill_event(root(args), "skill_shown", skill)
     if args.json:
         payload: dict[str, Any] = {"skill": skill if args.full_json else _compact_skill_metadata(skill)}
         if args.content:
@@ -4512,14 +4075,6 @@ def cmd_activate(args: argparse.Namespace) -> int:
         raise ValueError(f"skill is {problem}; use --allow-incompatible only with explicit user approval")
     for warning in compatibility_warnings(skill, activation_agent):
         print(f"warning: {warning}", file=sys.stderr)
-    record_skill_event(
-        root(args),
-        "skill_activated",
-        skill,
-        agent=args.agent,
-        external_session_id=args.external_session_id,
-        no_record=args.no_session_record,
-    )
     print(render_skill(skill, fmt=args.format))
     return 0
 
@@ -4941,7 +4496,6 @@ def cmd_trust(args: argparse.Namespace) -> int:
         approval_root=catalog_root(args),
         global_scope=not args.project_only,
     )
-    record_skill_event(root(args), "skill_trusted", skill)
     print(f"{args.skill_id}: {record['state']}")
     return 0
 
@@ -4949,7 +4503,6 @@ def cmd_trust(args: argparse.Namespace) -> int:
 def cmd_block(args: argparse.Namespace) -> int:
     skill = _find_project_skill(root(args), args.skill_id, catalog_root=catalog_root(args), include_lint_blocked=True)
     record = set_trust(root(args), args.skill_id, "blocked", skill["content_hash"], skill["source"], lint=skill.get("lint"))
-    record_skill_event(root(args), "skill_blocked", skill)
     print(f"{args.skill_id}: {record['state']}")
     return 0
 
@@ -5080,8 +4633,6 @@ def cmd_materialize(args: argparse.Namespace) -> int:
             project_dir=Path.cwd(),
             allow_incompatible=args.allow_incompatible,
         )
-    if not args.dry_run:
-        record_materialize_events(root(args), results)
     if args.json:
         print(json.dumps(results, indent=2, sort_keys=True))
     else:
@@ -5233,96 +4784,6 @@ def cmd_manifest_init(args: argparse.Namespace) -> int:
         for item in results:
             action = "would write" if args.dry_run else "wrote"
             print(f"{item['skill_id']}: {action} {item['manifest']} risk={item['scan']['risk']}")
-    return 0
-
-
-def cmd_session_start(args: argparse.Namespace) -> int:
-    meta = start_session(
-        root(args),
-        agent=args.agent,
-        external_session_id=args.external_session_id,
-        external_conversation_id=args.external_conversation_id,
-    )
-    print(meta["session_id"])
-    return 0
-
-
-def cmd_session_end(args: argparse.Namespace) -> int:
-    meta = end_session(root(args), agent=args.agent, external_session_id=args.external_session_id)
-    print(meta["session_id"])
-    return 0
-
-
-def cmd_session_current(args: argparse.Namespace) -> int:
-    meta = current_session(root(args))
-    if args.json:
-        print(json.dumps(meta, indent=2, sort_keys=True))
-    elif meta:
-        print(f"{meta['session_id']}\t{meta.get('agent')}\t{meta.get('external_session_id') or ''}")
-    else:
-        print("no current session")
-    return 0
-
-
-def cmd_session_events(args: argparse.Namespace) -> int:
-    session = args.session_id or (current_session(root(args)) or {}).get("session_id")
-    if not session:
-        raise ValueError("no session id provided and no current session")
-    events = read_events(root(args), session)
-    if args.json:
-        print(json.dumps(events, indent=2, sort_keys=True))
-    else:
-        for event in events:
-            label = event.get("skill_id") or ""
-            print(f"{event['timestamp']}\t{event['event']}\t{label}")
-    return 0
-
-
-def cmd_session_redact(args: argparse.Namespace) -> int:
-    redact_session(root(args), args.session_id)
-    print(f"redacted {args.session_id}")
-    return 0
-
-
-def cmd_session_prune(args: argparse.Namespace) -> int:
-    result = prune_sessions(
-        root(args),
-        days=args.days,
-        max_mb=args.max_mb,
-        max_events_per_session=args.max_events_per_session,
-    )
-    if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
-    else:
-        print(
-            "Pruned sessions: "
-            f"deleted={result['deleted_sessions']} "
-            f"trimmed={result['trimmed_sessions']} "
-            f"bytes={result['bytes_after']}"
-        )
-    return 0
-
-
-def cmd_lookback(args: argparse.Namespace) -> int:
-    if args.feedback:
-        if not args.skill_id:
-            raise ValueError("--skill-id is required with --feedback")
-        event = record_feedback(root(args), args.skill_id, args.feedback, note=args.note)
-        print(f"recorded {event['event']} for {args.skill_id}")
-        return 0
-    report = build_lookback(
-        root(args),
-        session_id=args.session_id,
-        agent=args.agent,
-        external_session_id=args.external_session_id,
-        recent=args.recent,
-        include_active=not args.no_active,
-    )
-    _mark_lookback_reviewed(root(args), report)
-    if args.json:
-        print(json.dumps(report, indent=2, sort_keys=True))
-    else:
-        print(render_lookback(report), end="")
     return 0
 
 

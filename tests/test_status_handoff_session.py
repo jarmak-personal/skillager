@@ -12,9 +12,7 @@ from unittest.mock import patch
 from support import TtyStringIO, chdir
 from skillager.cli import main
 from skillager.index import build_index
-from skillager.lookback import build_lookback
 from skillager.materialize import materialize_working_skill
-from skillager.session import append_event, end_session, prune_sessions, read_events, redact_session, start_session
 from skillager.simple_yaml import loads
 from skillager.trust import content_hash, set_trust
 
@@ -87,14 +85,6 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertIn("update available: skillager 0.1.1", text)
             self.assertIn("uv tool upgrade skillager", text)
 
-    def test_session_ids_cannot_escape_session_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = Path(tmp) / ".skillager"
-            with self.assertRaisesRegex(ValueError, "invalid session id"):
-                read_events(state, "../outside")
-            with self.assertRaisesRegex(ValueError, "invalid session id"):
-                redact_session(state, "../../outside")
-
     def test_status_json_reports_clean_approved_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -124,7 +114,6 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertEqual(data["readiness"]["handoff"]["reason_code"], "agent_required")
             self.assertIsNone(data["readiness"]["handoff"]["command"])
             self.assertIn("status --agent codex", data["message"])
-            self.assertFalse(data["lookback_pending"])
 
     def test_status_agent_controls_handoff_readiness_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -212,68 +201,6 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertEqual(data["state"]["artifacts"]["project_notes"][0]["status"], "present")
             self.assertIn("Updated project note:", text_output.getvalue())
             self.assertIn(str(note), text_output.getvalue())
-
-    def test_status_reports_pending_lookback_summary(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            state = root / ".skillager"
-            meta = start_session(state, agent="codex")
-            append_event(state, meta["session_id"], "skill_activated", {"skill_id": "community/gis"})
-            end_session(state, agent="codex")
-            meta = start_session(state, agent="codex")
-            append_event(state, meta["session_id"], "skill_activated", {"skill_id": "community/gis"})
-            end_session(state, agent="codex")
-            with (
-                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
-                patch("skillager.discovery.find_project_root", return_value=root),
-                patch("pathlib.Path.home", return_value=root),
-                chdir(root),
-            ):
-                output = StringIO()
-                with redirect_stdout(output):
-                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-                text = StringIO()
-                with redirect_stdout(text):
-                    self.assertEqual(main(["status", "--no-packages"]), 0)
-                with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["lookback", "--json"]), 0)
-                reviewed_output = StringIO()
-                with redirect_stdout(reviewed_output):
-                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-            data = json.loads(output.getvalue())
-            self.assertTrue(data["lookback_pending"])
-            self.assertEqual(data["lookback_summary"]["recommendations"], 1)
-            self.assertIn("Lookback available", data["message"])
-            self.assertIn("overlap hint(s) (behavioral signals, not decisions)", data["message"])
-            self.assertNotIn("overlap hint(s;", data["message"])
-            self.assertIn("lookback pending", text.getvalue())
-            self.assertIn("overlap hint(s) (behavioral signals, not decisions)", text.getvalue())
-            self.assertNotIn("overlap hint(s;", text.getvalue())
-            reviewed = json.loads(reviewed_output.getvalue())
-            self.assertFalse(reviewed["lookback_pending"])
-            self.assertTrue(reviewed["lookback_summary"]["reviewed"])
-
-    def test_active_session_lookback_signal_collects_without_pending(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            state = root / ".skillager"
-            meta = start_session(state, agent="codex")
-            append_event(state, meta["session_id"], "skill_activated", {"skill_id": "community/gis"})
-            append_event(state, meta["session_id"], "skill_activated", {"skill_id": "community/gis"})
-            append_event(state, meta["session_id"], "skill_activated", {"skill_id": "community/gis"})
-            with (
-                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
-                patch("skillager.discovery.find_project_root", return_value=root),
-                patch("pathlib.Path.home", return_value=root),
-                chdir(root),
-            ):
-                output = StringIO()
-                with redirect_stdout(output):
-                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-            data = json.loads(output.getvalue())
-            self.assertFalse(data["lookback_pending"])
-            self.assertTrue(data["lookback_summary"]["collecting"])
-            self.assertEqual(data["lookback_summary"]["raw_recommendations"], 1)
 
     def test_status_respects_materialized_setup_audience_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -746,167 +673,6 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertEqual(exposure["count_basis"], "available source entries")
             self.assertEqual(exposure["available_source_entries_on_demand"], 0)
             self.assertIn("2 exposed entries (1 router tag(s), 1 routed, 1 stubbed), 0 available entries on demand", text_output.getvalue())
-
-    def test_handoff_prioritizes_lookback_over_unmaterialized_attached_tags(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            state = root / ".skillager"
-            collection = root / "community"
-            skill_dir = collection / "gis"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# GIS\n\nUse GIS guidance.\n", encoding="utf-8")
-            lookback_report = {
-                "recommendations": [
-                    {
-                        "action": "materialize",
-                        "skill_id": "community/gis",
-                        "events": {"skill_activated": 2},
-                        "sessions": ["sks_1", "sks_2"],
-                        "session_count": 2,
-                        "active_session_count": 0,
-                    }
-                ],
-                "observed_overlaps": [],
-                "candidate_session_count": 2,
-                "active_candidate_sessions": 0,
-                "completed_candidate_sessions": 2,
-            }
-            with (
-                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
-                patch("skillager.discovery.find_project_root", return_value=root),
-                patch("pathlib.Path.home", return_value=root),
-                chdir(root),
-            ):
-                with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                    self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 0)
-                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
-                materialize_working_skill(agents=["codex"], project_dir=root)
-                output = StringIO()
-                with patch("skillager.cli.build_lookback", return_value=lookback_report), redirect_stdout(output):
-                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
-            data = json.loads(output.getvalue())
-            self.assertEqual(data["status"], "lookback-pending")
-            self.assertEqual(data["next"]["command"], "skillager lookback")
-            self.assertEqual(data["state"]["unmaterialized_attached_tags"], ["gis"])
-
-    def test_handoff_does_not_block_on_active_only_lookback_signal(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            state = root / ".skillager"
-            lookback_report = {
-                "recommendations": [
-                    {
-                        "action": "route-only",
-                        "skill_id": "community/gis",
-                        "events": {"skill_activated": 3},
-                        "sessions": ["sks_active"],
-                        "session_count": 1,
-                        "active_session_count": 1,
-                    }
-                ],
-                "observed_overlaps": [],
-                "candidate_session_count": 1,
-                "active_candidate_sessions": 1,
-                "completed_candidate_sessions": 0,
-            }
-            with (
-                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
-                patch("skillager.discovery.find_project_root", return_value=root),
-                patch("pathlib.Path.home", return_value=root),
-                chdir(root),
-            ):
-                materialize_working_skill(agents=["codex"], project_dir=root)
-                output = StringIO()
-                with patch("skillager.cli.build_lookback", return_value=lookback_report), redirect_stdout(output):
-                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
-            data = json.loads(output.getvalue())
-            self.assertEqual(data["status"], "ready")
-            self.assertFalse(data["state"]["lookback"]["pending"])
-            self.assertTrue(data["state"]["lookback"]["collecting"])
-
-    def test_session_records_external_id_and_lookback(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = Path(tmp) / ".skillager"
-            meta = start_session(state, agent="codex", external_session_id="codex-123")
-            skill = {
-                "id": "demo/skill",
-                "content_hash": "abc",
-                "source": {"type": "project"},
-                "entrypoint": "/tmp/SKILL.md",
-            }
-            from skillager.session import record_skill_event
-
-            record_skill_event(state, "skill_activated", skill)
-            events = read_events(state, meta["session_id"])
-            self.assertEqual(events[0]["external_session_id"], "codex-123")
-            report = build_lookback(state, agent="codex", external_session_id="codex-123")
-            self.assertEqual(report["external_session_id"], "codex-123")
-            self.assertIn("demo/skill", report["skills"])
-
-    def test_lookback_recommends_route_only_for_single_session_and_block_for_harmful(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = Path(tmp) / ".skillager"
-            meta = start_session(state, agent="codex", external_session_id="codex-123")
-            session_id = meta["session_id"]
-
-            append_event(state, session_id, "skill_activated", {"skill_id": "community/gis"})
-            append_event(state, session_id, "skill_activated", {"skill_id": "community/gis"})
-            append_event(state, session_id, "skill_activated", {"skill_id": "community/gis"})
-            append_event(state, session_id, "feedback_not_useful", {"skill_id": "community/noisy"})
-            append_event(state, session_id, "skill_rejected", {"skill_id": "community/noisy"})
-            append_event(state, session_id, "feedback_harmful", {"skill_id": "community/risky"})
-
-            report = build_lookback(state, session_id=session_id)
-            actions = {item["skill_id"]: item["action"] for item in report["recommendations"]}
-            self.assertEqual(actions["community/gis"], "route-only")
-            self.assertEqual(actions["community/noisy"], "route-only")
-            self.assertEqual(actions["community/risky"], "block")
-            gis = next(item for item in report["recommendations"] if item["skill_id"] == "community/gis")
-            self.assertEqual(gis["session_count"], 1)
-
-    def test_lookback_materialize_recommendation_uses_recent_and_active_sessions(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = Path(tmp) / ".skillager"
-            first = start_session(state, agent="codex", external_session_id="codex-1")
-            append_event(state, first["session_id"], "skill_activated", {"skill_id": "community/gis"})
-            append_event(state, first["session_id"], "skill_activated", {"skill_id": "community/gis"})
-            second = start_session(state, agent="codex", external_session_id="codex-2")
-            append_event(state, second["session_id"], "skill_activated", {"skill_id": "community/gis"})
-            append_event(state, second["session_id"], "feedback_useful", {"skill_id": "community/gis"})
-
-            report = build_lookback(state, session_id=second["session_id"], recent=2)
-            rec = next(item for item in report["recommendations"] if item["skill_id"] == "community/gis")
-            self.assertEqual(rec["action"], "materialize")
-            self.assertEqual(rec["session_count"], 2)
-            self.assertEqual(rec["active_session_count"], 2)
-            self.assertEqual(set(rec["sessions"]), {first["session_id"], second["session_id"]})
-            self.assertEqual(report["candidate_session_count"], 2)
-
-    def test_session_prune_bounds_age_size_and_events(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = Path(tmp) / ".skillager"
-            meta = start_session(state, agent="codex")
-            for index in range(6):
-                append_event(state, meta["session_id"], "skill_search", {"query_preview": f"query {index}", "top_ids": ["a", "b"]})
-            result = prune_sessions(state, days=30, max_mb=5, max_events_per_session=3)
-            events = read_events(state, meta["session_id"])
-            self.assertEqual(result["trimmed_sessions"], 1)
-            self.assertLessEqual(len(events), 3)
-            self.assertEqual(events[0]["event"], "session_started")
-
-    def test_session_prune_cli(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = Path(tmp) / ".skillager"
-            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
-                self.assertEqual(main(["session", "start", "--agent", "codex"]), 0)
-                output = StringIO()
-                with redirect_stdout(output):
-                    self.assertEqual(main(["session", "prune", "--max-events-per-session", "2", "--json"]), 0)
-            data = json.loads(output.getvalue())
-            self.assertIn("bytes_after", data)
-            self.assertEqual(data["max_events_per_session"], 2)
-
 
 if __name__ == "__main__":
     unittest.main()

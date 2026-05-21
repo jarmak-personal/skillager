@@ -12,8 +12,6 @@ from unittest.mock import patch
 from support import chdir
 from skillager.cli import main
 from skillager.index import build_index, load_index
-from skillager.lookback import build_lookback
-from skillager.session import read_events
 from skillager.search import search as search_skills
 from skillager.skills import discovery as discovery_impl
 from skillager.trust import set_trust, trust_state
@@ -339,7 +337,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             paths = {Path(finding["path"]).name for finding in skill["scan"]["findings"]}
             self.assertIn("helper.sh", paths)
 
-    def test_search_records_compact_event_and_lookback_reports_overlap(self) -> None:
+    def test_search_does_not_write_session_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -353,18 +351,9 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
                     with redirect_stdout(StringIO()):
-                        self.assertEqual(main(["session", "start", "--agent", "codex"]), 0)
                         self.assertEqual(main(["search", "project planning", "--json"]), 0)
                         self.assertEqual(main(["search", "project planning status", "--json"]), 0)
-                    report = build_lookback(state)
-            overlaps = report["observed_overlaps"]
-            self.assertTrue(overlaps)
-            pair_ids = {item["id"] for item in overlaps[0]["skills"]}
-            self.assertEqual(pair_ids, {"project/alpha", "project/beta"})
-            events = read_events(state, report["sessions"][0])
-            search_event = next(item for item in events if item["event"] == "skill_search")
-            self.assertIn("query_hash", search_event)
-            self.assertNotIn("project planning updates", json.dumps(search_event))
+            self.assertFalse((state / "sessions").exists())
 
     def test_global_approval_reuses_git_collection_skill_across_clones_until_content_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
