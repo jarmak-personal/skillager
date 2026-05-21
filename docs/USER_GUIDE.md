@@ -20,11 +20,11 @@ Use `--agent claude` instead for Claude projects. `setup` is the user approval f
 
 Install Skillager as a global user tool with `uv tool install skillager` or `pipx install skillager`. It scans the current project's `.venv` and installed packages for skills, but ordinary projects do not need Skillager installed inside their own virtual environment.
 
-At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working` after context resets and can use available metadata to add useful skills to tags, attach project-relevant tags, and expose narrow native skills, stubs, a compact router skill for a tag, or nothing. Run `skillager handoff` when you want explicit post-setup curation guidance.
+At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working` after context resets and can use available metadata to add useful skills to project-local tags and expose narrow native skills, stubs, a compact router skill for a tag, or nothing. Run `skillager handoff` when you want explicit post-setup curation guidance.
 
 Setup does not materialize every approved skill by default. Approval makes a skill available for consideration; tagging and exposure are reversible project ergonomics based on what you are doing.
 
-Run `skillager doctor --agent codex` when the state seems off or the agent is stuck. `doctor` does not approve skills or expose third-party skills; it reports the exact setup, bootstrap, lint, migration, or lookback command to run. Use `skillager status` when you want a broader metadata report. Both commands avoid printing skill bodies.
+Run `skillager doctor --agent codex` when the state seems off or the agent is stuck. `doctor` does not approve skills or expose third-party skills; it reports the exact setup, bootstrap, lint, or migration command to run. Use `skillager status` when you want a broader metadata report. Both commands avoid printing skill bodies.
 
 ## Trust States
 
@@ -87,7 +87,6 @@ skillager manifest init <path>
 skillager state migrate
 skillager block <skill-id>
 skillager tag add gis vibespatial/gis-domain
-skillager project attach-tag gis
 skillager materialize --tag gis --mode router --agent codex --scope project
 skillager materialize --all-reviewed --agent codex --scope project
 skillager materialize --all-reviewed --agent claude --scope project
@@ -102,7 +101,7 @@ For a project-local automation smoke flow:
 ```bash
 skillager status --no-packages --json
 skillager setup --source project --accept-low --agent codex --no-packages --summary-json
-skillager search "spatial" --no-session-record --json
+skillager search "spatial" --json
 ```
 
 The setup summary JSON includes a compact `bootstrap` object when setup attempted or skipped first-party working artifact refresh. Automation can check `bootstrap.handoff_ready` and follow `bootstrap.next_commands` without parsing human text.
@@ -113,13 +112,13 @@ Legacy in-tree `<project>/.skillager/` state is ignored by ordinary commands. If
 
 Use `--trust-all` or `--yolo` only for fully trusted sources. They are aliases: both mark all selected skills reviewed, including medium, high-risk, and lint-blocked findings, and record the current content hashes. For lint-blocked skills they write an audited shortcut override reason.
 
-Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-project --agent codex` when you want to reset project-local Skillager state and refresh Codex working artifacts in one run: it clears project-local decisions, project tags, session records, and saved setup scope for the selected scope. It reports, but does not delete, retained reusable global approvals, global catalog collections/tags, and materialized skill files.
+Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-project --agent codex` when you want to reset project-local Skillager state and refresh Codex working artifacts in one run: it clears project-local decisions, project tags, legacy session records, and saved setup scope for the selected scope. It reports, but does not delete, retained reusable global approvals, global catalog collections, and materialized skill files.
 
-`skillager list` shows the effective project inventory and hides global native skills unless you pass `--include-global`. Use `skillager list --no-packages` when you want only local project and attached-tag inventory. Use `skillager list --summary-json --agent codex` when an agent needs compact orientation: it includes counts, every listed skill ID, and duplicate native-variant hints. Use `skillager list --json --full-json` only for verbose Skillager diagnostics.
+`skillager list` shows the effective project inventory and hides global native skills unless you pass `--include-global`. Use `skillager list --no-packages` when you want only local project and project-tag inventory. Use `skillager list --summary-json --agent codex` when an agent needs compact orientation: it includes counts, every listed skill ID, and duplicate native-variant hints. Use `skillager list --json --full-json` only for verbose Skillager diagnostics.
 
-Collection repositories are catalog inventory. `skillager setup --source collection` reviews collection skills attached to the current project. Registered collections that have not been enabled or attached stay as catalog inventory.
+Collection repositories are catalog inventory. `skillager setup --source collection` reviews registered collection skills. After review, `skillager collection enable <name>` copies available reviewed skills into a project-local tag.
 
-Tags are reusable curation. Users can curate them manually, and agents can maintain them after setup by adding available skills that match the current project or task. `tag add` accepts registered collection skill IDs and available IDs from the current project inventory, including skills from auto-discovered child repositories.
+Tags are project-local curation. Users can curate them manually, and agents can maintain them after setup by adding available skills that match the current project or task. `tag add` accepts available registered collection skill IDs and available IDs from the current project inventory, including skills from auto-discovered child repositories.
 
 `skillager status` checks PyPI for Skillager updates at most once per day and prints `uv tool upgrade skillager` when a newer release is available. Network failures are silent. Set `SKILLAGER_NO_UPDATE_CHECK=1` to disable this check.
 
@@ -128,40 +127,6 @@ Use `skillager bootstrap --agent <agent>` when review is already complete but wo
 Use `--mode stub` for skills you want visible by name without loading the full skill body into every session. A stub contains only the skill summary and an activation command; the full body still comes through Skillager's approval gate. After setup, Skillager prints numbered available-but-hidden stub candidates so you can say “please stub 1, 5, 8.”
 
 `skillager manifest init <path>` can add a minimal structured `skillager.yaml` to existing skill directories. It records audience and activation metadata only; identity and searchable prose remain derived from `SKILL.md` and path/source provenance. If it writes sidecars for skills already reviewed, run `skillager setup` again so the new content hashes are reviewed.
-
-## Lookback
-
-Lookback is an asynchronous review loop, not a required first-run step. You can ignore it until `status`, explicit `handoff`, or `doctor` reports pending evidence.
-
-Track a session when the agent exposes a session ID:
-
-```bash
-skillager session start --agent codex --external-session-id "$CODEX_SESSION_ID"
-skillager lookback --agent codex --external-session-id "$CODEX_SESSION_ID"
-```
-
-Lookback recommendations use three actions:
-
-- `materialize`: make this skill native in the project.
-- `route-only`: keep it searchable behind a router, but do not load it by default.
-- `block`: remove it from the usable set.
-
-By default, lookback computes recommendations from the most recent 10 sessions plus active sessions. This keeps parallel sessions from fighting over shared project-native skills and makes promotion/demotion depend on repeated evidence instead of one isolated task.
-
-You do not need to remember to run lookback before exiting. `skillager status` and explicit `skillager handoff` report a compact pending lookback summary when completed-session or explicit-feedback evidence is ready for review. Active-session search and activation events are collected quietly and do not interrupt `skillager working`. After `skillager lookback` is reviewed, the same evidence is acknowledged until new lookback evidence appears.
-
-Skillager also records compact local search/materialization events so lookback can spot behavior-based overlap, such as two skills repeatedly appearing in the same searches or sessions. These events do not include skill bodies, chat transcripts, command output, or full search text; search queries are stored as a hash plus a short preview.
-
-Session storage is pruned automatically at session start/end, and can be pruned manually:
-
-- 30 days by default
-- 5 MB total session event storage by default
-- 200 events per session by default
-
-```bash
-skillager session prune
-skillager session prune --days 7 --max-mb 1 --max-events-per-session 100
-```
 
 Environment overrides:
 

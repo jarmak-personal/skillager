@@ -106,7 +106,6 @@ See the [library author guide](docs/LIBRARY_AUTHORS.md) for metadata and packagi
 - Keeps search/list/show metadata safe, compact, and available-only for agents.
 - Materializes only available skills into Codex or Claude native skill directories.
 - Supports stubs and routers for large skill collections.
-- Records compact local usage signals for lookback, without storing transcripts or skill bodies.
 - Keeps direct native skills behind review unless their current content is approved.
 
 ## Safety Shape
@@ -119,22 +118,17 @@ The hard rule is simpler: human review decides availability. Agent-facing comman
 
 ## Skill Repos Without Context Flooding
 
-Skill repositories are collections. Collections are inventory; tags are curation; project attachment is intent.
+Skill repositories are collections. Collections are inventory; project-local tags are curation.
 
 ```bash
 skillager collection add ~/skills/workflows --name workflows
-skillager collection enable workflows
 skillager setup --agent codex
+skillager setup --source collection --trust-all
+skillager collection enable workflows
 skillager materialize --tag workflows --mode router --agent codex --scope project
 ```
 
-`collection enable` creates or updates a catalog tag for the collection and attaches that tag to the current project. The agent sees one router skill, not the whole repo. It activates a specific available skill only when the task calls for it.
-
-## Lookback
-
-Skillager learns from usage as a local feedback loop. It records compact events such as search result IDs, activations, materialization status, and explicit feedback. It does not store chat transcripts or skill bodies.
-
-`skillager status` and explicit `skillager handoff` can tell the agent that lookback is pending. Then the user can decide whether to promote a repeatedly useful skill, keep a broad skill route-only, block an unwanted one, or resolve overlapping skills.
+`collection enable` creates or updates a project-local tag using available reviewed collection skills. The agent sees one router skill, not the whole repo. It activates a specific available skill only when the task calls for it.
 
 ## More Docs
 
