@@ -120,7 +120,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(data["selected"][0]["source"].get("agent"), None)
             self.assertEqual(data["selected"][1]["source"].get("agent"), "claude")
 
-    def test_setup_source_collection_only_reviews_enabled_project_collections(self) -> None:
+    def test_setup_source_collection_reviews_registered_collections(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -141,13 +141,12 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(community), "--name", "community"]), 0)
                     self.assertEqual(main(["collection", "add", str(archive), "--name", "archive"]), 0)
-                    self.assertEqual(main(["collection", "enable", "community"]), 0)
                 output = StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all", "--json"]), 0)
             data = json.loads(output.getvalue())
-            self.assertEqual([skill["id"] for skill in data["selected"]], ["community/gis"])
-            self.assertEqual([item["skill_id"] for item in data["action"]["changed"]], ["community/gis"])
+            self.assertEqual([skill["id"] for skill in data["selected"]], ["archive/old", "community/gis"])
+            self.assertEqual([item["skill_id"] for item in data["action"]["changed"]], ["archive/old", "community/gis"])
 
     def test_setup_accept_low_reviews_selected_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -509,8 +508,8 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                    self.assertEqual(main(["collection", "enable", "community"]), 0)
                     self.assertEqual(main(["setup", "--source", "collection", "--accept-low"]), 0)
+                    self.assertEqual(main(["collection", "enable", "community"]), 0)
                 sessions = state / "sessions"
                 sessions.mkdir(parents=True)
                 (sessions / "sks_deadbeef.jsonl").write_text("{}\n", encoding="utf-8")
@@ -524,9 +523,9 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("Project tags detached=1", text)
             self.assertIn("sessions cleared=1", text)
             self.assertIn("saved setup scope cleared=1", text)
-            self.assertIn("Retained global state: 1 approval(s), 1 catalog tag(s), 1 tag member(s), 1 collection(s)", text)
+            self.assertIn("Retained global state: 1 approval(s), 0 catalog tag(s), 0 tag member(s), 1 collection(s)", text)
             self.assertIn("materialized skill target(s)", text)
-            self.assertFalse((state / "project_tags.json").exists())
+            self.assertFalse((state / "tags.json").exists())
             self.assertFalse((state / "sessions").exists())
             self.assertFalse((state / "status_scope.json").exists())
 
@@ -1093,6 +1092,7 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["setup", "--source", "collection", "--accept-low", "--json"]), 0)
                     self.assertEqual(main(["tag", "create", "mapping"]), 0)
                     self.assertEqual(main(["tag", "add", "mapping", "community/gis-domain"]), 0)
                     self.assertEqual(main(["project", "attach-tag", "mapping"]), 0)
@@ -1100,7 +1100,7 @@ class SkillagerSetupTests(unittest.TestCase):
             text = stdout.getvalue()
             self.assertIn("No narrow native project skill candidates found", text)
             self.assertIn("Router suggestions", text)
-            self.assertIn("skillager materialize --tag mapping --mode router --agent codex --scope project", text)
+            self.assertIn("skillager materialize --tag mapping --mode router --agent claude --scope project", text)
 
     def test_interactive_setup_splits_low_risk_approval_by_audience(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -45,20 +45,20 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertEqual(unattached_data["selected"], 0)
                 self.assertEqual(unattached_data["collections"]["unattached_count"], 1)
 
-                with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 0)
-
                 setup = StringIO()
                 with redirect_stdout(setup):
                     self.assertEqual(main(["setup", "--no-packages", "--json"]), 0)
                 setup_data = json.loads(setup.getvalue())
-                self.assertEqual([skill["id"] for skill in setup_data["selected"]], ["community/gis-domain"])
+                self.assertEqual([skill["id"] for skill in setup_data["selected"]], [])
 
                 review = StringIO()
                 with redirect_stdout(review):
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low", "--json"]), 0)
                 review_data = json.loads(review.getvalue())
                 self.assertEqual(review_data["summary"]["by_trust"], {"reviewed": 1})
+
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 0)
 
                 raw_collection_review = StringIO()
                 with redirect_stdout(raw_collection_review):
@@ -206,14 +206,15 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["setup", "--source", "collection", "--accept-low", "--json"]), 0)
                     self.assertEqual(main(["tag", "add", "all-community", "--from-collection", "community"]), 0)
                 output = StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(main(["tag", "show", "all-community", "--json"]), 0)
             data = json.loads(output.getvalue())
-            self.assertEqual(data["skills"], [])
+            self.assertEqual([skill["id"] for skill in data["skills"]], ["community/first", "community/second"])
             tags = json.loads((state / "tags.json").read_text(encoding="utf-8"))
-            self.assertEqual(set(tags["tags"]["all-community"]), {"community/first", "community/second"})
+            self.assertEqual(set(tags["tags"]["all-community"]["skills"]), {"community/first", "community/second"})
 
     def test_tag_add_from_collection_sync_replaces_existing_members(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -231,6 +232,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["setup", "--source", "collection", "--accept-low", "--json"]), 0)
                     self.assertEqual(main(["tag", "create", "mixed"]), 0)
                     self.assertEqual(main(["tag", "add", "mixed", "community/first"]), 0)
                     self.assertEqual(main(["tag", "add", "mixed", "--from-collection", "community", "--sync"]), 0)
@@ -238,10 +240,10 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["tag", "show", "mixed", "--json"]), 0)
             data = json.loads(output.getvalue())
-            self.assertEqual(data["skills"], [])
+            self.assertEqual([skill["id"] for skill in data["skills"]], ["community/first"])
             tags = json.loads((state / "tags.json").read_text(encoding="utf-8"))
-            self.assertEqual(tags["tag_metadata"]["mixed"]["source_collections"], ["community"])
-            self.assertEqual(tags["tags"]["mixed"], ["community/first"])
+            self.assertEqual(tags["tags"]["mixed"]["source_collections"], ["community"])
+            self.assertEqual(tags["tags"]["mixed"]["skills"], ["community/first"])
 
     def test_tag_and_project_tag_commands_surface_mixed_trust(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -272,7 +274,21 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                         reviewed_skill["source"],
                         approval_key=reviewed_skill.get("approval_key"),
                     )
-                    self.assertEqual(main(["tag", "add", "mixed", "--from-collection", "community"]), 0)
+                    (state / "tags.json").write_text(
+                        json.dumps(
+                            {
+                                "schema": "skillager.project-tags.v1",
+                                "tags": {
+                                    "mixed": {
+                                        "skills": ["community/reviewed", "community/unreviewed"],
+                                    }
+                                },
+                            },
+                            indent=2,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
 
                 tag_output = StringIO()
                 with redirect_stdout(tag_output):
@@ -490,8 +506,6 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 project_state = project_state_root(project)
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "collection", "add", str(collection), "--name", "personal"]), 0)
-                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "tag", "create", "python"]), 0)
-                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "project", "attach-tag", "python"]), 0)
                 (catalog_state / "collections" / "personal.json").write_text(
                     json.dumps(
                         {
@@ -506,8 +520,17 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     + "\n",
                     encoding="utf-8",
                 )
-                (catalog_state / "tags.json").write_text(
-                    json.dumps({"tags": {"python": ["personal/foo"]}, "tag_metadata": {"python": {"source_collections": ["personal"]}}}, indent=2) + "\n",
+                (project / ".skillager").mkdir()
+                (project / ".skillager" / "tags.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.project-tags.v1",
+                            "catalog_state_dir": str(catalog_state.resolve()),
+                            "tags": {"python": {"skills": ["personal/foo"], "source_collections": ["personal"]}},
+                        },
+                        indent=2,
+                    )
+                    + "\n",
                     encoding="utf-8",
                 )
                 set_trust(project_state, "personal/foo", "reviewed", digest, {"type": "collection", "collection": "personal"})
@@ -684,6 +707,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with patch("pathlib.Path.home", return_value=root):
                     with chdir(project_a), redirect_stdout(StringIO()):
                         self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                        self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low", "--json"]), 0)
                         self.assertEqual(main(["tag", "create", "gis"]), 0)
                         self.assertEqual(main(["tag", "add", "gis", "community/gis-domain", "community/topology"]), 0)
                         self.assertEqual(main(["tag", "remove", "gis", "community/topology"]), 0)
@@ -697,34 +721,34 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(json.loads(unattached.getvalue())["selected"], 0)
 
                     with chdir(project_b), redirect_stdout(StringIO()):
-                        self.assertEqual(main(["project", "attach-tag", "gis"]), 0)
-                    self.assertTrue((project_state_root(project_b) / "project_tags.json").exists())
-                    self.assertFalse((project_state_root(project_a) / "project_tags.json").exists())
+                        self.assertEqual(main(["tag", "add", "gis", "community/gis-domain"]), 0)
+                    self.assertTrue((project_b / ".skillager" / "tags.json").exists())
+                    self.assertTrue((project_a / ".skillager" / "tags.json").exists())
 
                     review = StringIO()
                     with chdir(project_b), redirect_stdout(review):
                         self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low", "--json"]), 0)
                     review_data = json.loads(review.getvalue())
-                    self.assertEqual(review_data["summary"]["by_trust"], {"reviewed": 1})
+                    self.assertEqual(review_data["summary"]["by_trust"], {"reviewed": 2})
 
                     raw_review = StringIO()
                     with chdir(project_a), redirect_stdout(raw_review):
                         self.assertEqual(main(["review", "--source", "collection", "--json"]), 0)
                     raw_review_data = json.loads(raw_review.getvalue())
-                    self.assertEqual(raw_review_data["selected"], [])
+                    self.assertEqual({skill["id"] for skill in raw_review_data["selected"]}, {"community/gis-domain", "community/topology"})
 
                     project_b_status = StringIO()
                     with chdir(project_b), redirect_stdout(project_b_status):
                         self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
                     project_b_status_data = json.loads(project_b_status.getvalue())
                     self.assertEqual(project_b_status_data["selected"], 1)
-                    self.assertEqual(project_b_status_data["collections"]["attached_count"], 0)
-                    self.assertEqual(project_b_status_data["collections"]["unattached_count"], 1)
+                    self.assertEqual(project_b_status_data["collections"]["attached_count"], 1)
+                    self.assertEqual(project_b_status_data["collections"]["unattached_count"], 0)
 
                     project_a_status = StringIO()
                     with chdir(project_a), redirect_stdout(project_a_status):
                         self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-                    self.assertEqual(json.loads(project_a_status.getvalue())["selected"], 0)
+                    self.assertEqual(json.loads(project_a_status.getvalue())["selected"], 1)
 
     def test_project_tag_remembers_external_catalog_for_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -740,12 +764,12 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             with patch.dict(os.environ, {"NO_COLOR": "1"}, clear=True), patch("pathlib.Path.home", return_value=root), chdir(project):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "setup", "--source", "collection", "--accept-low", "--json"]), 0)
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "tag", "create", "gis"]), 0)
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "tag", "add", "gis", "community/gis-domain"]), 0)
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "project", "attach-tag", "gis"]), 0)
-                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "setup", "--source", "collection", "--accept-low", "--json"]), 0)
 
-                project_tags = json.loads((project_state_root(project) / "project_tags.json").read_text(encoding="utf-8"))
+                project_tags = json.loads((project / ".skillager" / "tags.json").read_text(encoding="utf-8"))
                 self.assertEqual(project_tags["catalog_state_dir"], str(catalog_state.resolve()))
 
                 with redirect_stdout(StringIO()):
@@ -776,10 +800,10 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
                     self.assertEqual(main(["tag", "create", "gis"]), 0)
                     self.assertEqual(main(["tag", "add", "gis", "community/gis-domain"]), 0)
                     self.assertEqual(main(["project", "attach-tag", "gis"]), 0)
-                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
                 (state / "status_scope.json").write_text(
                     json.dumps({"schema": "skillager.status-scope.v1", "selected_count": 49, "baseline": {}}),
                     encoding="utf-8",
@@ -849,10 +873,10 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
                     self.assertEqual(main(["tag", "create", "gpu"]), 0)
                     self.assertEqual(main(["tag", "add", "gpu", "community/gpu-review"]), 0)
                     self.assertEqual(main(["project", "attach-tag", "gpu"]), 0)
-                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
                 router_output = StringIO()
                 with redirect_stdout(router_output):
                     self.assertEqual(main(["materialize", "--tag", "gpu", "--mode", "router", "--agent", "codex"]), 0)
@@ -932,8 +956,8 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                    self.assertEqual(main(["collection", "enable", "community", "--tag", "all"]), 0)
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
+                    self.assertEqual(main(["collection", "enable", "community", "--tag", "all"]), 0)
                     self.assertEqual(main(["materialize", "--tag", "all", "--mode", "router", "--agent", "codex"]), 0)
             router = root / ".agents" / "skills" / "skillager-all" / "SKILL.md"
             router_text = router.read_text(encoding="utf-8")

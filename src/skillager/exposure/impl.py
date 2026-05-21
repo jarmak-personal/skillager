@@ -241,10 +241,9 @@ Before curating tags or exposure for a new task, build your own slate from avail
 
 - Every available skill can be activated through Skillager. Not every available skill should be materialized.
 - Tags are agent-maintained curation for available skills. Add relevant available skills to an existing tag or create a focused tag when it helps the current project.
-- Curate focused tags with:
+- Curate focused project-local tags with:
   `skillager tag add <tag> <skill-id> [<skill-id> ...]`
-- Attach project-relevant tags before router materialization:
-  `skillager project attach-tag <tag>`
+- A tag exists for this project as soon as it is created or receives a skill; `project attach-tag` is only a legacy compatibility alias.
 - Use search for the long tail.
 - Use routers for broad recurring tags:
   `skillager materialize --tag <tag> --mode router --agent {agent} --scope project`
