@@ -721,7 +721,8 @@ class SkillagerSetupTests(unittest.TestCase):
                     with redirect_stdout(output):
                         self.assertEqual(main(["setup", "--no-packages", "--non-interactive"]), 0)
             text = output.getvalue()
-            self.assertIn("trust: reviewed=1", text)
+            self.assertIn("Owner review: no action needed", text)
+            self.assertIn("1 approved source entry total", text)
             self.assertNotIn("Needs review", text)
 
     def test_interactive_setup_hides_skills_after_approval(self) -> None:
@@ -754,7 +755,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("file:", text)
             self.assertNotIn("project/low [LOW] project/- discovered", text)
             self.assertIn("Review complete. Install Skillager working skill", text)
-            self.assertIn("Setup complete.", text)
+            self.assertIn("Skillager setup complete", text)
             self.assertIn("Next step", text)
             self.assertIn(f"Skills were written to: {root / '.agents' / 'skills'}", text)
             self.assertIn(f"Restart Codex in this directory: {root}", text)
@@ -789,7 +790,8 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("project/api-example: skipped; remains unreviewed", text)
             self.assertIn("Review complete. Install Skillager working skill", text)
             self.assertIn("skillager/working: materialized", text)
-            self.assertIn("Setup summary", text)
+            self.assertIn("Skillager setup complete", text)
+            self.assertIn("What you have", text)
             self.assertIn("Stub candidates", text)
             self.assertIn("please stub 1, 5, 8", text)
             self.assertNotIn("project/gis-domain: materialized", text)
