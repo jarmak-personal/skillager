@@ -18,7 +18,7 @@ from skillager.trust import content_hash, set_trust, trust_state
 
 class SkillagerCollectionsTagsTests(unittest.TestCase):
 
-    def test_collection_tag_attachment_feeds_setup_and_status(self) -> None:
+    def test_collection_review_feeds_global_inventory_and_project_tags(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -42,18 +42,20 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(unattached):
                     self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
                 unattached_data = json.loads(unattached.getvalue())
-                self.assertEqual(unattached_data["selected"], 0)
+                self.assertEqual(unattached_data["selected"], 1)
+                self.assertTrue(unattached_data["needs_setup"])
                 self.assertEqual(unattached_data["collections"]["unattached_count"], 1)
+                self.assertEqual(unattached_data["collection_inventory"]["items"][0]["pending_owner_review"], 1)
 
                 setup = StringIO()
                 with redirect_stdout(setup):
                     self.assertEqual(main(["setup", "--no-packages", "--json"]), 0)
                 setup_data = json.loads(setup.getvalue())
-                self.assertEqual([skill["id"] for skill in setup_data["selected"]], [])
+                self.assertEqual([skill["id"] for skill in setup_data["selected"]], ["community/gis-domain"])
 
                 review = StringIO()
                 with redirect_stdout(review):
-                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low", "--json"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--accept-low", "--json"]), 0)
                 review_data = json.loads(review.getvalue())
                 self.assertEqual(review_data["summary"]["by_trust"], {"reviewed": 1})
 
@@ -103,6 +105,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["status", "--no-packages"]), 0)
                 self.assertIn("registered collection repos: 1", status_text.getvalue())
                 self.assertIn("discovered collection skill repos: 1", status_text.getvalue())
+                self.assertNotIn("collection enable", status_text.getvalue())
                 self.assertNotIn("scan risk", status_text.getvalue())
 
                 search_output = StringIO()
@@ -684,7 +687,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 ["personal/python/foo", "personal/writing/foo"],
             )
 
-    def test_catalog_collections_are_global_but_tag_attachments_are_project_local(self) -> None:
+    def test_catalog_collections_and_review_are_global_but_tags_are_project_local(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             catalog_state = root / "catalog-state"
@@ -718,7 +721,15 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     unattached = StringIO()
                     with chdir(project_b), redirect_stdout(unattached):
                         self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-                    self.assertEqual(json.loads(unattached.getvalue())["selected"], 0)
+                    unattached_data = json.loads(unattached.getvalue())
+                    self.assertEqual(unattached_data["selected"], 2)
+                    self.assertFalse(unattached_data["needs_setup"])
+                    self.assertEqual(unattached_data["collections"]["unattached_count"], 1)
+
+                    project_b_search = StringIO()
+                    with chdir(project_b), redirect_stdout(project_b_search):
+                        self.assertEqual(main(["search", "gis", "--json"]), 0)
+                    self.assertEqual([skill["id"] for skill in json.loads(project_b_search.getvalue())], ["community/gis-domain"])
 
                     with chdir(project_b), redirect_stdout(StringIO()):
                         self.assertEqual(main(["tag", "add", "gis", "community/gis-domain"]), 0)
@@ -741,14 +752,14 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     with chdir(project_b), redirect_stdout(project_b_status):
                         self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
                     project_b_status_data = json.loads(project_b_status.getvalue())
-                    self.assertEqual(project_b_status_data["selected"], 1)
+                    self.assertEqual(project_b_status_data["selected"], 2)
                     self.assertEqual(project_b_status_data["collections"]["attached_count"], 1)
                     self.assertEqual(project_b_status_data["collections"]["unattached_count"], 0)
 
                     project_a_status = StringIO()
                     with chdir(project_a), redirect_stdout(project_a_status):
                         self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-                    self.assertEqual(json.loads(project_a_status.getvalue())["selected"], 1)
+                    self.assertEqual(json.loads(project_a_status.getvalue())["selected"], 2)
 
     def test_project_tag_remembers_external_catalog_for_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

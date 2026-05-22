@@ -2,7 +2,7 @@
 
 Many users have repositories full of skills. Skillager treats those repositories as collections.
 
-Collections are inventory. Tags are reusable curation. Project attachments are intent.
+Collections are user-global inventory. Project-local tags are optional curation for routers, stubs, and task-specific grouping.
 
 ## Add A Skill Repository
 
@@ -13,26 +13,25 @@ skillager collection search community gis
 skillager collection show community/gis-domain
 ```
 
-Adding a collection does not expose skills to agents. It registers inventory only.
+Adding a collection does not expose skills to agents. It registers inventory only. Run setup once to review the collection; after approval, unchanged collection skills are searchable from any project that uses the same Skillager catalog.
 
 If you clone a skill repository directly inside a project directory, `skillager setup` also discovers immediate child repositories with common Skillager or agent-native skill roots such as `.skills/`, `skills/`, `.agents/skills/`, `.agents/<agent>/skills/`, `.codex/skills/`, and `.claude/skills/`. A repository like `./agent-workflows/skills/bisect/SKILL.md` works even when the skills do not have `skillager.yaml`; Skillager infers metadata from `SKILL.md`. After review, those project-inventory skills can be added to tags by ID without registering the child repository first.
 
-To make a collection available to the current project, review it, then enable the available skills as a project-local tag:
+To review only collection skills:
 
 ```bash
 skillager setup --source collection --agent codex
-skillager collection enable community
 ```
 
-`collection enable` creates or updates a project-local tag with the collection's available reviewed skills. Blocked, unreviewed, and lint-blocked skills are not added by the default enable flow. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path; `--yolo` is the same trusted-source shortcut with a blunter name. Both trusted-source shortcuts review selected lint-blocked skills with an audited shortcut override. For untrusted repositories, use the normal review flow.
+Ordinary `skillager setup --agent <agent>` also includes registered collections. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path; `--yolo` is the same trusted-source shortcut with a blunter name. Both trusted-source shortcuts review selected lint-blocked skills with an audited shortcut override. For untrusted repositories, use the normal review flow.
 
-`setup --source collection --agent <agent>` reviews registered collection skills and refreshes that agent's first-party working artifacts after approval. Registered collections remain catalog inventory until reviewed skills are copied into a project tag. If review is complete but status still reports missing or stale artifacts, run `skillager doctor --agent <agent>` for the exact repair command.
+`setup --source collection --agent <agent>` reviews registered collection skills and refreshes that agent's first-party working artifacts after approval. If review is complete but status still reports missing or stale artifacts, run `skillager doctor --agent <agent>` for the exact repair command.
 
 Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager lint` or `skillager collection show <skill-id> --include-lint-blocked` to inspect them without printing hostile manifest contents.
 
 ## Curate With Tags
 
-`collection enable` is the common case. Manual or agent-managed tags are useful when a large collection should be split into smaller project-relevant groups:
+After review, collection skills are already part of effective project inventory. Tags are useful when a large collection should be split into smaller project-relevant groups or exposed through a compact router:
 
 ```bash
 skillager tag create gis
@@ -40,9 +39,12 @@ skillager tag add gis community/gis-domain community/topology community/projecti
 skillager tag add gis vibespatial/gis-domain
 skillager tag add all-community --from-collection community
 skillager tag add all-community --from-collection community --sync
+skillager collection enable community
 skillager tag show gis
 skillager tag sync --from ../other-project --to .
 ```
+
+`collection enable <name>` is a convenience wrapper that creates or updates a project-local tag for the collection's available reviewed skills. Blocked, unreviewed, and lint-blocked skills are not added by the default enable flow.
 
 Tags live in `<project>/.skillager/tags.json`. `tag add` accepts available registered collection skill IDs and available current project inventory IDs. This lets agents maintain useful project tags after setup while user-authority review stays in the global trust/catalog state.
 Tag show/search commands hide lint-blocked skills unless you pass `--include-lint-blocked` for diagnostics. That flag only changes read-only visibility; it never approves or exposes a skill.
@@ -70,7 +72,7 @@ This copies legacy global tag attachments into project-local tag files and leave
 
 After review, keep most large-repository skills searchable behind Skillager. Materialize only a small native set that is always relevant to the project, use stub mode for approved commands that should be visible by name, or use router mode for a curated tag when the agent needs broad access without loading every skill. Agents may update tags and scoped exposure after you tell them what you are working on; they should report the changes they made.
 
-Once a tag is attached, its available skills are part of effective project inventory. Agents can use normal project commands instead of collection-specific commands:
+After review, available collection skills are part of effective project inventory whether or not they are in a project tag. Agents can use normal project commands instead of collection-specific commands:
 
 ```bash
 skillager search "mapping workflow" --json

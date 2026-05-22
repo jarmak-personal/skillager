@@ -573,16 +573,19 @@ def add_collection_parser(sub: argparse._SubParsersAction[argparse.ArgumentParse
         "collection",
         help="Manage indexed skill collections.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Collections are local skill inventory. Adding a collection does not expose skills to agents.",
+        description=(
+            "Collections are user-global skill inventory. Adding a collection does not expose skills to agents; "
+            "reviewed collection skills become searchable project inventory, and tags remain optional curation."
+        ),
         epilog=textwrap.dedent(
             """\
             Examples:
               skillager collection add ~/skills/community --name community
-              skillager collection enable community
               skillager collection list
               skillager collection refresh community
               skillager collection search community gis
               skillager collection show community/gis-domain
+              skillager collection enable community
               skillager collection remove community
             """
         ),
@@ -898,7 +901,7 @@ def cmd_collection_add(args: argparse.Namespace) -> int:
         print(f"{result['collection']['name']}: indexed {result['indexed']} skill(s)")
         if result.get("errors"):
             print(f"errors: {len(result['errors'])}")
-        print("No skills were exposed to agents. Review collection skills, then add available skills to project-local tags when useful.")
+        print("No skills were exposed to agents. Review collection skills once with `skillager setup`; project tags are optional curation for routers and stubs.")
     return 0
 
 
@@ -960,7 +963,7 @@ def cmd_collection_enable(args: argparse.Namespace) -> int:
         if data.get("errors"):
             print(f"errors: {len(data['errors'])}")
         if not tag_data["skills"]:
-            print("Next: run `skillager setup --source collection` from a user shell to review collection skills before tagging.")
+            print("Next: run `skillager setup` from a user shell to review collection skills before tagging.")
     return 0
 
 
@@ -1485,11 +1488,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
             _print_review_report(report["selected"], report["summary"], report["action"], compact=not args.details)
         if not report["selected"]:
             _print_empty_setup_guidance(args)
-        _print_out_of_scope_collections(
-            root(args),
-            catalog_root(args),
-            action_requested=bool(args.yolo or args.accept_low or args.trust_selected or args.block_high or args.override_lint),
-        )
         if not action_requested and not args.non_interactive:
             _interactive_setup(
                 root(args),
@@ -1811,7 +1809,7 @@ def _build_visible_skill_view(
         extra_paths=_active_setup_paths(state_root, paths),
         persist=False,
     )
-    extra_skills = _project_tag_collection_skills(
+    extra_skills = _collection_inventory_skills(
         state_root,
         catalog_root=catalog_root,
         project_dir=project_dir,
@@ -2194,8 +2192,15 @@ def _build_working_result(
         extra_paths=_active_setup_paths(state_root),
         persist=False,
     )
+    collection_skills = _collection_inventory_skills(
+        state_root,
+        catalog_root=catalog_root,
+        project_dir=project_dir,
+        include_lint_blocked=True,
+    )
+    skills = [*data.get("skills", []), *collection_skills]
     setup_complete = _working_setup_complete(state_root)
-    pending_external = _working_pending_external_review(data.get("skills", []))
+    pending_external = _working_pending_external_review(skills)
     return {
         "schema": WORKING_RESULT_SCHEMA,
         "status": "ok",
@@ -3234,6 +3239,8 @@ def _status_collection_summary(state_root: Path, catalog_root: Path) -> dict[str
     return {
         "count": len(items),
         "skill_count": total_skills,
+        "tagged_count": attached_count,
+        "untagged_count": len(items) - attached_count,
         "attached_count": attached_count,
         "unattached_count": len(items) - attached_count,
         "items": items,
@@ -3282,17 +3289,6 @@ def _status_collection_inventory(skills: list[dict[str, Any]]) -> dict[str, Any]
         "blocked": sum(item["blocked"] for item in items),
         "items": items,
     }
-
-
-def _print_out_of_scope_collections(state_root: Path, catalog_root: Path, *, action_requested: bool) -> None:
-    summary = _status_collection_summary(state_root, catalog_root)
-    if not summary.get("unattached_count"):
-        return
-    names = ", ".join(f"{item['name']}={item['skills']}" for item in summary.get("items", []) if not item.get("attached"))
-    prefix = "Not in setup scope" if action_requested else "Available collections"
-    print()
-    print(f"{prefix}: {summary['unattached_count']} unattached collection(s) ({names})")
-    print("  run `skillager setup --source collection` to review, then `skillager collection enable <name>` to create a project tag")
 
 
 def _tag_trust_summaries(state_root: Path, catalog_root: Path, tags: list[str]) -> list[dict[str, Any]]:
@@ -3377,7 +3373,7 @@ def _print_tag_review_warning(summary: dict[str, Any], *, indent: str = "") -> N
         f"{summary.get('review_needed', 0)} unreviewed and {summary.get('lint_blocked', 0)} lint-blocked skill(s); "
         "search and router materialization will use only available members."
     )
-    print(f"{indent}review remaining tag members with: skillager setup --source collection")
+    print(f"{indent}review remaining tag members with: skillager setup")
 
 
 def _print_tag_owner_review_note(summary: dict[str, Any], *, indent: str = "") -> None:
@@ -3386,7 +3382,7 @@ def _print_tag_owner_review_note(summary: dict[str, Any], *, indent: str = "") -
         return
     print(
         f"{indent}note: {pending} tag member(s) need owner review before they become available. "
-        "Ask the user to run `skillager setup --source collection` when they want to inspect them."
+        "Ask the user to run `skillager setup` when they want to inspect them."
     )
 
 
@@ -3471,9 +3467,7 @@ def _status_message(
         if command:
             return f"Skillager: review is complete, but working artifacts need refresh. Run `{command}`."
         return f"Skillager: review is complete, but working artifacts need manual repair. {handoff.get('message', '').strip()}"
-    if collection_summary and collection_summary.get("unattached_count"):
-        return "Skillager: registered collections have no project tag. Run `skillager setup --source collection` to review, then `skillager collection enable <name>`."
-    return "Skillager: no skills pending owner review. Use only available materialized skills."
+    return "Skillager: no skills pending owner review. Use available metadata and materialize only when the task needs exposure."
 
 
 def _print_status(status: dict[str, Any]) -> None:
@@ -3517,13 +3511,9 @@ def _print_status(status: dict[str, Any]) -> None:
         names = ", ".join(f"{item['name']}={item['skills']}" for item in collections.get("items", [])[:5])
         if collections.get("count", 0) > 5:
             names += f", ... {collections['count'] - 5} more"
-        print(
-            "  - registered collection repos: "
-            f"{collections['count']} ({names}) - "
-            f"{collections.get('attached_count', 0)} attached"
-        )
-        if collections.get("unattached_count"):
-            print("    run `skillager setup --source collection` to review, then `skillager collection enable <name>`")
+        print(f"  - registered collection repos: {collections['count']} ({names})")
+        if collections.get("tagged_count"):
+            print(f"    project tags reference {collections.get('tagged_count')} collection(s)")
     collection_inventory = status.get("collection_inventory") or {}
     if collection_inventory.get("count"):
         names = ", ".join(f"{item['name']}={item['skills']}" for item in collection_inventory.get("items", [])[:5])
@@ -3830,7 +3820,7 @@ def _prompt_setup_audience(state_root: Path, args: argparse.Namespace, *, catalo
         approval_root=catalog_root,
         extra_paths=_active_setup_paths(state_root, args.paths or None),
     )
-    extra_skills = _project_tag_collection_skills(
+    extra_skills = _collection_inventory_skills(
         state_root,
         catalog_root=catalog_root,
         project_dir=_current_project_dir(),
@@ -4431,7 +4421,7 @@ def _effective_project_skills(
     project_dir = (project_dir or _current_project_dir()).resolve()
     by_id = _base_project_skill_map(state_root, catalog_root=catalog_root, project_dir=project_dir)
     tag_membership = _project_tag_membership(project_dir)
-    for skill in _project_tag_collection_skills(
+    for skill in _collection_inventory_skills(
         state_root,
         catalog_root=catalog_root,
         project_dir=project_dir,
@@ -4464,7 +4454,7 @@ def _base_project_skill_map(state_root: Path, *, catalog_root: Path, project_dir
     return by_id
 
 
-def _project_tag_collection_skills(
+def _collection_inventory_skills(
     state_root: Path,
     *,
     catalog_root: Path,
@@ -4473,9 +4463,6 @@ def _project_tag_collection_skills(
     include_lint_blocked: bool = False,
 ) -> list[dict[str, Any]]:
     tag_membership = _project_tag_membership(project_dir)
-    if not tag_membership:
-        return []
-    tag_ids = set(tag_membership)
     exposure = _project_exposure(project_dir)
     by_id: dict[str, dict[str, Any]] = {}
     for skill in select_collection_skills(
@@ -4485,10 +4472,11 @@ def _project_tag_collection_skills(
         include_blocked=include_blocked,
         include_lint_blocked=include_lint_blocked,
     ):
-        if skill.get("id") not in tag_ids:
-            continue
         item = _with_project_inventory_fields(skill, exposure)
-        item["tags"] = sorted(set(item.get("tags", [])) | tag_membership.get(item["id"], set()))
+        tags = tag_membership.get(item["id"], set())
+        if tags:
+            item["tags"] = sorted(set(item.get("tags", [])) | tags)
+            item["availability"] = sorted(set(item.get("availability", [])) | {"attached-tag"})
         _merge_skill_inventory(by_id, item)
     return [by_id[skill_id] for skill_id in sorted(by_id)]
 
@@ -4908,18 +4896,14 @@ def cmd_review(args: argparse.Namespace) -> int:
 
 
 def _review_extra_skills(args: argparse.Namespace) -> list[dict[str, Any]]:
-    if getattr(args, "source", None) == "collection":
-        return select_collection_skills(
-            catalog_root(args),
-            trust_root=root(args),
-            approval_root=catalog_root(args),
-            include_blocked=getattr(args, "include_blocked", False),
-            include_lint_blocked=True,
-        )
-    return _project_tag_collection_skills(
+    source = getattr(args, "source", None)
+    if source not in {None, "collection"}:
+        return []
+    return _collection_inventory_skills(
         root(args),
         catalog_root=catalog_root(args),
         project_dir=_current_project_dir(),
+        include_blocked=getattr(args, "include_blocked", False),
         include_lint_blocked=True,
     )
 
