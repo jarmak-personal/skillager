@@ -17,16 +17,16 @@ Adding a collection does not expose skills to agents. It registers inventory onl
 
 If you clone a skill repository directly inside a project directory, `skillager setup` also discovers immediate child repositories with common Skillager or agent-native skill roots such as `.skills/`, `skills/`, `.agents/skills/`, `.agents/<agent>/skills/`, `.codex/skills/`, and `.claude/skills/`. A repository like `./agent-workflows/skills/bisect/SKILL.md` works even when the skills do not have `skillager.yaml`; Skillager infers metadata from `SKILL.md`. After review, those project-inventory skills can be added to tags by ID without registering the child repository first.
 
-To make a collection available to the current project, enable it:
+To make a collection available to the current project, review it, then enable the available skills as a project-local tag:
 
 ```bash
-skillager collection enable community
 skillager setup --source collection --agent codex
+skillager collection enable community
 ```
 
-`collection enable` creates or updates a reusable catalog tag with the collection's visible skills and attaches that tag to the current project. Blocked and lint-blocked skills are not added by the default enable flow. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path; `--yolo` is the same trusted-source shortcut with a blunter name. Both trusted-source shortcuts review selected lint-blocked skills with an audited shortcut override. For untrusted repositories, use the normal review flow.
+`collection enable` creates or updates a project-local tag with the collection's available reviewed skills. Blocked, unreviewed, and lint-blocked skills are not added by the default enable flow. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path; `--yolo` is the same trusted-source shortcut with a blunter name. Both trusted-source shortcuts review selected lint-blocked skills with an audited shortcut override. For untrusted repositories, use the normal review flow.
 
-`setup --source collection --agent <agent>` reviews collection skills attached to the current project and refreshes that agent's first-party working artifacts after approval. Registered collections that have not been enabled or attached stay as catalog inventory. If review is complete but status still reports missing or stale artifacts, run `skillager doctor --agent <agent>` for the exact repair command.
+`setup --source collection --agent <agent>` reviews registered collection skills and refreshes that agent's first-party working artifacts after approval. Registered collections remain catalog inventory until reviewed skills are copied into a project tag. If review is complete but status still reports missing or stale artifacts, run `skillager doctor --agent <agent>` for the exact repair command.
 
 Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager lint` or `skillager collection show <skill-id> --include-lint-blocked` to inspect them without printing hostile manifest contents.
 
@@ -41,22 +41,32 @@ skillager tag add gis vibespatial/gis-domain
 skillager tag add all-community --from-collection community
 skillager tag add all-community --from-collection community --sync
 skillager tag show gis
+skillager tag sync --from ../other-project --to .
 ```
 
-Tags live in the reusable user catalog by default. `tag add` accepts registered collection skill IDs and current project inventory IDs. This lets agents maintain useful project tags after setup while users can still rename, split, or remove tag members later.
+Tags live in `<project>/.skillager/tags.json`. `tag add` accepts available registered collection skill IDs and available current project inventory IDs. This lets agents maintain useful project tags after setup while user-authority review stays in the global trust/catalog state.
 Tag show/search commands hide lint-blocked skills unless you pass `--include-lint-blocked` for diagnostics. That flag only changes read-only visibility; it never approves or exposes a skill.
 
-## Attach Tags To A Project
+Project tags do not broadcast live across repositories. Use `tag sync --from <project> --to <project>` for an explicit copy, or `--to-all` to copy to known projects recorded by setup/bootstrap.
+
+## Project Tags
 
 From the project directory:
 
 ```bash
-skillager project attach-tag gis
-skillager setup
+skillager tag add gis community/gis-domain
+skillager project tags
 ```
 
-Attached tag skills become setup candidates for that project. They are still not usable until reviewed.
-When a project attaches a tag from an external catalog location, Skillager records that catalog path in the project state so later `search`, `show`, and guarded `activate` commands work without repeating `--catalog-state-dir`.
+A tag belongs to a project by existing in that project's tag file. `project attach-tag` remains as a compatibility alias for old workflows, but new flows should create or update tags directly. When a project tag is created while using an external catalog location, Skillager records that catalog path in the tag file so later `search`, `show`, and guarded `activate` commands work without repeating `--catalog-state-dir`.
+
+For older global-tag installs, run this once from a user shell after setup has recorded your projects:
+
+```bash
+skillager state migrate-tags --to projects
+```
+
+This copies legacy global tag attachments into project-local tag files and leaves the old global tag data in place for rollback.
 
 After review, keep most large-repository skills searchable behind Skillager. Materialize only a small native set that is always relevant to the project, use stub mode for approved commands that should be visible by name, or use router mode for a curated tag when the agent needs broad access without loading every skill. Agents may update tags and scoped exposure after you tell them what you are working on; they should report the changes they made.
 

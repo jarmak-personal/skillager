@@ -73,7 +73,7 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.assertEqual(data["auto_approved_project_count"], 0)
             self.assertEqual(self.indexed_skill(root, state, "project/local-tool")["trust"], "discovered")
 
-    def test_working_silently_approves_project_native_skill_after_setup(self) -> None:
+    def test_working_does_not_auto_approve_project_native_skill_after_setup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -84,12 +84,10 @@ class SkillagerWorkingTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             self.assertEqual(stdout, "")
-            skill = self.listed_skill(root, state, "project/local-tool")
-            self.assertEqual(skill["trust"], "reviewed")
-            self.assertEqual(skill["trust_reason"], "working_project_local_user_added")
-            self.assertEqual(skill["exposure"], "native")
+            skill = self.indexed_skill(root, state, "project/local-tool")
+            self.assertEqual(skill["trust"], "discovered")
 
-    def test_working_json_reports_claude_project_skill_auto_approval(self) -> None:
+    def test_working_json_reports_no_project_skill_auto_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -101,11 +99,11 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
             self.assertEqual(data["agent"], "claude")
-            self.assertEqual(data["auto_approved_project_count"], 1)
-            self.assertEqual(data["auto_approved_project_skills"][0]["id"], "project/claude-tool")
-            self.assertEqual(self.listed_skill(root, state, "project/claude-tool")["trust"], "reviewed")
+            self.assertEqual(data["auto_approved_project_count"], 0)
+            self.assertEqual(data["auto_approved_project_skills"], [])
+            self.assertEqual(self.indexed_skill(root, state, "project/claude-tool")["trust"], "discovered")
 
-    def test_working_does_not_lint_gate_project_local_skill_after_setup(self) -> None:
+    def test_working_does_not_approve_lint_warned_project_local_skill_after_setup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -121,14 +119,14 @@ class SkillagerWorkingTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
-            self.assertEqual(data["auto_approved_project_skills"][0]["id"], "project/bad-manifest")
-            skill = self.listed_skill(root, state, "project/bad-manifest")
-            self.assertEqual(skill["trust"], "reviewed")
+            self.assertEqual(data["auto_approved_project_skills"], [])
+            skill = self.indexed_skill(root, state, "project/bad-manifest")
+            self.assertEqual(skill["trust"], "lint_blocked")
             code, body, stderr = self.run_cli(["show", "project/bad-manifest", "--content"], root=root, state=state)
-            self.assertEqual(code, 0, stderr)
-            self.assertIn("Use this project-local skill.", body)
+            self.assertEqual(code, 2)
+            self.assertEqual(body, "")
 
-    def test_working_reports_new_external_skill_without_approving_it(self) -> None:
+    def test_working_reports_pending_external_review_only_in_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -141,13 +139,15 @@ class SkillagerWorkingTests(unittest.TestCase):
             code, stdout, stderr = self.run_cli(["working"], root=root, state=state)
 
             self.assertEqual(code, 0, stderr)
-            self.assertIn("new external skill(s) pending review", stdout)
-            self.assertIn("community/external-tool", stdout)
+            self.assertEqual(stdout, "")
             self.assertEqual(self.indexed_skill(root, state, "community/external-tool")["trust"], "discovered")
 
-            code, stdout, stderr = self.run_cli(["working"], root=root, state=state)
+            code, stdout, stderr = self.run_cli(["working", "--json"], root=root, state=state)
             self.assertEqual(code, 0, stderr)
-            self.assertEqual(stdout, "")
+            data = json.loads(stdout)
+            self.assertEqual(data["new_external_review_count"], 0)
+            self.assertEqual(data["pending_external_review_count"], 1)
+            self.assertEqual(data["pending_external_review"][0]["id"], "community/external-tool")
 
 
 if __name__ == "__main__":

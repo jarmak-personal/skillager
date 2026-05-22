@@ -326,11 +326,12 @@ class SkillagerMaterializeTests(unittest.TestCase):
             self.assertFalse((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
             indexed = load_index(state)["skills"][0]
             self.assertEqual(indexed["native"]["agent"], "codex")
-            status = StringIO()
-            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}), patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root), redirect_stdout(status):
-                self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-            inventory = json.loads((state / "native_inventory.json").read_text(encoding="utf-8"))
-            self.assertEqual(inventory["skills"][0]["status"], "existing")
+            listing = StringIO()
+            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}), patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root), redirect_stdout(listing):
+                self.assertEqual(main(["list", "--no-packages", "--json", "--full-json"]), 0)
+            skill = json.loads(listing.getvalue())[0]
+            self.assertEqual(skill["materialized_targets"][0]["status"], "existing")
+            self.assertFalse((state / "native_inventory.json").exists())
 
     def test_materialize_copies_supporting_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,7 +12,6 @@ from unittest.mock import patch
 from support import chdir
 from skillager.cli import main
 from skillager.materialize import materialize_working_skill
-from skillager.session import append_event, end_session, read_events, start_session
 from skillager.trust import content_hash, set_trust
 
 
@@ -168,7 +167,7 @@ class SkillagerDoctorTests(unittest.TestCase):
             self.assertEqual(data["next"]["command"], "skillager bootstrap --agent codex")
             self.assertEqual(data["readiness"]["handoff"]["reason_code"], "working_missing")
 
-    def test_doctor_records_body_safe_session_event(self) -> None:
+    def test_doctor_does_not_write_session_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -186,25 +185,11 @@ class SkillagerDoctorTests(unittest.TestCase):
                 output = StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--json"]), 11)
-            current = json.loads((state / "sessions" / "current.json").read_text(encoding="utf-8"))
-            events = read_events(state, current["session_id"])
-            event = next(item for item in events if item["event"] == "doctor_run")
-            self.assertEqual(event["command"], "doctor")
-            self.assertFalse(event["fix"])
-            self.assertFalse(event["fix_applied"])
-            self.assertEqual(event["status"], "artifact-attention-needed")
-            self.assertEqual(event["readiness_status"], "handoff-not-ready")
-            self.assertTrue(event["review_ready"])
-            self.assertFalse(event["handoff_ready"])
-            self.assertEqual(event["next_action_code"], "working_missing")
-            self.assertEqual(event["counts"]["review_needed"], 0)
-            self.assertEqual(event["counts"]["lint_blocked"], 0)
-            self.assertEqual(event["counts"]["approved_hidden"], 1)
-            self.assertEqual(event["counts"]["exposed"], 0)
-            self.assertNotIn("ids", json.dumps(event))
-            self.assertNotIn("body sentinel", json.dumps(event))
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["status"], "artifact-attention-needed")
+            self.assertFalse((state / "sessions").exists())
 
-    def test_doctor_no_session_record_suppresses_telemetry(self) -> None:
+    def test_doctor_no_session_record_is_accepted_as_noop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -247,12 +232,7 @@ class SkillagerDoctorTests(unittest.TestCase):
             self.assertEqual(data["fix"]["reason_code"], "working_missing")
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
-            current = json.loads((state / "sessions" / "current.json").read_text(encoding="utf-8"))
-            event = next(item for item in read_events(state, current["session_id"]) if item["event"] == "doctor_run")
-            self.assertTrue(event["fix"])
-            self.assertTrue(event["fix_applied"])
-            self.assertEqual(event["fix_reason_code"], "working_missing")
-            self.assertEqual(event["status"], "artifact-attention-needed")
+            self.assertFalse((state / "sessions").exists())
 
     def test_doctor_fix_requires_explicit_agent_even_when_env_detects_agent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -431,37 +411,6 @@ class SkillagerDoctorTests(unittest.TestCase):
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "migration-ack-needed")
             self.assertEqual(data["next"]["command"], "skillager status --ack-migration")
-
-    def test_doctor_lookback_pending_exits_fifteen(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            state = root / ".skillager"
-            first = start_session(state, agent="codex")
-            append_event(state, first["session_id"], "skill_activated", {"skill_id": "community/gis"})
-            end_session(state, agent="codex")
-            second = start_session(state, agent="codex")
-            append_event(state, second["session_id"], "skill_activated", {"skill_id": "community/gis"})
-            end_session(state, agent="codex")
-            with (
-                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
-                patch("skillager.discovery.find_project_root", return_value=root),
-                patch("pathlib.Path.home", return_value=root),
-                chdir(root),
-            ):
-                materialize_working_skill(agents=["codex"], project_dir=root)
-                output = StringIO()
-                with redirect_stdout(output):
-                    self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--json"]), 15)
-                fix_output = StringIO()
-                with redirect_stdout(fix_output):
-                    self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--fix", "--json"]), 15)
-            data = json.loads(output.getvalue())
-            fix_data = json.loads(fix_output.getvalue())
-            self.assertEqual(data["status"], "lookback-pending")
-            self.assertEqual(data["next"]["command"], "skillager lookback")
-            self.assertFalse(fix_data["fix"]["applied"])
-            self.assertEqual(fix_data["fix"]["reason"], "selected next action is not a first-party bootstrap repair")
-            self.assertIsNone(fix_data["fix"]["reason_code"])
 
     def test_doctor_reports_unmanaged_working_skill_as_manual_repair(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
