@@ -33,6 +33,30 @@ After setup, restart Codex or Claude in the same directory and tell it what you 
 
 For agent permission prompts, Skillager ships example read-only allowlists in [`examples/codex-allowlist.json`](examples/codex-allowlist.json) and [`examples/claude-allowlist.json`](examples/claude-allowlist.json). They include metadata-only commands such as `status --json`, `handoff --agent <agent> --json`, `list --summary-json --agent <agent>`, `search --agent <agent> --json`, `show --json`, and `tag show --json`; setup, review, doctor, and mutating commands stay user-run diagnostics.
 
+## Upgrading From 0.5.x
+
+This release moves Skillager toward sandbox-friendly project curation. Tags are now project-local artifacts stored in `<project>/.skillager/tags.json`, so agents can curate tags from inside normal project sandboxes while user-authority review stays global.
+
+If you used older global/project tag attachments, run this once from a user shell after setup has recorded your projects:
+
+```bash
+skillager state migrate-tags --to projects
+```
+
+Then refresh active projects:
+
+```bash
+skillager setup --agent codex
+# or
+skillager bootstrap --agent codex
+```
+
+Other user-visible changes:
+
+- Lookback/session telemetry was removed.
+- `skillager search --json` is now compact for agents; use `--full-json` for diagnostics such as `score_detail`, source paths, and full materialization records.
+- `project attach-tag`/`detach-tag` remain compatibility wrappers, but new workflows should use project-local `tag create`, `tag add`, `tag remove`, and `tag delete`.
+
 ## The Problem
 
 Skills want to live everywhere:
