@@ -571,6 +571,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("Review summary", text)
             self.assertIn("audience:", text)
             self.assertIn("Ready for approval (3 low-risk)", text)
+            self.assertNotIn("Inspect available skills", text)
             self.assertIn("Suggested next steps", text)
             self.assertNotIn("Skills:", text)
             self.assertIn("skillager setup --details", text)
@@ -723,6 +724,8 @@ class SkillagerSetupTests(unittest.TestCase):
             text = output.getvalue()
             self.assertIn("Owner review: no action needed", text)
             self.assertIn("1 approved source entry total", text)
+            self.assertIn("Inspect available skills:", text)
+            self.assertIn("skillager list --summary-json", text)
             self.assertNotIn("Needs review", text)
 
     def test_interactive_setup_hides_skills_after_approval(self) -> None:

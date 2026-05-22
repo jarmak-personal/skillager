@@ -1577,6 +1577,13 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
         print("Notes:")
         for note in notes:
             print(f"  - {note}")
+    if on_demand:
+        print()
+        print("Inspect available skills:")
+        if inventory_agent:
+            print(f"  skillager list --summary-json --agent {inventory_agent}")
+        else:
+            print("  skillager list --summary-json")
 
 
 def _setup_scan_notes(report: dict[str, Any], *, prior_approvals: int, collapsed: int, on_demand: int) -> list[str]:
@@ -5032,9 +5039,9 @@ def _print_router_verification(tag: str, agents: list[str], results: list[dict[s
     if not current_agents:
         return
     print()
-    print("Verify router exposure:")
+    print("Continue curation:")
     for agent in current_agents or agents:
-        print(f"  skillager status --agent {agent} --json")
+        print(f"  skillager handoff --agent {agent}")
 
 
 def _agent_notes_ready(project_dir: Path, *, agents: list[str]) -> bool:
