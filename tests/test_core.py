@@ -133,7 +133,7 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertIn("Tags are agent-maintained curation for available skills", text)
         self.assertIn("skillager tag add <tag> <skill-id>", text)
         self.assertIn('skillager search "<user goal>" --agent codex --json', text)
-        self.assertIn("score_detail", text)
+        self.assertIn("Use `--full-json` only for diagnostics", text)
         self.assertIn("use `--limit <n>`", text)
         self.assertNotIn("skillager recommend", text)
         self.assertIn("Consider 5-20 plausible available skills or skill groups", text)

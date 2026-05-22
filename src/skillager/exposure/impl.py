@@ -228,7 +228,7 @@ Before curating tags or exposure for a new task, build your own slate from avail
 
 - Start with `skillager search "<user goal>" --agent {agent} --json`.
 - Run a few focused searches when the goal has multiple facets, for example domain terms, package/project names, and workflow terms.
-- Search JSON is ranked and includes `score`, `score_detail`, and `reasons`; use `--limit <n>` to widen or narrow the slate.
+- Search JSON is ranked and includes `score` and `reasons`; use `--limit <n>` to widen or narrow the slate. Use `--full-json` only for diagnostics such as `score_detail`, source paths, and full materialization records.
 - Use `skillager list --summary-json --agent {agent}` when you need orientation before a targeted search.
 - Consider 5-20 plausible available skills or skill groups when enough relevant options exist.
 - A skill group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation.

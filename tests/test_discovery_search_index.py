@@ -217,6 +217,9 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                 search_output = StringIO()
                 with redirect_stdout(search_output):
                     self.assertEqual(main(["search", "GIS", "--agent", "codex", "--json", "--limit", "0"]), 0)
+                full_search_output = StringIO()
+                with redirect_stdout(full_search_output):
+                    self.assertEqual(main(["search", "GIS", "--agent", "codex", "--json", "--full-json", "--limit", "0"]), 0)
 
             summary = json.loads(summary_output.getvalue())
             self.assertEqual(summary["total"], 1)
@@ -233,10 +236,14 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
 
             search = json.loads(search_output.getvalue())
             self.assertEqual(search[0]["id"], "project/gis-domain")
-            self.assertEqual(search[0]["agent_hint"], "codex")
-            self.assertTrue(search[0]["agent_variant"]["is_preferred"])
             self.assertNotIn("project/gis-domain-vibespatial-claude", {item["id"] for item in search})
-            self.assertIn("score_detail", search[0])
+            self.assertNotIn("score_detail", search[0])
+            self.assertNotIn("source_root", search[0])
+            self.assertNotIn("entrypoint", search[0])
+            self.assertNotIn("materialized_targets", search[0])
+            full_search = json.loads(full_search_output.getvalue())
+            self.assertTrue(full_search[0]["agent_variant"]["is_preferred"])
+            self.assertIn("score_detail", full_search[0])
 
     def test_index_skips_skillager_materialized_project_copies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -547,7 +554,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["search", "mapping", "--json"]), 0)
             results = json.loads(output.getvalue())
-            self.assertEqual(results[0]["source"]["type"], "project")
+            self.assertEqual(results[0]["id"], "project/mapping")
             self.assertEqual(results[0]["exposure"], "native")
 
     def test_status_reports_package_duplicate_of_reviewed_project_content(self) -> None:

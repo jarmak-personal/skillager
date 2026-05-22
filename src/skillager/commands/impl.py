@@ -3985,25 +3985,49 @@ def _available_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _compact_search_result(skill: dict[str, Any], *, agent: str | None = None) -> dict[str, Any]:
-    return {
+    payload: dict[str, Any] = {
         "id": skill.get("id"),
         "name": skill.get("name"),
         "summary": skill.get("summary"),
         "available": True,
         "score": skill.get("score"),
-        "score_detail": skill.get("score_detail"),
         "reasons": skill.get("reasons", []),
-        "source": skill.get("source", {}),
-        "availability": skill.get("availability", []),
         "exposure": skill.get("exposure", "hidden"),
-        "materialized_targets": skill.get("materialized_targets", []),
         "tags": skill.get("tags", []),
-        "source_root": (skill.get("source") or {}).get("path") or skill.get("root"),
-        "entrypoint": skill.get("entrypoint"),
-        "agent_hint": skill.get("agent_hint") or _agent_hint(skill),
-        "agent_variant": skill.get("agent_variant"),
         "compatibility": _compact_compatibility(skill, agent=agent),
     }
+    exposed_via = _compact_exposed_via(skill)
+    if exposed_via:
+        payload["exposed_via"] = exposed_via
+    return payload
+
+
+def _compact_exposed_via(skill: dict[str, Any]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    for target in skill.get("materialized_targets", []):
+        if not isinstance(target, dict):
+            continue
+        kind = target.get("kind")
+        if kind not in {"native", "router", "stub"}:
+            continue
+        item: dict[str, Any] = {"kind": kind}
+        for key in ("agent", "scope", "status", "router", "tag"):
+            value = target.get(key)
+            if value:
+                item[key] = value
+        path = target.get("path")
+        if path:
+            if kind == "router":
+                item["router_slug"] = Path(str(path)).name
+            elif kind == "stub":
+                item["stub"] = Path(str(path)).name
+        identity = tuple(sorted((str(key), str(value)) for key, value in item.items()))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        result.append(item)
+    return result
 
 
 def _compact_skill_metadata(skill: dict[str, Any], *, agent: str | None = None) -> dict[str, Any]:

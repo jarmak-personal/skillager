@@ -41,7 +41,8 @@ Project-aware JSON includes:
 - `availability`: where the skill comes from in this project context.
 - `available`: whether this metadata entry is eligible for agent use.
 - `exposure`: `hidden`, `native`, `stub`, `router`, or `multiple`.
-- `materialized_targets`: agent/scope/path/status records for native or router exposure.
+- `exposed_via`: compact router/stub/native exposure hints in search results.
+- `materialized_targets`: agent/scope/path/status records for native or router exposure in full diagnostic JSON.
 - `tagging`: available untagged collection skills that may be useful to curate for the current project.
 - `authored_pending_owner_review`: status count for user-local skills created with `skillager new` but not available yet.
 - `agent_variant`: duplicate native-variant hints. Matching-agent variants are ranked first when the active agent is known, but alternatives remain visible and usable.
@@ -84,7 +85,7 @@ After setup, Skillager installs or refreshes the `skillager-working` bootstrap s
 - a router skill for a broad project-local tag
 - nothing, if the existing project exposure is enough
 
-Before changing tags or exposure, build your own slate from available metadata and the user's stated goal. Start with `skillager search "<user goal>" --agent codex --json`; run a few focused searches when the goal has multiple facets, such as domain terms, package/project names, and workflow terms. Search JSON is ranked and includes `score`, `score_detail`, and `reasons`; use `--limit <n>` to widen or narrow the slate. Use `skillager list --summary-json --agent codex` when you need orientation before a targeted search. Consider 5-20 plausible available skills or skill groups when enough relevant options exist. A group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation. Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task. Include adjacent options the user may reasonably want, such as a brainstorm/research suite for ideation or a review/debugging suite for validation. If fewer than five relevant available candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
+Before changing tags or exposure, build your own slate from available metadata and the user's stated goal. Start with `skillager search "<user goal>" --agent codex --json`; run a few focused searches when the goal has multiple facets, such as domain terms, package/project names, and workflow terms. Search JSON is ranked and includes `score` and `reasons`; use `--limit <n>` to widen or narrow the slate. Use `--full-json` only for explicit diagnostics such as `score_detail`, source paths, and full materialization records. Use `skillager list --summary-json --agent codex` when you need orientation before a targeted search. Consider 5-20 plausible available skills or skill groups when enough relevant options exist. A group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation. Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task. Include adjacent options the user may reasonably want, such as a brainstorm/research suite for ideation or a review/debugging suite for validation. If fewer than five relevant available candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
 
 Do not use review diagnostics as curation criteria for available skills. Availability is the gate; relevance to the user's stated task decides selection and exposure.
 
