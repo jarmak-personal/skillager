@@ -63,7 +63,7 @@ Metadata commands stay metadata-only. `status`, `list`, `search`, `show` without
 - Diagnose state: `skillager doctor --agent codex`
 - Create a project tag: `skillager tag create spatial-python`
 - Add a skill to a tag: `skillager tag add spatial-python vibespatial/gis-domain`
-- Inspect a tag: `skillager tag show spatial-python --agent codex`
+- Inspect a tag: `skillager tag show spatial-python`
 - Materialize a tag as one router skill: `skillager materialize --tag spatial-python --mode router --agent codex --scope project`
 - Materialize one skill as a stub: `skillager materialize vibespatial/gis-domain --mode stub --agent codex --scope project`
 - Reuse tags across projects: `skillager tag sync --from ../project-a --to ../project-b`

@@ -122,7 +122,7 @@ Tags are project-local curation. Users can curate them manually, and agents can 
 
 Setup and bootstrap keep a best-effort registry of known project paths in the user catalog. It is only for tag discovery/sync convenience; missing or stale entries do not affect normal project operation. Use `skillager tag sync --from <project> --to .` to copy tag curation explicitly between projects, or `skillager state migrate-tags --to projects` once when migrating older global tag attachments.
 
-`skillager status` checks PyPI for Skillager updates at most once per day and prints `uv tool upgrade skillager` when a newer release is available. Network failures are silent. Set `SKILLAGER_NO_UPDATE_CHECK=1` to disable this check.
+`skillager status` is a pure-read metadata command. It reports cached Skillager update information when present, but it does not contact PyPI or write update-check cache files.
 
 Use `skillager bootstrap --agent <agent>` when review is already complete but working artifacts are missing or stale. Use `skillager materialize` directly when you already know a reviewed skill or tag should be exposed to the agent. `materialize` requires explicit skill IDs, `--tag`, or `--all-reviewed`; it does not install or repair Skillager Working or project working notes.
 

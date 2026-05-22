@@ -150,9 +150,58 @@ def _collection_skills(
                     approval_key=approval_key,
                     approval_root=approval_root,
                 )
+                trust = _trust_with_collection_migration_alias(
+                    state_root,
+                    trust_root,
+                    skill,
+                    trust,
+                )
                 _apply_approval_metadata(skill, approval_key, trust)
             skills.append(skill)
     return skills
+
+
+def _trust_with_collection_migration_alias(
+    catalog_root: Path,
+    trust_root: Path,
+    skill: dict[str, Any],
+    trust: dict[str, Any],
+) -> dict[str, Any]:
+    if trust.get("state") not in {"discovered", "lint_blocked"}:
+        return trust
+    skill_id = skill.get("id")
+    content_hash_value = skill.get("content_hash")
+    if not isinstance(skill_id, str) or not isinstance(content_hash_value, str):
+        return trust
+    for migration in _matching_id_migrations(catalog_root, skill_id, content_hash_value):
+        old_id = migration.get("old_id")
+        old_hash = migration.get("old_content_hash")
+        if not isinstance(old_id, str) or not isinstance(old_hash, str):
+            continue
+        old_trust = trust_info(
+            trust_root,
+            old_id,
+            old_hash,
+            lint=skill.get("lint"),
+        )
+        if old_trust.get("state") in {"discovered", "lint_blocked"}:
+            continue
+        aliased = dict(old_trust)
+        aliased["reason"] = aliased.get("reason") or "collection-id-migration"
+        return aliased
+    return trust
+
+
+def _matching_id_migrations(catalog_root: Path, skill_id: str, content_hash_value: str) -> list[dict[str, Any]]:
+    migrations = load_collection_migrations(catalog_root)
+    return [
+        migration
+        for outcome in migrations.get("collections", {}).values()
+        for migration in outcome.get("id_migrations", [])
+        if migration.get("new_id") == skill_id
+        and migration.get("new_content_hash") == content_hash_value
+        and migration.get("old_content_hash") == content_hash_value
+    ]
 
 
 def search_collection(

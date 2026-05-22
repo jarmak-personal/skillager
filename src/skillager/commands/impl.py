@@ -247,7 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("skill_id")
     p.add_argument("--content", action="store_true", help="Show full SKILL.md content for an available skill.")
-    p.add_argument("--activate", action="store_true", help="Record this show as an activation event.")
+    p.add_argument("--activate", action="store_true", help=argparse.SUPPRESS)  # Compatibility no-op from removed telemetry.
     p.add_argument("--json", action="store_true", help="Emit skill metadata/content as JSON.")
     p.add_argument("--full-json", action="store_true", help="Emit full indexed metadata, including review diagnostics.")
     p.set_defaults(func=cmd_show)
@@ -1091,16 +1091,20 @@ def cmd_tag_delete(args: argparse.Namespace) -> int:
 
 def cmd_tag_sync(args: argparse.Namespace) -> int:
     source = args.from_project.expanduser().resolve()
-    if not source.exists():
+    if not source.exists() or not source.is_dir():
         raise ValueError(f"source project does not exist: {source}")
     if args.to_all:
         destinations = [project for project in project_registry.known_projects(catalog_root(args)) if project != source]
     else:
-        destinations = [(args.to_project or _current_project_dir()).expanduser().resolve()]
+        destination = (args.to_project or _current_project_dir()).expanduser().resolve()
+        if not destination.exists() or not destination.is_dir():
+            raise ValueError(f"destination project does not exist: {destination}")
+        destinations = [destination]
     if not destinations:
         raise ValueError("no destination projects found")
     source_tags = project_tags.load_tags(source)
     selected = _select_sync_tags(source_tags, args.tag)
+    sync_catalog_root = _tag_sync_catalog_root(source_tags, catalog_root(args))
     results: list[dict[str, Any]] = []
     for destination in destinations:
         if destination == source:
@@ -1111,7 +1115,7 @@ def cmd_tag_sync(args: argparse.Namespace) -> int:
                 tag,
                 list(entry.get("skills") or []),
                 sync=args.replace,
-                catalog_state_dir=catalog_root(args),
+                catalog_state_dir=sync_catalog_root,
             )
             results.append({"project": str(destination), "tag": updated["tag"], "skills": len(updated["skills"])})
     payload = {"schema": "skillager.tag-sync.v1", "source": str(source), "results": results}
@@ -1121,6 +1125,13 @@ def cmd_tag_sync(args: argparse.Namespace) -> int:
         for item in results:
             print(f"{item['project']}: {item['tag']} {item['skills']} skill(s)")
     return 0
+
+
+def _tag_sync_catalog_root(source_tags: dict[str, Any], fallback: Path) -> Path:
+    source_catalog = source_tags.get("catalog_state_dir")
+    if isinstance(source_catalog, str) and source_catalog:
+        return Path(source_catalog).expanduser().resolve()
+    return fallback
 
 
 def _select_sync_tags(data: dict[str, Any], tag: str | None) -> dict[str, dict[str, Any]]:

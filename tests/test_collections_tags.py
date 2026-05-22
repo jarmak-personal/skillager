@@ -549,6 +549,53 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 new_hash = json.loads((catalog_state / "collections" / "personal.json").read_text(encoding="utf-8"))["skills"][0]["content_hash"]
             self.assertEqual(trust_state(project_state, "personal/python/foo", new_hash), "reviewed")
 
+    def test_collection_inventory_uses_migrated_project_local_trust_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog_state = root / "catalog-state"
+            project_a = root / "project-a"
+            project_b = root / "project-b"
+            project_a.mkdir()
+            project_b.mkdir()
+            collection = root / "skills"
+            skill_dir = collection / "python" / "foo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Foo\n\nUse foo guidance.\n", encoding="utf-8")
+            digest = content_hash(skill_dir)
+            with patch.dict(os.environ, {"NO_COLOR": "1"}, clear=True), patch("pathlib.Path.home", return_value=root):
+                with chdir(project_a), redirect_stdout(StringIO()):
+                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "collection", "add", str(collection), "--name", "personal"]), 0)
+                (catalog_state / "collections" / "personal.json").write_text(
+                    json.dumps(
+                        {
+                            "schema": "skillager.collection-index.v1",
+                            "name": "personal",
+                            "path": str(collection),
+                            "skills": [{"id": "personal/foo", "root": str(skill_dir), "content_hash": digest}],
+                            "errors": [],
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                project_a_state = project_state_root(project_a)
+                set_trust(project_a_state, "personal/foo", "reviewed", digest, {"type": "collection", "collection": "personal"})
+
+                with chdir(project_b), redirect_stdout(StringIO()):
+                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "collection", "refresh", "personal"]), 0)
+
+                search = StringIO()
+                with chdir(project_a), redirect_stdout(search):
+                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "search", "foo", "--json"]), 0)
+                search_data = json.loads(search.getvalue())
+                self.assertEqual([skill["id"] for skill in search_data], ["personal/python/foo"])
+                self.assertTrue(search_data[0]["available"])
+
+                trust = json.loads((project_a_state / "trust.json").read_text(encoding="utf-8"))
+                self.assertIn("personal/foo", trust["skills"])
+                self.assertNotIn("personal/python/foo", trust["skills"])
+
     def test_collection_refresh_reports_changed_content_as_needing_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

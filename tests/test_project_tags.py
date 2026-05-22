@@ -51,6 +51,50 @@ class SkillagerProjectTagTests(unittest.TestCase):
             tags = json.loads((dest / ".skillager" / "tags.json").read_text(encoding="utf-8"))
             self.assertEqual(tags["tags"]["gis"]["skills"], ["community/gis"])
 
+    def test_tag_sync_preserves_source_catalog_state_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_catalog = root / "source-catalog"
+            caller_catalog = root / "caller-catalog"
+            source = root / "source"
+            dest = root / "dest"
+            source.mkdir()
+            dest.mkdir()
+            (source / ".skillager").mkdir()
+            (source / ".skillager" / "tags.json").write_text(
+                json.dumps(
+                    {
+                        "schema": "skillager.project-tags.v1",
+                        "catalog_state_dir": str(source_catalog.resolve()),
+                        "tags": {"gis": {"skills": ["community/gis"]}},
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"SKILLAGER_CATALOG_STATE_DIR": str(caller_catalog), "NO_COLOR": "1"}, clear=True), patch("pathlib.Path.home", return_value=root), chdir(dest):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["tag", "sync", "--from", str(source)]), 0)
+            tags = json.loads((dest / ".skillager" / "tags.json").read_text(encoding="utf-8"))
+            self.assertEqual(tags["catalog_state_dir"], str(source_catalog.resolve()))
+
+    def test_tag_sync_rejects_missing_destination_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            catalog = root / "catalog"
+            source = root / "source"
+            dest = root / "missing-dest"
+            source.mkdir()
+            (source / ".skillager").mkdir()
+            (source / ".skillager" / "tags.json").write_text(
+                json.dumps({"schema": "skillager.project-tags.v1", "tags": {"gis": {"skills": ["community/gis"]}}}, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {"SKILLAGER_CATALOG_STATE_DIR": str(catalog), "NO_COLOR": "1"}, clear=True), patch("pathlib.Path.home", return_value=root), chdir(root):
+                self.assertEqual(main(["tag", "sync", "--from", str(source), "--to", str(dest)]), 2)
+            self.assertFalse(dest.exists())
+
     def test_state_migrate_tags_copies_legacy_attached_global_tags_to_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
