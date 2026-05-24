@@ -6,7 +6,7 @@ Skillager is a local CLI for discovering, reviewing, organizing, and materializi
 Register/discover -> review -> approve -> search metadata -> materialize on demand
 ```
 
-Projects, Python libraries, tools, and personal skill repos can ship useful agent guidance. Skillager keeps that guidance searchable and reviewed, but out of the agent context until it is needed.
+Projects, Python libraries, npm packages, tools, and personal skill repos can ship useful agent guidance. Skillager keeps that guidance searchable and reviewed, but out of the agent context until it is needed.
 
 ## Quickstart
 
@@ -22,7 +22,7 @@ uv tool install skillager
    - Work through any required approvals etc. (don't blindly trust skills from sources you don't know.)
 4. Open your agent of choice and tell them to run `skillager handoff --agent [your agent]`
 
-`setup` automatically discovers project skills, package-provided skills, Python environment skills from project virtualenv or conda environments, collections, and native agent skills. It scans them and only marks content available to your agent after user approval. Skillager is meant to be installed once as a user tool; it does not need to live inside every project environment.
+`setup` automatically discovers project skills, package-provided skills from Python environments and project `node_modules`, Python environment skills from project virtualenv or conda environments, collections, and native agent skills. It scans them and only marks content available to your agent after user approval. Skillager is meant to be installed once as a user tool; it does not need to live inside every project environment.
 
 Skillager writes a small project note in `AGENTS/CLAUDE.MD` so the agent knows to run `skillager working`, use metadata commands, and ask you to run setup or bootstrap when user-authority review is needed.
 
@@ -86,9 +86,9 @@ skillager tag add workflows --from-collection workflows
 skillager materialize --tag workflows --mode router --agent codex --scope project
 ```
 
-## Library Authors
+## Package Authors
 
-Python libraries can ship skills inside the package:
+Python libraries and npm packages can ship skills inside the package:
 
 ```text
 your_package/
@@ -101,13 +101,22 @@ your_package/
       scripts/
 ```
 
-Skillager discovers package skills after install from project Python environments, including virtualenv and conda environments, without importing the package. Users still review and approve them before an agent can activate them.
+```text
+your-npm-package/
+  package.json
+  .agents/skills/
+    react-query-usage/
+      SKILL.md
+      skillager.yaml
+```
+
+Skillager discovers package skills after install from project Python environments, including virtualenv and conda environments, and from project `node_modules` without importing packages or running package scripts. Users still review and approve them before an agent can activate them.
 
 `skillager.yaml` is optional and structured-only to support safe skills. Put searchable prose in `SKILL.md`; manifests can declare audience, activation, compatibility constraints, and typed package targets. For CI, run `uvx --from skillager-linter skillager-lint .`.
 
 Published/shared skill roots may also include optional release evidence such as `skill.oms.sig`, `skill-card.md`, or `card.yaml`. Skillager keeps these separate from approval and search; use `skillager verify-signature <skill-id-or-path> --certificate-chain <pem>` when you explicitly want to verify a signed skill.
 
-See the [library author guide](docs/LIBRARY_AUTHORS.md) for metadata and packaging details.
+See the [package author guide](docs/LIBRARY_AUTHORS.md) for metadata and packaging details.
 
 ## Safety Model
 
@@ -124,7 +133,7 @@ Signatures are treated as provenance/integrity evidence, not safety signals. A v
 - [User guide](docs/USER_GUIDE.md)
 - [Agent CLI guide](docs/AGENT_CLI_GUIDE.md)
 - [Skill repositories](docs/SKILL_REPOSITORIES.md)
-- [Library author guide](docs/LIBRARY_AUTHORS.md)
+- [Package author guide](docs/LIBRARY_AUTHORS.md)
 - [Safety model](docs/SAFETY_MODEL.md)
 - [Release runbook](docs/RELEASE.md)
 - [Security policy](SECURITY.md)

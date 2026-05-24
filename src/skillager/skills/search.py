@@ -293,12 +293,17 @@ def _package_text(skill: dict[str, Any]) -> str:
 
 def _target_text(skill: dict[str, Any]) -> str:
     parts: list[str] = []
-    targets = skill.get("targets", {}).get("python_packages", []) if isinstance(skill.get("targets"), dict) else []
-    for target in targets:
-        if isinstance(target, dict):
-            name = target.get("name")
-            if name:
-                parts.append(str(name))
+    targets = skill.get("targets", {})
+    if not isinstance(targets, dict):
+        return ""
+    for target_group in (targets.get("python_packages", []), targets.get("npm_packages", [])):
+        if not isinstance(target_group, list):
+            continue
+        for target in target_group:
+            if isinstance(target, dict):
+                name = target.get("name")
+                if name:
+                    parts.append(str(name))
     return " ".join(parts)
 
 
@@ -364,6 +369,6 @@ def _visibility_rank(skill: dict[str, Any]) -> int:
         return 5
     if skill.get("source", {}).get("type") == "collection":
         return 6
-    if skill.get("source", {}).get("type") == "python-package":
+    if skill.get("source", {}).get("type") in {"python-package", "npm-package"}:
         return 7
     return 8

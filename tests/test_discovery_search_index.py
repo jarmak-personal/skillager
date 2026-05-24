@@ -668,6 +668,160 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             skill_ids = {skill["id"] for skill in data["skills"]}
             self.assertIn("demo-pkg/help", skill_ids)
 
+    def test_global_cli_discovers_project_node_modules_package_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            package_root = root / "node_modules" / "demo-pkg"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (package_root / "package.json").write_text(
+                json.dumps({"name": "demo-pkg", "version": "1.2.3"}),
+                encoding="utf-8",
+            )
+            (skill_dir / "SKILL.md").write_text("# Demo Package Help\n\nUse npm package-distributed guidance.\n", encoding="utf-8")
+            with (
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            skill = next(item for item in data["skills"] if item["id"] == "demo-pkg/help")
+            self.assertEqual(skill["source"]["type"], "npm-package")
+            self.assertEqual(skill["source"]["package"], "demo-pkg")
+            self.assertEqual(skill["source"]["version"], "1.2.3")
+            self.assertEqual(skill["package"], "demo-pkg")
+            self.assertEqual(skill["approval_key"], "package:demo-pkg#.agents/skills/help")
+
+    def test_node_modules_package_uses_package_approval_key_inside_git_project(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".git").mkdir()
+            state = root / ".skillager"
+            package_root = root / "node_modules" / "@scope" / "demo_pkg"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (package_root / "package.json").write_text(json.dumps({"name": "@scope/demo_pkg"}), encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text("# Demo Package Help\n\nUse npm package guidance.\n", encoding="utf-8")
+            with (
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            skill = next(item for item in data["skills"] if item["id"] == "scope-demo-pkg/help")
+            self.assertEqual(skill["approval_key"], "package:@scope/demo_pkg#.agents/skills/help")
+
+    def test_global_cli_discovers_scoped_node_modules_package_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            package_root = root / "node_modules" / "@scope" / "demo"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (package_root / "package.json").write_text(
+                json.dumps({"name": "@scope/demo", "version": "2.0.0"}),
+                encoding="utf-8",
+            )
+            (skill_dir / "SKILL.md").write_text("# Scoped Package Help\n\nUse scoped npm package guidance.\n", encoding="utf-8")
+            with (
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            skill = next(item for item in data["skills"] if item["id"] == "scope-demo/help")
+            self.assertEqual(skill["source"]["type"], "npm-package")
+            self.assertEqual(skill["source"]["package"], "@scope/demo")
+            self.assertEqual(skill["approval_key"], "package:@scope/demo#.agents/skills/help")
+
+    def test_no_packages_skips_node_modules_package_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            package_root = root / "node_modules" / "demo-pkg"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (package_root / "package.json").write_text(json.dumps({"name": "demo-pkg"}), encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text("# Demo Package Help\n\nUse npm package guidance.\n", encoding="utf-8")
+            with (
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=False)
+            self.assertEqual(data["skills"], [])
+
+    def test_node_modules_packages_without_skill_roots_skip_package_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            package_without_skills = root / "node_modules" / "plain-dep"
+            package_without_skills.mkdir(parents=True)
+            (package_without_skills / "package.json").write_text(json.dumps({"name": "plain-dep"}), encoding="utf-8")
+            package_root = root / "node_modules" / "demo-pkg"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (package_root / "package.json").write_text(json.dumps({"name": "demo-pkg"}), encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text("# Demo Package Help\n\nUse npm package guidance.\n", encoding="utf-8")
+            with (
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+                patch.object(discovery_impl, "_npm_package_metadata", wraps=discovery_impl._npm_package_metadata) as metadata,
+            ):
+                data = build_index(state, include_packages=True)
+            self.assertEqual([skill["id"] for skill in data["skills"]], ["demo-pkg/help"])
+            self.assertEqual(metadata.call_count, 1)
+
+    def test_list_no_packages_hides_reviewed_node_modules_package_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            package_root = root / "node_modules" / "demo-pkg"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (package_root / "package.json").write_text(json.dumps({"name": "demo-pkg"}), encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text("# Demo Package Help\n\nUse npm package guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                data = build_index(state, include_packages=True)
+                skill = data["skills"][0]
+                set_trust(state, skill["id"], "reviewed", skill["content_hash"], skill["source"], approval_key=skill.get("approval_key"), approval_root=state)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["list", "--no-packages", "--json"]), 0)
+            self.assertEqual(json.loads(output.getvalue()), [])
+
+    def test_node_modules_store_is_not_scanned_without_package_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            package_root = root / "node_modules" / ".pnpm" / "demo-pkg@1.0.0" / "node_modules" / "demo-pkg"
+            skill_dir = package_root / ".agents" / "skills" / "hidden"
+            skill_dir.mkdir(parents=True)
+            (package_root / "package.json").write_text(json.dumps({"name": "demo-pkg"}), encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text("# Hidden\n\nDo not discover store internals directly.\n", encoding="utf-8")
+            with (
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            self.assertEqual(data["skills"], [])
+
     def test_search_prefers_exposed_project_skill_over_hidden_package_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

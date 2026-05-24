@@ -202,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="List effective project skill metadata.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="List available effective project skills, including attached collection-tag skills.",
-        epilog="Examples:\n  skillager list\n  skillager list --summary-json --agent codex\n  skillager list --no-packages --json\n  skillager list --include-global\n  skillager list --source python-package --json\n  skillager list --json --full-json",
+        epilog="Examples:\n  skillager list\n  skillager list --summary-json --agent codex\n  skillager list --no-packages --json\n  skillager list --include-global\n  skillager list --source python-package --json\n  skillager list --source npm-package --json\n  skillager list --json --full-json",
     )
     p.add_argument("--source")
     p.add_argument("--activation")
@@ -848,7 +848,7 @@ def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentPars
 
 
 def add_review_filters(parser: argparse.ArgumentParser, *, include_lint_flag: bool = True) -> None:
-    parser.add_argument("--source", help="Filter by source type, e.g. project, global, environment, python-package.")
+    parser.add_argument("--source", help="Filter by source type, e.g. project, global, environment, python-package, npm-package.")
     parser.add_argument("--audience", help="Filter by declared audience: user, dev, or other/everything_else for undeclared skills.")
     parser.add_argument("--package", help="Filter by package name.")
     parser.add_argument("--activation", help="Filter by activation mode.")
@@ -3927,7 +3927,7 @@ def cmd_list(args: argparse.Namespace) -> int:
     if not args.include_global and not args.source:
         skills = [skill for skill in skills if skill.get("source", {}).get("type") != "global"]
     if args.no_packages and not args.source:
-        skills = [skill for skill in skills if skill.get("source", {}).get("type") != "python-package"]
+        skills = [skill for skill in skills if skill.get("source", {}).get("type") not in {"python-package", "npm-package"}]
     skills = [_skill for _skill in skills if _matches_filters(_skill, args)]
     source_entry_count = len(skills)
     if args.agent:
@@ -4309,7 +4309,7 @@ def _visibility_rank_for_cli(skill: dict[str, Any]) -> int:
         return 5
     if source_type == "collection":
         return 6
-    if source_type == "python-package":
+    if source_type in {"python-package", "npm-package"}:
         return 7
     return 8
 
@@ -4676,7 +4676,7 @@ def _with_project_inventory_fields(skill: dict[str, Any], exposure: dict[str, li
 
 def _skill_availability(skill: dict[str, Any]) -> list[str]:
     source_type = skill.get("source", {}).get("type") or "unknown"
-    if source_type == "python-package":
+    if source_type in {"python-package", "npm-package"}:
         return ["package"]
     if source_type == "collection":
         return ["collection"]
@@ -6096,7 +6096,7 @@ def _family_variant(skill: dict[str, Any], *, representative_hash: str | None) -
 def _native_candidate_sort_key(skill: dict[str, Any], agents: list[str]) -> tuple[int, int, int, str]:
     source_type = skill.get("source", {}).get("type")
     audience = audience_bucket(skill)
-    source_rank = {"project": 0, "python-package": 1, "environment": 2, "global": 3}.get(source_type, 4)
+    source_rank = {"project": 0, "python-package": 1, "npm-package": 1, "environment": 2, "global": 3}.get(source_type, 4)
     audience_rank = {"user": 0, "user+dev": 1, AUDIENCE_OTHER: 2, "dev": 3}.get(audience, 4)
     agent_hint = _agent_hint(skill)
     target_rank = 0 if agent_hint in set(agents) or agent_hint is None else 1

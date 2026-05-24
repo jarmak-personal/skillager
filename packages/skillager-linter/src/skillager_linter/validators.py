@@ -18,6 +18,7 @@ AUDIENCES = {"user", "dev"}
 ACTIVATION_MODES = {"always", "suggested", "manual", "session"}
 ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 PACKAGE_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+NPM_PACKAGE_RE = re.compile(r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*$")
 MAX_TARGET_PACKAGES = 16
 MAX_ENV_NAMES = 16
 MAX_SPECIFIER_LENGTH = 128
@@ -338,10 +339,16 @@ def _warnings(value: Any) -> dict[str, str]:
 
 def _targets(value: Any) -> dict[str, Any]:
     data = _optional_mapping(value, "targets")
-    _check_allowed_keys(data, {"python_packages"}, "targets")
-    if "python_packages" not in data:
-        return {}
-    packages = data["python_packages"]
+    _check_allowed_keys(data, {"python_packages", "npm_packages"}, "targets")
+    result: dict[str, Any] = {}
+    if "python_packages" in data:
+        result["python_packages"] = _python_package_targets(data["python_packages"])
+    if "npm_packages" in data:
+        result["npm_packages"] = _npm_package_targets(data["npm_packages"])
+    return result
+
+
+def _python_package_targets(packages: Any) -> list[dict[str, Any]]:
     if not isinstance(packages, list) or len(packages) > MAX_TARGET_PACKAGES:
         raise ManifestValidationError(
             "targets.python_packages invalid",
@@ -398,7 +405,72 @@ def _targets(value: Any) -> dict[str, Any]:
         if versions is not None:
             target["versions"] = versions
         result.append(target)
-    return {"python_packages": result}
+    return result
+
+
+def _npm_package_targets(packages: Any) -> list[dict[str, Any]]:
+    if not isinstance(packages, list) or len(packages) > MAX_TARGET_PACKAGES:
+        raise ManifestValidationError(
+            "targets.npm_packages invalid",
+            findings=[
+                finding(
+                    "target_package_invalid",
+                    "block",
+                    "targets.npm_packages",
+                    f"expected list with at most {MAX_TARGET_PACKAGES} entries",
+                )
+            ],
+        )
+    result = []
+    seen: set[tuple[str, str | None]] = set()
+    for index, item in enumerate(packages):
+        field = f"targets.npm_packages[{index}]"
+        package = _required_mapping(item, field)
+        _check_allowed_keys(package, {"name", "versions"}, field)
+        name = package.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ManifestValidationError(
+                "package name invalid",
+                findings=[finding("target_package_invalid", "block", f"{field}.name", "expected npm package name")],
+            )
+        canonical = canonical_npm_package_name(name)
+        if not NPM_PACKAGE_RE.fullmatch(canonical):
+            raise ManifestValidationError(
+                "package name invalid",
+                findings=[finding("target_package_invalid", "block", f"{field}.name", "expected npm package name")],
+            )
+        versions = None
+        if "versions" in package:
+            raw_spec = package["versions"]
+            if not isinstance(raw_spec, str) or not raw_spec.strip() or len(raw_spec) > MAX_SPECIFIER_LENGTH:
+                raise ManifestValidationError(
+                    "package version specifier invalid",
+                    findings=[
+                        finding(
+                            "target_package_invalid",
+                            "block",
+                            f"{field}.versions",
+                            "expected non-empty npm semver range string",
+                        )
+                    ],
+                )
+            versions = " ".join(raw_spec.split())
+        key = (canonical, versions)
+        if key in seen:
+            raise ManifestValidationError(
+                "duplicate package target",
+                findings=[finding("target_package_invalid", "block", field, "duplicate package target")],
+            )
+        seen.add(key)
+        target: dict[str, Any] = {"name": canonical}
+        if versions is not None:
+            target["versions"] = versions
+        result.append(target)
+    return result
+
+
+def canonical_npm_package_name(name: str) -> str:
+    return name.strip().lower()
 
 
 def _first_top_level_heading(text: str) -> str | None:

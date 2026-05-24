@@ -53,6 +53,32 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
             with self.assertRaisesRegex(SchemaError, "unknown manifest key"):
                 load_skill_from_dir(skill_dir, {"type": "project"})
 
+    def test_manifest_accepts_npm_package_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skill_dir = root / ".skills" / "npm"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# NPM\n\nUse npm guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: skillager.skill.v1",
+                        "audience:",
+                        "  - user",
+                        "activation:",
+                        "  default: manual",
+                        "targets:",
+                        "  npm_packages:",
+                        "    - name: '@Scope/Demo_Pkg'",
+                        "      versions: '^1.0.0 || >=2 <3'",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            skill = load_skill_from_dir(skill_dir, {"type": "project"})
+            self.assertEqual(skill.targets["npm_packages"], [{"name": "@scope/demo_pkg", "versions": "^1.0.0 || >=2 <3"}])
+
     def test_invalid_manifest_is_lint_blocked_until_audited_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

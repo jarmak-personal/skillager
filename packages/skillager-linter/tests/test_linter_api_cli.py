@@ -56,6 +56,26 @@ class LinterApiCliTests(unittest.TestCase):
             self.assertEqual(result.lint.findings[0].code, "unknown_key")
             self.assertNotIn("hostile manifest bait", payload)
 
+    def test_npm_package_targets_lint_ok(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "demo"
+            root.mkdir()
+            (root / "SKILL.md").write_text("# Demo\n\nUseful npm workflow.", encoding="utf-8")
+            (root / "skillager.yaml").write_text(
+                MINIMAL_MANIFEST_YAML
+                + "targets:\n"
+                + "  npm_packages:\n"
+                + "    - name: '@Scope/Demo_Pkg'\n"
+                + "      versions: '^1.0.0 || >=2 <3'\n",
+                encoding="utf-8",
+            )
+
+            result = lint_skill_root(root)
+
+            self.assertEqual(result.lint.status, "ok")
+            self.assertIsNotNone(result.metadata)
+            self.assertEqual(result.metadata.targets["npm_packages"], [{"name": "@scope/demo_pkg", "versions": "^1.0.0 || >=2 <3"}])
+
     def test_signed_skill_without_card_lints_ok_and_logs_debug_note(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "demo"

@@ -9,7 +9,15 @@ from typing import Any, Iterable, TypeAlias
 from urllib.parse import unquote, urlparse
 
 from ..paths import environment_roots, find_project_root, venv_site_packages
-from .schema import QuarantinedSkill, SchemaError, Skill, load_skill_from_dir, quarantine_skill_from_dir
+from .schema import (
+    NPM_PACKAGE_RE,
+    QuarantinedSkill,
+    SchemaError,
+    Skill,
+    canonical_npm_package_name,
+    load_skill_from_dir,
+    quarantine_skill_from_dir,
+)
 
 IGNORED_CHILD_REPO_DIR_NAMES = {
     ".cache",
@@ -34,7 +42,7 @@ IGNORED_CHILD_REPO_DIR_NAMES = {
 }
 
 
-def project_skill_roots(root: Path, source: dict[str, str]) -> list[tuple[Path, dict[str, str]]]:
+def project_skill_roots(root: Path, source: dict[str, Any]) -> list[tuple[Path, dict[str, Any]]]:
     return [
         (root / ".skills", source),
         (root / "skills", source),
@@ -46,8 +54,8 @@ def project_skill_roots(root: Path, source: dict[str, str]) -> list[tuple[Path, 
     ]
 
 
-def default_source_roots(project_root: Path | None = None) -> list[tuple[Path, dict[str, str]]]:
-    roots: list[tuple[Path, dict[str, str]]] = []
+def default_source_roots(project_root: Path | None = None) -> list[tuple[Path, dict[str, Any]]]:
+    roots: list[tuple[Path, dict[str, Any]]] = []
     project_root = project_root or find_project_root() or Path.cwd()
     if project_root:
         roots.extend(project_skill_roots(project_root, {"type": "project"}))
@@ -64,14 +72,14 @@ def default_source_roots(project_root: Path | None = None) -> list[tuple[Path, d
     return roots
 
 
-def project_child_skill_repo_roots(project_root: Path) -> list[tuple[Path, dict[str, str]]]:
+def project_child_skill_repo_roots(project_root: Path) -> list[tuple[Path, dict[str, Any]]]:
     try:
         if not project_root.exists():
             return []
         children = sorted(project_root.iterdir(), key=lambda path: path.name)
     except OSError:
         return []
-    roots: list[tuple[Path, dict[str, str]]] = []
+    roots: list[tuple[Path, dict[str, Any]]] = []
     for child in children:
         try:
             if not child.is_dir() or child.name in IGNORED_CHILD_REPO_DIR_NAMES:
@@ -105,7 +113,7 @@ def discover(
 ) -> tuple[list[IndexableSkill], list[dict[str, str]]]:
     skills: list[IndexableSkill] = []
     errors: list[dict[str, str]] = []
-    roots: list[tuple[Path, dict[str, str]]] = []
+    roots: list[tuple[Path, dict[str, Any]]] = []
     if extra_paths:
         roots.extend((path, {"type": "path"}) for path in extra_paths)
     if paths is None:
@@ -200,7 +208,145 @@ def discover_package_skills() -> tuple[list[IndexableSkill], list[dict[str, str]
                 if quarantined:
                     skills.append(quarantined)
                 errors.append({"path": str(skill_dir), "error": str(exc)})
+    npm_skills, npm_errors = discover_npm_package_skills(project_root)
+    skills.extend(npm_skills)
+    errors.extend(npm_errors)
     return skills, errors
+
+
+def discover_npm_package_skills(project_root: Path | None = None) -> tuple[list[IndexableSkill], list[dict[str, str]]]:
+    skills: list[IndexableSkill] = []
+    errors: list[dict[str, str]] = []
+    seen_dirs: set[Path] = set()
+    project_root = project_root or find_project_root()
+    if not project_root:
+        return skills, errors
+
+    for node_modules in _node_modules_paths(project_root):
+        for package_root, package_name, version in _npm_package_roots(node_modules):
+            source = {
+                "type": "npm-package",
+                "package": package_name,
+                "version": version,
+                "environment": str(node_modules),
+                "package_root": str(package_root),
+            }
+            for root, root_source in project_skill_roots(package_root, source):
+                try:
+                    skill_dirs = _skill_dirs(root)
+                except OSError as exc:
+                    errors.append({"path": str(root), "error": str(exc)})
+                    continue
+                for skill_dir in skill_dirs:
+                    skill_dir = skill_dir.resolve()
+                    if skill_dir in seen_dirs:
+                        continue
+                    seen_dirs.add(skill_dir)
+                    try:
+                        skills.append(load_skill_from_dir(skill_dir, root_source))
+                    except (SchemaError, OSError, ValueError) as exc:
+                        quarantined = quarantine_skill_from_dir(skill_dir, root_source, exc)
+                        if quarantined:
+                            skills.append(quarantined)
+                        errors.append({"path": str(skill_dir), "error": str(exc)})
+    return skills, errors
+
+
+def _node_modules_paths(project_root: Path) -> list[Path]:
+    path = project_root / "node_modules"
+    return [path.resolve()] if path.exists() else []
+
+
+def _npm_package_roots(node_modules: Path) -> list[tuple[Path, str, str | None]]:
+    packages: list[tuple[Path, str, str | None]] = []
+    seen_roots: set[Path] = set()
+    try:
+        children = sorted(node_modules.iterdir(), key=lambda path: path.name)
+    except OSError:
+        return packages
+    for child in children:
+        if child.name.startswith("@"):
+            for scoped_child in _npm_scoped_package_dirs(child):
+                _append_npm_package(packages, seen_roots, node_modules, scoped_child)
+        elif not child.name.startswith("."):
+            _append_npm_package(packages, seen_roots, node_modules, child)
+    return packages
+
+
+def _npm_scoped_package_dirs(scope_dir: Path) -> list[Path]:
+    try:
+        if not scope_dir.is_dir():
+            return []
+        return sorted((child for child in scope_dir.iterdir() if not child.name.startswith(".")), key=lambda path: path.name)
+    except OSError:
+        return []
+
+
+def _append_npm_package(
+    packages: list[tuple[Path, str, str | None]],
+    seen_roots: set[Path],
+    node_modules: Path,
+    package_dir: Path,
+) -> None:
+    try:
+        if not package_dir.is_dir():
+            return
+        package_root = package_dir.resolve()
+    except OSError:
+        return
+    if package_root in seen_roots:
+        return
+    if not _has_npm_package_skill_root(package_dir):
+        return
+    if not (package_dir / "package.json").is_file():
+        return
+    package_name, version = _npm_package_metadata(package_dir, node_modules)
+    seen_roots.add(package_root)
+    packages.append((package_root, package_name, version))
+
+
+def _has_npm_package_skill_root(package_dir: Path) -> bool:
+    for skill_root, _ in project_skill_roots(package_dir, {}):
+        try:
+            if skill_root.is_dir():
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _npm_package_metadata(package_dir: Path, node_modules: Path) -> tuple[str, str | None]:
+    data: dict[str, Any] = {}
+    try:
+        raw = json.loads((package_dir / "package.json").read_text(encoding="utf-8", errors="replace"))
+    except (json.JSONDecodeError, OSError, UnicodeError):
+        raw = {}
+    if isinstance(raw, dict):
+        data = raw
+    fallback_name = _npm_package_name_from_path(node_modules, package_dir)
+    raw_name = data.get("name")
+    package_name = canonical_npm_package_name(raw_name) if isinstance(raw_name, str) else fallback_name
+    if not NPM_PACKAGE_RE.fullmatch(package_name):
+        package_name = fallback_name
+    raw_version = data.get("version")
+    version = raw_version.strip() if isinstance(raw_version, str) and raw_version.strip() else None
+    return package_name, version
+
+
+def _npm_package_name_from_path(node_modules: Path, package_dir: Path) -> str:
+    try:
+        relative = package_dir.relative_to(node_modules)
+    except ValueError:
+        return canonical_npm_package_name(package_dir.name) or "unknown"
+    parts = relative.parts
+    if len(parts) >= 2 and parts[0].startswith("@"):
+        name = f"{parts[0]}/{parts[1]}"
+    elif parts:
+        name = parts[0]
+    else:
+        name = package_dir.name
+    canonical = canonical_npm_package_name(name)
+    return canonical if NPM_PACKAGE_RE.fullmatch(canonical) else "unknown"
 
 
 def _package_distributions(project_root: Path | None = None) -> list[tuple[metadata.Distribution, str | None]]:

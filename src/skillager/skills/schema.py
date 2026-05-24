@@ -19,10 +19,12 @@ ACTIVATION_MODES = _validators.ACTIVATION_MODES
 TRUST_STATES = {"discovered", "reviewed", "trusted", "pinned", "blocked", "lint_blocked"}
 ENV_RE = _validators.ENV_RE
 PACKAGE_RE = _validators.PACKAGE_RE
+NPM_PACKAGE_RE = _validators.NPM_PACKAGE_RE
 MAX_TARGET_PACKAGES = _validators.MAX_TARGET_PACKAGES
 MAX_ENV_NAMES = _validators.MAX_ENV_NAMES
 MAX_SPECIFIER_LENGTH = _validators.MAX_SPECIFIER_LENGTH
 SchemaError = _validators.ManifestValidationError
+canonical_npm_package_name = _validators.canonical_npm_package_name
 
 
 @_dataclass(frozen=True)
@@ -211,12 +213,14 @@ __all__ = [
     "MAX_ENV_NAMES",
     "MAX_SPECIFIER_LENGTH",
     "MAX_TARGET_PACKAGES",
+    "NPM_PACKAGE_RE",
     "PACKAGE_RE",
     "SCHEMA",
     "TRUST_STATES",
     "QuarantinedSkill",
     "SchemaError",
     "Skill",
+    "canonical_npm_package_name",
     "infer_skill",
     "load_skill_from_dir",
     "manifest_for_skill",

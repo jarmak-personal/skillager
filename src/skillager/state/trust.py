@@ -202,6 +202,10 @@ def approval_key_for(
     source = source or {}
     root_path = _existing_path(root)
     entrypoint_path = _existing_path(entrypoint)
+    package = str(source.get("package") or "").strip()
+    if package:
+        relative = _source_relative_path(root_path, source) or _marker_relative_path(root_path) or _skill_tail(skill_id)
+        return f"package:{_canonical_package(package, source)}#{relative}"
     identity_path = root_path or entrypoint_path
     if identity_path:
         git_root = _find_git_root(identity_path)
@@ -211,10 +215,6 @@ def approval_key_for(
             if remote:
                 return f"git:{remote}#{relative}"
             return f"git-local:{git_root.as_posix()}#{relative}"
-    package = str(source.get("package") or "").strip()
-    if package:
-        relative = _source_relative_path(root_path, source) or _marker_relative_path(root_path) or _skill_tail(skill_id)
-        return f"package:{_canonical_package(package)}#{relative}"
     source_path = _existing_path(source.get("path"))
     if source_path and root_path:
         relative = _relative_to(root_path, source_path)
@@ -309,7 +309,7 @@ def _relative_to(path: Path, root: Path) -> str:
 def _source_relative_path(root: Path | None, source: dict[str, Any]) -> str | None:
     if not root:
         return None
-    for key in ("environment", "path"):
+    for key in ("package_root", "environment", "path"):
         raw = source.get(key)
         if not raw:
             continue
@@ -348,7 +348,9 @@ def _skill_tail(skill_id: str) -> str:
     return skill_id.rsplit("/", 1)[-1]
 
 
-def _canonical_package(value: str) -> str:
+def _canonical_package(value: str, source: dict[str, Any] | None = None) -> str:
+    if source and source.get("type") == "npm-package":
+        return value.strip().lower()
     return re.sub(r"[-_.]+", "-", value.strip().lower())
 
 

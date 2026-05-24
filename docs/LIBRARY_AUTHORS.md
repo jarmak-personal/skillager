@@ -1,14 +1,29 @@
-# Library Author Guide
+# Package Author Guide
 
-Libraries can ship skills alongside package code. Skillager discovers package-provided `.skills` and `skills` directories in project Python environments, including virtualenv and conda environments, without importing arbitrary packages.
+Packages can ship skills alongside package code. Skillager discovers package-provided `.skills`, `skills`, and `.agents/skills` directories in project Python environments, including virtualenv and conda environments, and in project `node_modules` without importing packages or running package scripts.
 
 ## Recommended Layout
+
+Python package:
 
 ```text
 your_package/
   __init__.py
   .agents/skills/
     fastapi-usage/
+      SKILL.md
+      skillager.yaml
+      references/
+      scripts/
+```
+
+npm package:
+
+```text
+your-npm-package/
+  package.json
+  .agents/skills/
+    react-query-usage/
       SKILL.md
       skillager.yaml
       references/
@@ -50,6 +65,22 @@ targets:
     - name: your-package
       versions: ">=1,<2"
 ```
+
+For npm packages, use npm package names and semver ranges:
+
+```yaml
+schema: skillager.skill.v1
+audience:
+  - user
+activation:
+  default: suggested
+targets:
+  npm_packages:
+    - name: "@scope/your-package"
+      versions: "^1.0.0 || >=2 <3"
+```
+
+Npm `versions` values are normalized as compact non-empty strings for targeting and search; Skillager does not run npm or resolve semver ranges during lint or discovery. V1 discovery scans the current project's top-level `node_modules` only, so package-manager root hoisting is covered but nested workspace-local `node_modules` directories are not crawled.
 
 The manifest is intentionally structured-only. It cannot declare `id`, `name`, `summary`, `source`, `entrypoint`, `safety`, `triggers`, `domains`, `tools`, or `references`. Skillager derives identity from the package/path and from the reviewed `SKILL.md` body: simple `name`/`description` frontmatter when present, then top-level heading/first sentence fallbacks.
 

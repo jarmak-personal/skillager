@@ -198,7 +198,7 @@ def _duplicate_content_group_entries(skills: list[dict[str, Any]]) -> list[tuple
 
 def _duplicate_skill_sort_key(skill: dict[str, Any]) -> tuple[int, str, str]:
     source_type = str((skill.get("source") or {}).get("type") or "")
-    source_rank = {"project": 0, "collection": 1, "python-package": 2, "environment": 3, "global": 4}.get(source_type, 5)
+    source_rank = {"project": 0, "collection": 1, "python-package": 2, "npm-package": 2, "environment": 3, "global": 4}.get(source_type, 5)
     return (source_rank, str(skill.get("id") or ""), str(skill.get("entrypoint") or ""))
 
 
