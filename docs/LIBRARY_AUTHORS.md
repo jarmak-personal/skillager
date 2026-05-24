@@ -17,6 +17,8 @@ your_package/
 
 `SKILL.md` contains the agent-facing instructions. Supporting files may live beside it.
 
+Optional release evidence files such as `skill.oms.sig` and `skill-card.md` may live at the skill root for published/shared skills. They are not Skillager metadata, and they are not exposed to agents during normal activation or materialization.
+
 ## Minimal Metadata
 
 Print the current canonical minimal manifest with:
@@ -74,6 +76,31 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: uvx --from skillager-linter skillager-lint .
 ```
+
+## Release Evidence
+
+For published skill collections, a detached OMS signature at the skill root can provide provenance and integrity evidence:
+
+```text
+fastapi-usage/
+  SKILL.md
+  skillager.yaml
+  references/
+  skill.oms.sig
+  skill-card.md
+```
+
+Skillager treats signatures and skill cards as release evidence, separate from approval and risk:
+
+- A verified signature means the current skill root matches what a signer published. It does not mean the skill is safe or approved.
+- In full review metadata this evidence appears under `review_gates.signature`; it does not change `approval` or `review_gates.availability`.
+- `skill-card.md` is for curious reviewers and auditors. Skillager does not parse card prose, index it for search, or show it in normal agent-facing commands.
+- Signature and card files are excluded from Skillager's review content hash, static instruction scan, and native materialized copies.
+- Missing cards are not reported in normal `skillager-lint` output. The linter only keeps a debug-level release-evidence note so this can be promoted later if cards become useful publisher hygiene.
+
+Skillager recognizes root-level card files named `skill-card.md`, `Skill Card.md`, `card.yaml`, `card.yml`, `SKILLCARD.yaml`, or `SKILLCARD.yml`. `SKILL.md` is never treated as a card because it is the reviewed instruction entrypoint.
+
+Use `skillager verify-signature <skill-id-or-path> --certificate-chain <pem>` when you want to verify a signed skill locally. Verification is read-only, does not cache `review_gates.signature`, and users still approve the skill through the normal setup/review flow.
 
 ## Compatibility Metadata
 

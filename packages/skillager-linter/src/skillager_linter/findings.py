@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import Any
 
 from .models import LintFinding, LintReport
+
+OMS_SIGNATURE = "skill.oms.sig"
+SKILL_CARD_NAMES = ("skill-card.md", "Skill Card.md", "card.yaml", "card.yml", "SKILLCARD.yaml", "SKILLCARD.yml")
+RELEASE_EVIDENCE_NOTES = {
+    "signed_skill_missing_card": "signed_skill_missing_card:v1",
+}
+LOGGER = logging.getLogger(__name__)
 
 RULE_KEYS = {
     "assumptions_env_invalid": "assumptions_env_invalid:v1",
@@ -54,7 +63,28 @@ def lint_skill(skill: Any) -> dict[str, Any]:
     summary = str(getattr(skill, "summary", "") or "").strip().lower()
     if summary in {"", "skill", "use this skill", "use this guidance", "guidance"}:
         findings.append(finding("generic_description", "warn", "SKILL.md.description", "description or first paragraph is generic"))
+    _log_release_evidence_notes(skill)
     return lint_report(findings)
+
+
+def _log_release_evidence_notes(skill: Any) -> None:
+    root = getattr(skill, "root", None)
+    if root is None:
+        return
+    root_path = Path(root)
+    if not (root_path / OMS_SIGNATURE).is_file():
+        return
+    if any((root_path / name).is_file() for name in SKILL_CARD_NAMES):
+        return
+    LOGGER.debug(
+        "signed skill has no skill card release evidence",
+        extra={
+            "skillager_lint_code": "signed_skill_missing_card",
+            "skillager_lint_rule_key": RELEASE_EVIDENCE_NOTES["signed_skill_missing_card"],
+            "skillager_lint_field": "skill-card.md",
+            "skillager_lint_root": str(root_path),
+        },
+    )
 
 
 def safe_finding_identity(item: dict[str, Any]) -> tuple[str, str, str]:

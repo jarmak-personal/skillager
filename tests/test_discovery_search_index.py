@@ -191,6 +191,9 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                     self.assertEqual(main(["list", "--json", "--full-json"]), 0)
                 full_list = json.loads(output.getvalue())
                 self.assertIn("scan", full_list[0])
+                self.assertIn("approval", full_list[0])
+                self.assertIn("review_gates", full_list[0])
+                self.assertEqual(full_list[0]["review_gates"]["availability"], "available")
 
     def test_agent_scoped_inventory_and_search_collapse_nonpreferred_variants(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

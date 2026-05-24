@@ -105,6 +105,8 @@ Skillager discovers package skills after install without importing the package. 
 
 `skillager.yaml` is optional and structured-only to support safe skills. Put searchable prose in `SKILL.md`; manifests can declare audience, activation, compatibility constraints, and typed package targets. For CI, run `uvx --from skillager-linter skillager-lint .`.
 
+Published/shared skill roots may also include optional release evidence such as `skill.oms.sig`, `skill-card.md`, or `card.yaml`. Skillager keeps these separate from approval and search; use `skillager verify-signature <skill-id-or-path> --certificate-chain <pem>` when you explicitly want to verify a signed skill.
+
 See the [library author guide](docs/LIBRARY_AUTHORS.md) for metadata and packaging details.
 
 ## Safety Model
@@ -112,6 +114,10 @@ See the [library author guide](docs/LIBRARY_AUTHORS.md) for metadata and packagi
 The scanner is deterministic, local, and not perfect. It looks for common agent-risk patterns such as instruction override attempts, hidden prompt requests, secret exfiltration language, credential paths, download-and-execute flows, network callbacks involving secrets, unattended approval language, shell execution requests, hidden control characters, encoded blobs, and oversized content.
 
 It is a review aid, not a proof of safety. Human review decides availability, and agent-facing metadata commands only surface approved metadata.
+
+Full review metadata separates the decision axes: `approval` records the owner decision, while `review_gates` reports scan, lint, signature, and availability status. The legacy `trust` field remains for compatibility.
+
+Signatures are treated as provenance/integrity evidence, not safety signals. A verified signed skill still requires normal review before activation or materialization.
 
 ## Docs
 

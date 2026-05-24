@@ -37,6 +37,8 @@ Run `skillager doctor --agent codex` when the state seems off or the agent is st
 
 Agent-facing commands hide `discovered` and `lint_blocked` skills from normal use. Use setup, review, lint, or doctor yourself when you want to inspect why a skill is not available.
 
+For diagnostics, full JSON and review output split this into `approval` plus `review_gates`: scan risk, lint status, signature verification status, and availability reason. For example, an unreviewed low-risk signed skill may show `approval=unreviewed scan=low lint=ok signature=not_checked availability=blocked_until_review`.
+
 Approvals for portable sources, such as git-backed skill repositories, registered collections, and Python packages, are reusable across projects by default. Skillager stores the logical source key and current content hash in the reusable catalog state. If the same skill content appears in another clone or project, it is treated as already approved; if the content changes, the approval no longer matches and the skill returns to review. Use `--project-only` with `setup`, `review`, or `trust` when an approval should stay local to the current project.
 
 Direct native skills are not automatically trusted. If you place a skill in a project or global agent skill directory, Skillager discovers and scans it, but it remains `discovered` until reviewed. Use `skillager new <skill-id>` for self-authored project skills; it scaffolds `.agents/skills/<slug>/SKILL.md` by default, records a user-local authored marker, and surfaces a fast `skillager trust <id> --state reviewed` hint after you review the content.
@@ -129,6 +131,8 @@ Use `skillager bootstrap --agent <agent>` when review is already complete but wo
 Use `--mode stub` for skills you want visible by name without loading the full skill body into every session. A stub contains only the skill summary and an activation command; the full body still comes through Skillager's approval gate. After setup, Skillager prints numbered available-but-hidden stub candidates so you can say “please stub 1, 5, 8.”
 
 `skillager manifest init <path>` can add a minimal structured `skillager.yaml` to existing skill directories. It records audience and activation metadata only; identity and searchable prose remain derived from `SKILL.md` and path/source provenance. If it writes sidecars for skills already reviewed, run `skillager setup` again so the new content hashes are reviewed.
+
+Published skill collections may include detached OMS signatures (`skill.oms.sig`) and skill cards, usually `skill-card.md` or `card.yaml`, as release evidence. Skillager keeps these separate from approval: signatures can be verified explicitly with `skillager verify-signature <skill-id-or-path> --certificate-chain <pem>`, but verified content still goes through normal setup/review before activation. Verification is read-only, so indexed review metadata continues to show `signature=not_checked` until Skillager has a provenance cache.
 
 Environment overrides:
 

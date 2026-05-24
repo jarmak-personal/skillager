@@ -6,6 +6,7 @@ from typing import Any
 
 from ..families import agent_variant_family_key, duplicate_content_family_key
 from ..index import build_index, load_index
+from ..review_gates import approval_state, review_gates
 from ..selection import select_visible_skills
 from ..trust import clear_trust, make_lint_override, set_trust, trust_state
 from .audience import audience_bucket
@@ -20,15 +21,22 @@ def review_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
     by_audience: Counter[str] = Counter()
     by_risk: Counter[str] = Counter()
     by_trust: Counter[str] = Counter()
+    by_approval: Counter[str] = Counter()
+    by_review_availability: Counter[str] = Counter()
+    by_signature: Counter[str] = Counter()
     families: dict[str, set[str]] = defaultdict(set)
     for skill in skills:
         source = skill.get("source", {}).get("type") or "unknown"
         audience = audience_bucket(skill)
         risk = skill.get("scan", {}).get("risk") or "unknown"
+        gates = skill.get("review_gates") or review_gates(skill)
         by_source[source][risk] += 1
         by_audience[audience] += 1
         by_risk[risk] += 1
         by_trust[skill.get("trust", "discovered")] += 1
+        by_approval[skill.get("approval") or approval_state(skill)] += 1
+        by_review_availability[gates.get("availability", "unknown")] += 1
+        by_signature[gates.get("signature", "unknown")] += 1
         families[_family_key(skill)].add(skill.get("content_hash") or skill["id"])
     family_count = len(families)
     variant_family_count = sum(1 for variants in families.values() if len(variants) > 1)
@@ -39,6 +47,9 @@ def review_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
         "by_audience": dict(sorted(by_audience.items())),
         "by_risk": dict(sorted(by_risk.items())),
         "by_trust": dict(sorted(by_trust.items())),
+        "by_approval": dict(sorted(by_approval.items())),
+        "by_review_availability": dict(sorted(by_review_availability.items())),
+        "by_signature": dict(sorted(by_signature.items())),
         "duplicate_content": duplicate_content_summary(skills),
     }
 

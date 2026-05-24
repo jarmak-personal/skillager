@@ -129,10 +129,18 @@ class LinterEquivalenceTests(unittest.TestCase):
         skill_dir_name: str = "demo",
         skill_text: str = DEFAULT_SKILL_TEXT,
         symlink_entrypoint: bool = False,
+        extra_files: dict[str, str] | None = None,
     ) -> list[dict[str, str]]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            skill_dir = _write_skill(root, manifest, skill_dir_name=skill_dir_name, skill_text=skill_text, symlink_entrypoint=symlink_entrypoint)
+            skill_dir = _write_skill(
+                root,
+                manifest,
+                skill_dir_name=skill_dir_name,
+                skill_text=skill_text,
+                symlink_entrypoint=symlink_entrypoint,
+                extra_files=extra_files,
+            )
             output = StringIO()
             with redirect_stdout(output):
                 code = linter_main(["--json", str(skill_dir)])
@@ -147,11 +155,19 @@ class LinterEquivalenceTests(unittest.TestCase):
         skill_dir_name: str = "demo",
         skill_text: str = DEFAULT_SKILL_TEXT,
         symlink_entrypoint: bool = False,
+        extra_files: dict[str, str] | None = None,
     ) -> list[dict[str, str]]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
-            _write_skill(root, manifest, skill_dir_name=skill_dir_name, skill_text=skill_text, symlink_entrypoint=symlink_entrypoint)
+            _write_skill(
+                root,
+                manifest,
+                skill_dir_name=skill_dir_name,
+                skill_text=skill_text,
+                symlink_entrypoint=symlink_entrypoint,
+                extra_files=extra_files,
+            )
             with (
                 patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
                 patch("skillager.discovery.find_project_root", return_value=root),
@@ -175,6 +191,7 @@ def _write_skill(
     skill_dir_name: str,
     skill_text: str,
     symlink_entrypoint: bool,
+    extra_files: dict[str, str] | None = None,
 ) -> Path:
     skill_dir = root / ".skills" / skill_dir_name
     skill_dir.mkdir(parents=True)
@@ -185,6 +202,10 @@ def _write_skill(
     else:
         (skill_dir / "SKILL.md").write_text(skill_text, encoding="utf-8")
     (skill_dir / "skillager.yaml").write_text(manifest, encoding="utf-8")
+    for relative, content in (extra_files or {}).items():
+        path = skill_dir / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
     return skill_dir
 
 

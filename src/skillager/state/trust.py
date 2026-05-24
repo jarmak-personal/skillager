@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from ..lint import blocking_findings, valid_lint_override
 from ..schema import TRUST_STATES
+from ..signing import is_evidence_file
 from ..statefiles import read_user_json, write_user_json
 
 DEFAULT_HASH_EXCLUDES = {
@@ -56,6 +57,8 @@ def _hashable_files(root: Path) -> list[Path]:
 
 
 def _excluded(relative: Path) -> bool:
+    if is_evidence_file(relative):
+        return True
     for part in relative.parts:
         if part in DEFAULT_HASH_EXCLUDES:
             return True

@@ -7,6 +7,8 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
+from ..signing import is_evidence_file
+
 FINDINGS: list[dict[str, Any]] = [
     {
         "code": "instruction_override",
@@ -77,6 +79,7 @@ SCAN_EXCLUDES = {
     ".git",
     "__pycache__",
     ".pytest_cache",
+    "skill.oms.sig",
     "skillager.materialized.yaml",
 }
 MAX_SCAN_CHARS = 50_000
@@ -235,6 +238,8 @@ def _scan_files(root: Path) -> list[Path]:
 
 
 def _excluded(relative: Path) -> bool:
+    if is_evidence_file(relative):
+        return True
     for part in relative.parts:
         if part in SCAN_EXCLUDES:
             return True

@@ -55,6 +55,26 @@ For fully trusted sources, `--trust-all` and `--yolo` also approve selected lint
 
 The override is stored in `trust.json` with the reason, timestamp, content hash, and the accepted finding identities. Content changes or new blocking finding identities drop the skill back to `lint_blocked`.
 
+## Review Metadata
+
+`trust` is retained as the legacy state bucket for existing callers. Full review metadata also exposes clearer axes:
+
+- `approval`: the owner decision, such as `unreviewed`, `reviewed`, `trusted`, `pinned`, or `blocked`.
+- `review_gates.scan`: the static scanner risk, such as `low`, `medium`, or `high`.
+- `review_gates.lint`: manifest/structure lint status, such as `ok`, `warned`, or `blocked`.
+- `review_gates.signature`: indexed release-evidence status, such as `missing` or `not_checked`. Explicit `verify-signature` runs report `verified` or `failed`, but do not approve the skill or write a cached review gate.
+- `review_gates.availability`: whether the skill is `available`, `blocked`, `blocked_until_review`, or `blocked_until_lint_override`.
+
+These fields are diagnostics, not independent approvals. A low scan result, passing lint, or valid signature can inform review, but only approval makes a skill available for activation or materialization.
+
+## Signatures And Release Evidence
+
+Detached OMS signatures such as `skill.oms.sig` are provenance and integrity evidence, not safety decisions. A valid signature can show that the current skill root matches what a signer published, but it never replaces user approval and never lowers scanner risk.
+
+Skill cards are treated as optional release evidence for human reviewers. Skillager detects recognized root-level card filenames for diagnostic/full metadata, but does not parse card prose, index it for search, include it in agent activation output, or copy it into native materialized skills.
+
+Signature and card files are excluded from the reviewed content hash and static instruction scan. The reviewed artifact remains the skill instructions and supporting files that an agent may actually use. Use `skillager verify-signature <skill-id-or-path> --certificate-chain <pem>` for explicit local verification.
+
 ## Compatibility Gate
 
 Compatibility is separate from safety. A skill can be safe but awkward or impossible in a specific agent harness.

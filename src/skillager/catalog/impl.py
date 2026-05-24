@@ -9,10 +9,12 @@ from typing import Any
 
 from ..audience import classify_audience
 from ..lint import lint_skill
+from ..review_gates import apply_review_metadata
 from ..scan import scan_path
 from ..schema import QuarantinedSkill, SchemaError, Skill, load_skill_from_dir, quarantine_skill_from_dir
 from ..search import search as search_skills
 from ..selection import select_visible_skills
+from ..signing import signature_info
 from ..trust import approval_key_for, content_hash, load_trust, save_trust, trust_info
 
 COLLECTION_MIGRATIONS_SCHEMA = "skillager.collection-migrations.v1"
@@ -157,6 +159,7 @@ def _collection_skills(
                     trust,
                 )
                 _apply_approval_metadata(skill, approval_key, trust)
+                apply_review_metadata(skill)
             skills.append(skill)
     return skills
 
@@ -545,8 +548,12 @@ def _index_collection_skills(state_root: Path, name: str, root: Path) -> tuple[l
             approval_key = approval_key_for(skill.id, skill.root, skill.source, entrypoint=skill.entrypoint)
             trust = trust_info(state_root, skill.id, digest, lint=lint, approval_key=approval_key, approval_root=state_root)
             entry = skill.to_index(digest, scan, trust.get("state", "discovered"))
-            _apply_approval_metadata(entry, approval_key, trust)
             entry["lint"] = lint
+            signature = signature_info(skill.root)
+            if signature:
+                entry["signature"] = signature
+            _apply_approval_metadata(entry, approval_key, trust)
+            apply_review_metadata(entry)
             entry["audience_guess"] = classify_audience(skill)
             skills.append(entry)
         except (SchemaError, OSError, ValueError) as exc:
@@ -562,7 +569,12 @@ def _index_collection_skills(state_root: Path, name: str, root: Path) -> tuple[l
                 approval_key = approval_key_for(q_skill.id, q_skill.root, q_skill.source, entrypoint=q_skill.entrypoint)
                 trust = trust_info(state_root, q_skill.id, digest, lint=q_skill.lint, approval_key=approval_key, approval_root=state_root)
                 entry = q_skill.to_index(digest, scan, trust.get("state", "discovered"))
+                entry["lint"] = q_skill.lint
+                signature = signature_info(q_skill.root)
+                if signature:
+                    entry["signature"] = signature
                 _apply_approval_metadata(entry, approval_key, trust)
+                apply_review_metadata(entry)
                 skills.append(entry)
             errors.append({"path": str(skill_dir), "error": str(exc)})
     skills.sort(key=lambda item: item["id"])

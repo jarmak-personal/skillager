@@ -679,6 +679,7 @@ class SkillagerSetupTests(unittest.TestCase):
             text = output.getvalue()
             self.assertIn("Ready for approval (1 low-risk)", text)
             self.assertIn("project/gis-domain", text)
+            self.assertIn("review: approval=unreviewed scan=low lint=ok signature=missing availability=blocked_until_review", text)
             self.assertIn("audience: everything else", text)
             self.assertIn("used for: Use GIS domain concepts.", text)
             self.assertNotIn("second sentence", text)

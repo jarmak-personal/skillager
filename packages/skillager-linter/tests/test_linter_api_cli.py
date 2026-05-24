@@ -56,6 +56,47 @@ class LinterApiCliTests(unittest.TestCase):
             self.assertEqual(result.lint.findings[0].code, "unknown_key")
             self.assertNotIn("hostile manifest bait", payload)
 
+    def test_signed_skill_without_card_lints_ok_and_logs_debug_note(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "demo"
+            root.mkdir()
+            (root / "SKILL.md").write_text("# Demo\n\nUseful testing workflow.", encoding="utf-8")
+            (root / "skillager.yaml").write_text(MINIMAL_MANIFEST_YAML, encoding="utf-8")
+            (root / "skill.oms.sig").write_text("{}", encoding="utf-8")
+
+            with self.assertLogs("skillager_linter.findings", level="DEBUG") as logs:
+                result = lint_skill_root(root)
+
+            self.assertEqual(result.lint.status, "ok")
+            self.assertEqual(result.lint.findings, ())
+            self.assertIn("signed skill has no skill card release evidence", "\n".join(logs.output))
+
+    def test_signed_skill_with_card_lints_ok(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "demo"
+            root.mkdir()
+            (root / "SKILL.md").write_text("# Demo\n\nUseful testing workflow.", encoding="utf-8")
+            (root / "skillager.yaml").write_text(MINIMAL_MANIFEST_YAML, encoding="utf-8")
+            (root / "skill.oms.sig").write_text("{}", encoding="utf-8")
+            (root / "skill-card.md").write_text("# Skill Card\n\nRelease notes.", encoding="utf-8")
+
+            result = lint_skill_root(root)
+
+            self.assertEqual(result.lint.status, "ok")
+
+    def test_signed_skill_with_yaml_card_lints_ok(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "demo"
+            root.mkdir()
+            (root / "SKILL.md").write_text("# Demo\n\nUseful testing workflow.", encoding="utf-8")
+            (root / "skillager.yaml").write_text(MINIMAL_MANIFEST_YAML, encoding="utf-8")
+            (root / "skill.oms.sig").write_text("{}", encoding="utf-8")
+            (root / "card.yaml").write_text("name: Demo\n", encoding="utf-8")
+
+            result = lint_skill_root(root)
+
+            self.assertEqual(result.lint.status, "ok")
+
     def test_cli_prints_minimal_manifest(self) -> None:
         output = StringIO()
         with redirect_stdout(output):

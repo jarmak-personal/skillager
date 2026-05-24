@@ -63,9 +63,11 @@ from ..review import (
     review_summary,
     setup_environment,
 )
+from ..review_gates import approval_state, review_gates as compute_review_gates
 from ..scan import scan_path
 from ..search import search as search_index
 from ..selection import select_visible_skills
+from ..signing import verify_oms_signature
 from ..simple_yaml import YamlError, load_mapping
 from ..trust import content_hash, load_trust, make_lint_override, save_trust, set_trust
 from ..update_check import check_for_update
@@ -293,6 +295,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--include-global", action="store_true", help="Include global native skills.")
     p.add_argument("--json", action="store_true", help="Emit lint findings as JSON.")
     p.set_defaults(func=cmd_lint)
+
+    p = sub.add_parser(
+        "verify-signature",
+        help="Verify a skill's detached OMS signature.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Verify a skill directory with model_signing and a local certificate chain. This is read-only and does not approve the skill.",
+        epilog=(
+            "Examples:\n"
+            "  skillager verify-signature community/cuopt-routing --certificate-chain nv-agent-root-cert.pem\n"
+            "  skillager verify-signature ./skills/cuopt-routing-api-python --certificate-chain nv-agent-root-cert.pem --json"
+        ),
+    )
+    p.add_argument("target", help="Skill ID or skill directory path.")
+    p.add_argument("--certificate-chain", "--certificate_chain", dest="certificate_chains", action="append", type=Path, required=True, help="Trusted certificate chain PEM. Repeat for multiple files.")
+    p.add_argument("--ignore-unsigned-files", "--ignore_unsigned_files", action="store_true", help="Permit extra unsigned files. Strict verification is the default.")
+    p.add_argument("--json", action="store_true", help="Emit verification result as JSON.")
+    p.set_defaults(func=cmd_verify_signature)
 
     p = sub.add_parser(
         "trust",
@@ -4420,6 +4439,27 @@ def cmd_lint(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify_signature(args: argparse.Namespace) -> int:
+    target_path = Path(args.target).expanduser()
+    if target_path.exists():
+        skill_root = target_path.resolve()
+    else:
+        skill = _find_project_skill(root(args), args.target, catalog_root=catalog_root(args), include_collection_inventory=True, include_lint_blocked=True)
+        skill_root = Path(skill["root"]).resolve()
+    result = verify_oms_signature(
+        skill_root,
+        certificate_chains=args.certificate_chains,
+        ignore_unsigned_files=args.ignore_unsigned_files,
+    )
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(f"{skill_root}: {result['status']}")
+        if result.get("message"):
+            print(f"  {result['message']}")
+    return 0 if result.get("verified") else 1
+
+
 def _effective_project_skills(
     state_root: Path,
     *,
@@ -5189,6 +5229,15 @@ def _print_review_report(
     if summary.get("by_trust"):
         trust_bits = ", ".join(_trust_count(state, count) for state, count in sorted(summary["by_trust"].items()))
         print(f"  - trust: {trust_bits}")
+    if summary.get("by_approval"):
+        approval_bits = ", ".join(f"{state}={_style(str(count), 'bold')}" for state, count in sorted(summary["by_approval"].items()))
+        print(f"  - approval: {approval_bits}")
+    if summary.get("by_review_availability"):
+        availability_bits = ", ".join(f"{state}={_style(str(count), 'bold')}" for state, count in sorted(summary["by_review_availability"].items()))
+        print(f"  - review availability: {availability_bits}")
+    if _show_signature_summary(summary):
+        signature_bits = ", ".join(f"{state}={_style(str(count), 'bold')}" for state, count in sorted(summary["by_signature"].items()))
+        print(f"  - signature: {signature_bits}")
     _print_review_duplicate_summary(summary)
     if action.get("changed"):
         print(_style("Changed:", "bold"))
@@ -5213,6 +5262,7 @@ def _print_review_report(
         risk = skill.get("scan", {}).get("risk")
         source = skill.get("source", {}).get("type")
         print(f"  - {_style(skill['id'], 'bold')} [{_risk_label(risk)}] {_trust_label(skill.get('trust'))} {source}/{skill.get('activation', '-')} - {skill.get('summary', '-')}")
+        print(f"    review: {_review_gate_summary(skill)}")
         print(f"    audience: {_audience_label(skill)}")
         for item in (skill.get("lint") or {}).get("findings", [])[:3]:
             print(f"    lint {item.get('severity')} {item.get('code')} {item.get('field')}: {item.get('detail')}")
@@ -5241,6 +5291,12 @@ def _print_review_report_rich(
         table.add_row("audience", ", ".join(f"{audience_bucket_label(audience)}={count}" for audience, count in sorted(summary["by_audience"].items())))
     if summary.get("by_trust"):
         table.add_row("trust", ", ".join(_trust_count(state, count) for state, count in sorted(summary["by_trust"].items())))
+    if summary.get("by_approval"):
+        table.add_row("approval", ", ".join(f"{state}={count}" for state, count in sorted(summary["by_approval"].items())))
+    if summary.get("by_review_availability"):
+        table.add_row("review availability", ", ".join(f"{state}={count}" for state, count in sorted(summary["by_review_availability"].items())))
+    if _show_signature_summary(summary):
+        table.add_row("signature", ", ".join(f"{state}={count}" for state, count in sorted(summary["by_signature"].items())))
     duplicate = (summary.get("duplicate_content") or {})
     if duplicate.get("review_needed"):
         table.add_row(
@@ -5268,14 +5324,14 @@ def _print_review_report_rich(
     skill_table = Table(title="Selected skills", box=box.SIMPLE, show_header=True, header_style="bold")
     skill_table.add_column("Skill")
     skill_table.add_column("Risk")
-    skill_table.add_column("Trust")
+    skill_table.add_column("Review", overflow="fold")
     skill_table.add_column("Source")
     skill_table.add_column("Used for", overflow="fold")
     for skill in skills:
         skill_table.add_row(
             skill["id"],
             _risk_label(skill.get("scan", {}).get("risk")),
-            _trust_label(skill.get("trust")),
+            _review_gate_summary(skill),
             f"{skill.get('source', {}).get('type')}/{skill.get('activation')}",
             _first_sentence(skill.get("summary") or ""),
         )
@@ -5333,6 +5389,7 @@ def _print_needs_review(skills: list[dict[str, Any]]) -> None:
                 print()
             findings = skill.get("scan", {}).get("findings", [])
             print(f"  - {_style(skill['id'], 'bold')} ({len(findings)} finding(s))")
+            print(f"    review: {_review_gate_summary(skill)}")
             print(f"    audience: {_audience_label(skill)}")
             if skill.get("summary"):
                 _print_wrapped("    used for: ", skill["summary"], width=_output_width(), max_chars=220)
@@ -5354,6 +5411,7 @@ def _print_needs_review_rich(skills: list[dict[str, Any]]) -> None:
             findings = skill.get("scan", {}).get("findings", [])
             detail_lines = [
                 f"[bold]{skill['id']}[/bold] ({len(findings)} finding(s))",
+                f"review: {_review_gate_summary(skill)}",
                 f"audience: {_audience_label(skill)}",
             ]
             if skill.get("summary"):
@@ -5385,6 +5443,7 @@ def _print_ready_for_approval(skills: list[dict[str, Any]], *, limit: int = 12) 
         if index:
             print()
         print(f"  - {_style(skill['id'], 'bold')}")
+        print(f"    review: {_review_gate_summary(skill)}")
         print(f"    audience: {_audience_label(skill)}")
         if skill.get("summary"):
             _print_wrapped("    used for: ", _first_sentence(skill["summary"]), width=_output_width(), max_chars=140)
@@ -5401,6 +5460,7 @@ def _print_ready_for_approval_rich(skills: list[dict[str, Any]], *, limit: int =
     table = Table(title=f"Ready for approval ({len(skills)} low-risk)", box=box.SIMPLE, show_header=True, header_style="bold green")
     table.add_column("Skill")
     table.add_column("Audience")
+    table.add_column("Review", overflow="fold")
     table.add_column("Used for", overflow="fold")
     table.add_column("File", overflow="fold")
     for skill in skills[:limit]:
@@ -5411,6 +5471,7 @@ def _print_ready_for_approval_rich(skills: list[dict[str, Any]], *, limit: int =
         table.add_row(
             skill["id"],
             _audience_label(skill),
+            _review_gate_summary(skill),
             detail,
             skill.get("entrypoint", "<unknown>"),
         )
@@ -5670,6 +5731,7 @@ def _interactive_review_skills(
         print()
         print(_style(f"Review skill {index} of {len(review_items)}", "bold"))
         print(f"  {_style(skill['id'], 'bold')} [{_risk_label(risk)}] {source}/{package} {_trust_label(skill['trust'])}")
+        print(f"  review: {_review_gate_summary(skill)}")
         print(f"  audience: {_audience_label(skill)}")
         if skill.get("summary"):
             _print_wrapped("  used for: ", skill["summary"], width=_output_width(), max_chars=260)
@@ -5786,6 +5848,7 @@ def _print_review_family_variant(skill: dict[str, Any], *, preferred: dict[str, 
     marker = "preferred" if _same_skill_variant(skill, preferred) else "variant"
     content_status = "same content" if skill.get("content_hash") == preferred.get("content_hash") else "differs"
     print(f"    - {marker}: {skill['id']} [{_risk_label(risk)}] {hint} {source}/{package} {content_status}")
+    print(f"      review: {_review_gate_summary(skill)}")
     print(f"      audience: {_audience_label(skill)}")
     if skill.get("summary"):
         _print_wrapped("      used for: ", skill["summary"], width=_output_width(), max_chars=180)
@@ -6271,6 +6334,23 @@ def _trust_label(state: str | None) -> str:
 
 def _trust_count(state: str, count: int) -> str:
     return f"{_trust_label(state)}={_style(str(count), 'bold')}"
+
+
+def _review_gate_summary(skill: dict[str, Any]) -> str:
+    gates = skill.get("review_gates") or compute_review_gates(skill)
+    approval = skill.get("approval") or approval_state(skill)
+    return (
+        f"approval={approval} "
+        f"scan={gates.get('scan', 'unknown')} "
+        f"lint={gates.get('lint', 'unknown')} "
+        f"signature={gates.get('signature', 'unknown')} "
+        f"availability={gates.get('availability', 'unknown')}"
+    )
+
+
+def _show_signature_summary(summary: dict[str, Any]) -> bool:
+    counts = summary.get("by_signature") or {}
+    return any(state != "missing" and count for state, count in counts.items())
 
 
 def _finding_location(finding: dict[str, Any]) -> str:

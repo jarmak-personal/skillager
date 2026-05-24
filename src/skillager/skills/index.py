@@ -9,8 +9,10 @@ from ..authored import mark_authored_metadata
 from ..discovery import discover
 from ..families import canonical_agent_variant_slug
 from ..lint import lint_skill
+from ..review_gates import apply_review_metadata
 from ..scan import scan_path
 from ..schema import QuarantinedSkill
+from ..signing import signature_info
 from ..trust import approval_key_for, content_hash, trust_info
 
 
@@ -37,8 +39,12 @@ def build_index(
         approval_key = approval_key_for(skill.id, skill.root, skill.source, entrypoint=skill.entrypoint)
         trust = trust_info(state_root, skill.id, digest, lint=lint, approval_key=approval_key, approval_root=approval_root)
         entry = skill.to_index(digest, scan, trust.get("state", "discovered"))
-        _apply_approval_metadata(entry, approval_key, trust)
         entry["lint"] = lint
+        signature = signature_info(skill.root)
+        if signature:
+            entry["signature"] = signature
+        _apply_approval_metadata(entry, approval_key, trust)
+        apply_review_metadata(entry)
         if not entry.get("quarantined"):
             entry["audience_guess"] = classify_audience(skill)
         native = _native_info(entry)
@@ -77,6 +83,7 @@ def load_index(state_root: Path, *, approval_root: Path | None = None, persist_m
                 approval_root=approval_root,
             )
             _apply_approval_metadata(skill, approval_key, trust)
+            apply_review_metadata(skill)
             mark_authored_metadata(skill)
     return data
 

@@ -255,6 +255,8 @@ class SkillagerMaterializeTests(unittest.TestCase):
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "skill.oms.sig").write_text("{}\n", encoding="utf-8")
+            (skill_dir / "skill-card.md").write_text("# Skill Card\n\nRelease evidence.\n", encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -262,6 +264,8 @@ class SkillagerMaterializeTests(unittest.TestCase):
             target = root / ".agents" / "skills" / "project-demo"
             self.assertTrue((target / "SKILL.md").exists())
             self.assertFalse((target / "skillager.yaml").exists())
+            self.assertFalse((target / "skill.oms.sig").exists())
+            self.assertFalse((target / "skill-card.md").exists())
             self.assertTrue((target / "skillager.materialized.yaml").exists())
 
     def test_materialize_stub_writes_tiny_activation_handle(self) -> None:

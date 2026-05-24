@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..compatibility import compatibility_problem, compatibility_warnings
+from ..signing import is_evidence_file
 from ..simple_yaml import dumps, load_mapping
 from ..trust import content_hash
 
@@ -765,6 +766,8 @@ def _collision_safe_target(target: Path, skill_id: str) -> Path:
 
 
 def _copy_excluded(relative: Path) -> bool:
+    if is_evidence_file(relative):
+        return True
     for part in relative.parts:
         if part in {".git", "__pycache__", ".pytest_cache", "skillager.materialized.yaml"}:
             return True
