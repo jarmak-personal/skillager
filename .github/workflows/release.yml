@@ -3,6 +3,14 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      package:
+        description: Package to release.
+        required: true
+        type: choice
+        options:
+          - skillager
+          - skillager-linter
+        default: skillager
       bump:
         description: Version bump type. current only tags; patch/minor/major push a version commit to main.
         required: true
@@ -25,8 +33,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     outputs:
+      package: ${{ steps.version.outputs.package }}
       version: ${{ steps.version.outputs.next }}
-      linter_version: ${{ steps.version.outputs.linter }}
+      tag: ${{ steps.version.outputs.tag }}
+      dist_prefix: ${{ steps.version.outputs.dist_prefix }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
@@ -122,25 +132,56 @@ jobs:
           require_probe("PyPI API", "https://pypi.org/simple/")
           PY
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          python-version: "3.12"
+
       - name: Compute next version
         id: version
         run: |
-          CURRENT=$(python3 - <<'PY'
+          python3 - <<'PY'
+          import os
           import pathlib
-          text = pathlib.Path("src/skillager/__init__.py").read_text(encoding="utf-8")
-          for line in text.splitlines():
-              if line.startswith("__version__"):
-                  print(line.split("=", 1)[1].strip().strip('"'))
-                  break
-          else:
-              raise SystemExit("could not find __version__")
-          PY
-          )
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          import re
 
-          NEXT=$(python3 - <<PY
-          major, minor, patch = [int(part) for part in "$CURRENT".split(".")]
+          package = "${{ inputs.package }}"
           bump = "${{ inputs.bump }}"
+          packages = {
+              "skillager": {
+                  "pyproject": "pyproject.toml",
+                  "init": "src/skillager/__init__.py",
+                  "tag_prefix": "v",
+                  "tag_pattern": "v[0-9]*",
+                  "dist_prefix": "skillager",
+                  "release_title_prefix": "v",
+              },
+              "skillager-linter": {
+                  "pyproject": "packages/skillager-linter/pyproject.toml",
+                  "init": "packages/skillager-linter/src/skillager_linter/__init__.py",
+                  "tag_prefix": "skillager-linter-v",
+                  "tag_pattern": "skillager-linter-v[0-9]*",
+                  "dist_prefix": "skillager_linter",
+                  "release_title_prefix": "skillager-linter v",
+              },
+          }
+          if package not in packages:
+              raise SystemExit(f"unsupported package: {package}")
+          config = packages[package]
+
+          pyproject = pathlib.Path(config["pyproject"])
+          init_file = pathlib.Path(config["init"])
+          pyproject_match = re.search(r'^version = "([^"]+)"$', pyproject.read_text(encoding="utf-8"), re.MULTILINE)
+          init_match = re.search(r'^__version__ = "([^"]+)"$', init_file.read_text(encoding="utf-8"), re.MULTILINE)
+          if not pyproject_match:
+              raise SystemExit(f"could not find project version in {pyproject}")
+          if not init_match:
+              raise SystemExit(f"could not find __version__ in {init_file}")
+          current = pyproject_match.group(1)
+          if init_match.group(1) != current:
+              raise SystemExit(f"{pyproject} and {init_file} disagree on version")
+
+          major, minor, patch = [int(part) for part in current.split(".")]
           if bump == "current":
               pass
           elif bump == "major":
@@ -152,47 +193,54 @@ jobs:
               patch = 0
           else:
               patch += 1
-          print(f"{major}.{minor}.{patch}")
+          next_version = f"{major}.{minor}.{patch}"
+          tag = f"{config['tag_prefix']}{next_version}"
+          release_title = f"{config['release_title_prefix']}{next_version}"
+
+          outputs = {
+              "package": package,
+              "current": current,
+              "next": next_version,
+              "tag": tag,
+              "tag_pattern": config["tag_pattern"],
+              "dist_prefix": config["dist_prefix"],
+              "pyproject": config["pyproject"],
+              "init": config["init"],
+              "release_title": release_title,
+          }
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              for key, value in outputs.items():
+                  output.write(f"{key}={value}\n")
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write(f"### Package: {package}\n")
+              summary.write(f"### Version bump: {current} -> {next_version} ({bump})\n")
           PY
-          )
-          echo "next=$NEXT" >> "$GITHUB_OUTPUT"
-          LINTER_VERSION=$(python3 - <<'PY'
-          import pathlib
-          text = pathlib.Path("packages/skillager-linter/pyproject.toml").read_text(encoding="utf-8")
-          for line in text.splitlines():
-              if line.startswith("version = "):
-                  print(line.split("=", 1)[1].strip().strip('"'))
-                  break
-          else:
-              raise SystemExit("could not find linter version")
-          PY
-          )
-          echo "linter=$LINTER_VERSION" >> "$GITHUB_OUTPUT"
-          echo "### Version bump: $CURRENT -> $NEXT (${{ inputs.bump }})" >> "$GITHUB_STEP_SUMMARY"
-          echo "### skillager-linter: $LINTER_VERSION" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Reuse existing current release tag
         if: inputs.bump == 'current'
         env:
-          NEXT: ${{ steps.version.outputs.next }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          tag="v$NEXT"
-          remote_tag_sha=$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')
+          remote_tag_sha=$(git ls-remote origin "refs/tags/$TAG^{}" | awk '{print $1}')
           if [ -z "$remote_tag_sha" ]; then
-            remote_tag_sha=$(git ls-remote origin "refs/tags/$tag" | awk '{print $1}')
+            remote_tag_sha=$(git ls-remote origin "refs/tags/$TAG" | awk '{print $1}')
           fi
 
           if [ -n "$remote_tag_sha" ]; then
             git checkout --detach "$remote_tag_sha"
-            echo "Reusing existing $tag at $remote_tag_sha"
+            echo "Reusing existing $TAG at $remote_tag_sha"
           else
-            echo "$tag does not exist yet; release will tag the current commit"
+            echo "$TAG does not exist yet; release will tag the current commit"
           fi
 
       - name: Update version files
+        if: inputs.bump != 'current'
         env:
           CURRENT: ${{ steps.version.outputs.current }}
           NEXT: ${{ steps.version.outputs.next }}
+          PYPROJECT: ${{ steps.version.outputs.pyproject }}
+          INIT: ${{ steps.version.outputs.init }}
         run: |
           python3 - <<'PY'
           import os
@@ -201,8 +249,8 @@ jobs:
           current = os.environ["CURRENT"]
           next_version = os.environ["NEXT"]
           replacements = {
-              "pyproject.toml": [(f'version = "{current}"', f'version = "{next_version}"')],
-              "src/skillager/__init__.py": [(f'__version__ = "{current}"', f'__version__ = "{next_version}"')],
+              os.environ["PYPROJECT"]: [(f'version = "{current}"', f'version = "{next_version}"')],
+              os.environ["INIT"]: [(f'__version__ = "{current}"', f'__version__ = "{next_version}"')],
           }
           for filename, pairs in replacements.items():
               path = pathlib.Path(filename)
@@ -213,92 +261,102 @@ jobs:
                   text = text.replace(old, new, 1)
               path.write_text(text, encoding="utf-8")
           PY
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.1.0
-        with:
-          python-version: "3.12"
+          uv lock
 
       - name: Validate release build
+        env:
+          PACKAGE: ${{ steps.version.outputs.package }}
         run: |
           rm -rf dist
-          uv run mypy --python-version 3.10 src/skillager
-          uv run mypy --python-version 3.10 packages/skillager-linter/src/skillager_linter
-          uv run python -m unittest discover -s tests
-          uv run python -m unittest discover -s packages/skillager-linter/tests
-          uv run python -m skillager --version
-          uv run python -m skillager_linter --version
-          uv build packages/skillager-linter
-          uv build
-          uv run python scripts/check_wheelhouse.py --python 3.12
+          if [ "$PACKAGE" = "skillager" ]; then
+            uv run mypy --python-version 3.10 src/skillager
+            uv run mypy --python-version 3.10 packages/skillager-linter/src/skillager_linter
+            uv run python -m unittest discover -s tests
+            uv run python -m unittest discover -s packages/skillager-linter/tests
+            uv run python -m skillager --version
+            uv run python -m skillager_linter --version
+            uv build packages/skillager-linter
+            uv build
+            uv run python scripts/check_wheelhouse.py --python 3.12
+          else
+            uv run mypy --python-version 3.10 packages/skillager-linter/src/skillager_linter
+            uv run python -m unittest discover -s packages/skillager-linter/tests
+            uv run python -m skillager_linter --version
+            uv build packages/skillager-linter
+          fi
           ls -lh dist/
 
       - name: Commit version bump and tag
         env:
+          PACKAGE: ${{ steps.version.outputs.package }}
           CURRENT: ${{ steps.version.outputs.current }}
           NEXT: ${{ steps.version.outputs.next }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PYPROJECT: ${{ steps.version.outputs.pyproject }}
+          INIT: ${{ steps.version.outputs.init }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml src/skillager/__init__.py
+          git add "$PYPROJECT" "$INIT" uv.lock
+          committed=false
           if git diff --cached --quiet; then
             echo "No version bump commit needed for $NEXT"
           else
-            git commit -m "Bump version to $NEXT"
+            git commit -m "Bump $PACKAGE to $NEXT"
+            committed=true
           fi
 
-          tag="v$NEXT"
           head_sha=$(git rev-parse HEAD)
-          remote_tag_sha=$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')
+          remote_tag_sha=$(git ls-remote origin "refs/tags/$TAG^{}" | awk '{print $1}')
           if [ -z "$remote_tag_sha" ]; then
-            remote_tag_sha=$(git ls-remote origin "refs/tags/$tag" | awk '{print $1}')
+            remote_tag_sha=$(git ls-remote origin "refs/tags/$TAG" | awk '{print $1}')
           fi
 
           if [ -n "$remote_tag_sha" ] && [ "$remote_tag_sha" != "$head_sha" ]; then
-            echo "::error::$tag already exists at $remote_tag_sha, but release HEAD is $head_sha"
+            echo "::error::$TAG already exists at $remote_tag_sha, but release HEAD is $head_sha"
             exit 1
           fi
 
-          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            local_tag_sha=$(git rev-list -n 1 "$tag")
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            local_tag_sha=$(git rev-list -n 1 "$TAG")
             if [ "$local_tag_sha" != "$head_sha" ]; then
-              echo "::error::local $tag points at $local_tag_sha, but release HEAD is $head_sha"
+              echo "::error::local $TAG points at $local_tag_sha, but release HEAD is $head_sha"
               exit 1
             fi
-            echo "$tag already exists locally at release HEAD"
+            echo "$TAG already exists locally at release HEAD"
           else
-            git tag "$tag" "$head_sha"
+            git tag "$TAG" "$head_sha"
           fi
 
-          if [ "$NEXT" != "$CURRENT" ]; then
+          if [ "$committed" = "true" ]; then
             git push origin HEAD:main
           fi
 
           if [ -z "$remote_tag_sha" ]; then
-            git push origin "v$NEXT"
+            git push origin "$TAG"
           else
-            echo "$tag already exists on origin at release HEAD; skipping tag push"
+            echo "$TAG already exists on origin at release HEAD; skipping tag push"
           fi
 
       - name: Build release notes from commit subjects
         env:
+          PACKAGE: ${{ steps.version.outputs.package }}
           NEXT: ${{ steps.version.outputs.next }}
-          LINTER_VERSION: ${{ steps.version.outputs.linter }}
+          TAG_PATTERN: ${{ steps.version.outputs.tag_pattern }}
         run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          PREV_TAG=$(git describe --tags --match "$TAG_PATTERN" --abbrev=0 HEAD^ 2>/dev/null || echo "")
           if [ -n "$PREV_TAG" ]; then
             RANGE="${PREV_TAG}..HEAD"
           else
             RANGE="HEAD"
           fi
-          NOTES=$(git log --pretty=format:'- %s' "$RANGE" | grep -v '^- Bump version to' || true)
+          NOTES=$(git log --pretty=format:'- %s' "$RANGE" | grep -v "^- Bump $PACKAGE to" || true)
           if [ -z "$NOTES" ]; then
             NOTES="- Initial release"
           fi
           {
             echo "Packages:"
-            echo "- skillager $NEXT"
-            echo "- skillager-linter $LINTER_VERSION"
+            echo "- $PACKAGE $NEXT"
             echo
             echo "Changes:"
             printf '%s\n' "$NOTES"
@@ -307,7 +365,8 @@ jobs:
       - name: Create or update draft GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NEXT: ${{ steps.version.outputs.next }}
+          TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.version.outputs.release_title }}
         run: |
           gh_api_retry() {
             attempt=1
@@ -349,17 +408,16 @@ jobs:
             done
           }
 
-          tag="v$NEXT"
-          release_id=$(release_id_for_tag "$tag")
+          release_id=$(release_id_for_tag "$TAG")
           if [ -n "$release_id" ]; then
             gh_api_retry --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
-              -f name="$tag" \
+              -f name="$RELEASE_TITLE" \
               -F body=@RELEASE_NOTES.md \
               --silent
           else
-            gh release create "$tag" \
+            gh release create "$TAG" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "$tag" \
+              --title "$RELEASE_TITLE" \
               --notes-file RELEASE_NOTES.md \
               --draft
           fi
@@ -368,7 +426,7 @@ jobs:
         uses: actions/upload-artifact@v7.0.1
         with:
           name: dist
-          path: dist/
+          path: dist/${{ steps.version.outputs.dist_prefix }}-${{ steps.version.outputs.next }}*
           if-no-files-found: error
 
   release-assets:
@@ -385,6 +443,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.release.outputs.version }}
+          TAG: ${{ needs.release.outputs.tag }}
+          DIST_PREFIX: ${{ needs.release.outputs.dist_prefix }}
         run: |
           python3 - <<'PY'
           import json
@@ -398,7 +458,7 @@ jobs:
 
           repo = os.environ["GITHUB_REPOSITORY"]
           token = os.environ["GH_TOKEN"]
-          tag = f"v{os.environ['VERSION']}"
+          tag = os.environ["TAG"]
           api = f"https://api.github.com/repos/{repo}"
           uploads = f"https://uploads.github.com/repos/{repo}"
           headers = {
@@ -459,9 +519,15 @@ jobs:
 
           assets = request_json("GET", f"{api}/releases/{release_id}/assets?per_page=100") or []
           by_name = {asset.get("name"): asset for asset in assets}
-          files = sorted(path for path in pathlib.Path("dist").iterdir() if path.is_file())
-          if not files:
-              raise SystemExit("no release assets found in dist/")
+          version = os.environ["VERSION"]
+          dist_prefix = os.environ["DIST_PREFIX"]
+          files = sorted(
+              path
+              for path in pathlib.Path("dist").iterdir()
+              if path.is_file() and path.name.startswith(f"{dist_prefix}-{version}")
+          )
+          if len(files) != 2:
+              raise SystemExit(f"expected exactly two release assets for {dist_prefix} {version}, found {len(files)}")
 
           for path in files:
               existing = by_name.get(path.name)
@@ -474,12 +540,12 @@ jobs:
               print(f"uploaded {path.name} to {tag}")
           PY
 
-  publish-linter-pypi:
+  publish-pypi:
     needs: release
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/skillager-linter
+      url: https://pypi.org/p/${{ needs.release.outputs.package }}
     permissions:
       id-token: write
     steps:
@@ -489,78 +555,20 @@ jobs:
           name: dist
           path: dist/
 
-      - name: Select linter artifacts
+      - name: Select package artifacts
         env:
-          VERSION: ${{ needs.release.outputs.linter_version }}
-        run: |
-          mkdir dist-linter
-          cp "dist/skillager_linter-${VERSION}"* dist-linter/
-          # V1 release artifacts are exactly one wheel plus one sdist.
-          test "$(find dist-linter -type f | wc -l)" -eq 2
-
-      - name: Check whether version is already on PyPI
-        id: pypi
-        env:
-          PACKAGE: skillager-linter
-          VERSION: ${{ needs.release.outputs.linter_version }}
-        run: |
-          python3 - <<'PY'
-          import os
-          import urllib.error
-          import urllib.request
-
-          package = os.environ["PACKAGE"]
-          version = os.environ["VERSION"]
-          url = f"https://pypi.org/pypi/{package}/{version}/json"
-          exists = False
-          try:
-              with urllib.request.urlopen(url, timeout=20) as response:
-                  exists = response.status == 200
-          except urllib.error.HTTPError as exc:
-              if exc.code != 404:
-                  raise
-
-          print(f"exists={str(exists).lower()}")
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-              output.write(f"exists={str(exists).lower()}\n")
-          PY
-
-      - name: Publish to PyPI
-        if: steps.pypi.outputs.exists != 'true'
-        uses: pypa/gh-action-pypi-publish@v1.14.0
-        with:
-          packages-dir: dist-linter/
-
-  publish-pypi:
-    needs:
-      - release
-      - publish-linter-pypi
-    runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/skillager
-    permissions:
-      id-token: write
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v8.0.1
-        with:
-          name: dist
-          path: dist/
-
-      - name: Select core artifacts
-        env:
+          DIST_PREFIX: ${{ needs.release.outputs.dist_prefix }}
           VERSION: ${{ needs.release.outputs.version }}
         run: |
-          mkdir dist-core
-          cp "dist/skillager-${VERSION}"* dist-core/
+          mkdir dist-package
+          cp "dist/${DIST_PREFIX}-${VERSION}"* dist-package/
           # V1 release artifacts are exactly one wheel plus one sdist.
-          test "$(find dist-core -type f | wc -l)" -eq 2
+          test "$(find dist-package -type f | wc -l)" -eq 2
 
       - name: Check whether version is already on PyPI
         id: pypi
         env:
-          PACKAGE: skillager
+          PACKAGE: ${{ needs.release.outputs.package }}
           VERSION: ${{ needs.release.outputs.version }}
         run: |
           python3 - <<'PY'
@@ -588,13 +596,12 @@ jobs:
         if: steps.pypi.outputs.exists != 'true'
         uses: pypa/gh-action-pypi-publish@v1.14.0
         with:
-          packages-dir: dist-core/
+          packages-dir: dist-package/
 
   publish-github-release:
     needs:
       - release
       - release-assets
-      - publish-linter-pypi
       - publish-pypi
     runs-on: ubuntu-latest
     permissions:
@@ -603,7 +610,8 @@ jobs:
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.release.outputs.version }}
+          PACKAGE: ${{ needs.release.outputs.package }}
+          TAG: ${{ needs.release.outputs.tag }}
         run: |
           gh_api_retry() {
             attempt=1
@@ -645,13 +653,18 @@ jobs:
             done
           }
 
-          release_id=$(release_id_for_tag "v$VERSION")
+          release_id=$(release_id_for_tag "$TAG")
           if [ -z "$release_id" ]; then
-            echo "::error::GitHub Release v$VERSION does not exist"
+            echo "::error::GitHub Release $TAG does not exist"
             exit 1
+          fi
+
+          make_latest=false
+          if [ "$PACKAGE" = "skillager" ]; then
+            make_latest=true
           fi
 
           gh_api_retry --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
             -F draft=false \
-            -f make_latest=true \
+            -f make_latest="$make_latest" \
             --silent

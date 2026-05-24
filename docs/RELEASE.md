@@ -1,13 +1,17 @@
 # Release Runbook
 
-Skillager is released as two distributions from this repository:
+Skillager is released as two independently versioned distributions from this
+repository:
 
 - `skillager-linter`: standalone manifest linter and shared validator package
 - `skillager`: core CLI, approval, discovery, search, and materialization runtime
 
-Publish `skillager-linter` first. The core `skillager` wheel depends on the
-tested linter minor series, so the linter artifact must be available before the
-core artifact is installed from PyPI.
+The core `skillager` wheel depends on the supported linter minor series
+(`skillager-linter>=0.1,<0.2`). A new install of an existing Skillager release
+can resolve a newer linter patch without a Skillager version bump. Publish a
+new Skillager patch only when core code needs to change, or when existing
+Skillager users need the normal Skillager upgrade path to pull in dependency
+changes.
 
 ## Local Rollback Check
 
@@ -53,23 +57,31 @@ uvx --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org
 
 ## PyPI Release
 
-Use the GitHub release workflow after the local and TestPyPI checks pass. The
-workflow:
+Use the GitHub release workflow after the local and TestPyPI checks pass.
+Select the package being released:
 
-- builds both distributions
-- runs the local wheelhouse smoke check
-- uploads both artifacts to the draft GitHub Release
+- `package=skillager`, tag format `vX.Y.Z`
+- `package=skillager-linter`, tag format `skillager-linter-vX.Y.Z`
+
+For a pre-committed version bump, use `bump=current`. For a workflow-managed
+version bump, use `patch`, `minor`, or `major`.
+
+The workflow:
+
+- builds the selected distribution
+- runs package checks before publishing
+- runs the local wheelhouse smoke check for Skillager releases
+- uploads selected package artifacts to the draft GitHub Release
 - skips publishing a package version that already exists on PyPI
-- publishes `skillager-linter` before `skillager`
 - publishes the GitHub Release only after PyPI jobs complete
 
-Release notes must name both package versions.
+Release notes must name the package version being released.
 
 ## Recovering From a Half-Published Release
 
-If `skillager-linter` publishes successfully but `skillager` fails to publish,
-yank the just-published `skillager-linter` version on PyPI. Do not delete it.
+If a package publishes successfully but its GitHub Release publishing fails,
+fix the workflow or release metadata and rerun with `bump=current`.
 
-Fix the issue, publish a patch version of `skillager-linter` if the linter
-artifact itself needs to change, then rerun the local wheelhouse check and
-TestPyPI pairing smoke before continuing the core `skillager` release.
+If the artifact itself needs to change after PyPI publish, release a new patch.
+Do not delete published artifacts; yank only when a published version should no
+longer be selected by installers.
