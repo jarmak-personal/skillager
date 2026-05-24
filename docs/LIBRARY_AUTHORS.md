@@ -1,6 +1,6 @@
 # Library Author Guide
 
-Libraries can ship skills alongside package code. Skillager discovers package-provided `.skills` and `skills` directories without importing arbitrary packages.
+Libraries can ship skills alongside package code. Skillager discovers package-provided `.skills` and `skills` directories in project Python environments, including virtualenv and conda environments, without importing arbitrary packages.
 
 ## Recommended Layout
 

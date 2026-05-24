@@ -77,6 +77,14 @@ def current_venv() -> Path | None:
     return None
 
 
+def current_conda_env() -> Path | None:
+    env = os.environ.get("CONDA_PREFIX")
+    default_env = os.environ.get("CONDA_DEFAULT_ENV")
+    if not env or not default_env or default_env == "base":
+        return None
+    return Path(env).expanduser().resolve()
+
+
 def project_venv(project_root: Path | None = None) -> Path | None:
     project = project_root or find_project_root()
     if not project:
@@ -95,23 +103,66 @@ def venv_site_packages(venv: Path) -> list[Path]:
     return [path.resolve() for path in candidates if path.exists()]
 
 
+def project_conda_envs(project_root: Path | None = None) -> list[Path]:
+    project = project_root or find_project_root()
+    if not project:
+        return []
+    root = (project / ".conda").resolve()
+    if not root.exists():
+        return []
+
+    envs: list[Path] = []
+    if _looks_like_conda_env(root):
+        envs.append(root)
+
+    envs_dir = root / "envs"
+    try:
+        project_is_home = project.resolve() == Path.home().resolve()
+    except (OSError, RuntimeError):
+        project_is_home = False
+    # Avoid treating a home-directory ~/.conda/envs tree as project-local inventory.
+    if envs_dir.is_dir() and not project_is_home:
+        try:
+            candidates = sorted(envs_dir.iterdir(), key=lambda path: path.name)
+        except OSError:
+            candidates = []
+        for candidate in candidates:
+            try:
+                if candidate.is_dir() and _looks_like_conda_env(candidate):
+                    envs.append(candidate.resolve())
+            except OSError:
+                continue
+    return envs
+
+
 def environment_roots(project_root: Path | None = None) -> list[Path]:
     roots: list[Path] = []
     project = project_root or find_project_root()
-    active = current_venv()
     project_env = project_venv(project)
     if project_env:
         roots.append(project_env)
-    if active and active not in roots and _is_relevant_venv(active, project):
-        roots.append(active)
+    for conda_env in project_conda_envs(project):
+        if conda_env not in roots:
+            roots.append(conda_env)
+    for active in (current_venv(), current_conda_env()):
+        if active and active not in roots and _is_relevant_env(active, project):
+            roots.append(active)
     return roots
 
 
-def _is_relevant_venv(venv: Path, project_root: Path | None) -> bool:
+def _looks_like_conda_env(path: Path) -> bool:
+    return (
+        (path / "conda-meta").is_dir()
+        or bool(venv_site_packages(path))
+        or (path / ".skillager" / "skills").is_dir()
+    )
+
+
+def _is_relevant_env(env: Path, project_root: Path | None) -> bool:
     if not project_root:
         return False
     try:
-        venv.relative_to(project_root.resolve())
+        env.relative_to(project_root.resolve())
     except ValueError:
         return False
     return True

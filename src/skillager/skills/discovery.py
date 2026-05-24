@@ -13,6 +13,7 @@ from .schema import QuarantinedSkill, SchemaError, Skill, load_skill_from_dir, q
 
 IGNORED_CHILD_REPO_DIR_NAMES = {
     ".cache",
+    ".conda",
     ".git",
     ".gradle",
     ".hg",

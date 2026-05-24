@@ -18,7 +18,7 @@ skillager setup --agent codex
 
 Use `--agent claude` instead for Claude projects. `setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything. Audience scope uses only declared manifest metadata; skills without it are grouped as "everything else." When setup applies review changes with `--agent` or `--all-agents`, it also refreshes the first-party working artifacts unless `--no-bootstrap` is passed.
 
-Install Skillager as a global user tool with `uv tool install skillager` or `pipx install skillager`. It scans the current project's `.venv` and installed packages for skills, but ordinary projects do not need Skillager installed inside their own virtual environment.
+Install Skillager as a global user tool with `uv tool install skillager` or `pipx install skillager`. It scans the current project's `.venv`, `venv`, `.conda`, and project-local active conda environments for installed package skills, but ordinary projects do not need Skillager installed inside their own Python environment.
 
 At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working` after context resets and can use available metadata to add useful skills to project-local tags and expose narrow native skills, stubs, a compact router skill for a tag, or nothing. Run `skillager handoff` when you want explicit post-setup curation guidance.
 

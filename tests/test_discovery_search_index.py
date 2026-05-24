@@ -451,6 +451,45 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             self.assertEqual(data["skills"][0]["id"], "environment/env-demo")
             self.assertEqual(data["skills"][0]["source"]["type"], "environment")
 
+    def test_global_cli_discovers_project_conda_environment_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            (root / ".conda" / "conda-meta").mkdir(parents=True)
+            skill_dir = root / ".conda" / ".skillager" / "skills" / "env-demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Env Demo\n\nUse conda environment-local guidance.\n", encoding="utf-8")
+            with (
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=False)
+            self.assertEqual(len(data["skills"]), 1)
+            self.assertEqual(data["skills"][0]["id"], "environment/env-demo")
+            self.assertEqual(data["skills"][0]["source"]["type"], "environment")
+
+    def test_project_conda_skills_dir_is_not_child_collection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            (root / ".conda" / "conda-meta").mkdir(parents=True)
+            env_skill = root / ".conda" / ".skillager" / "skills" / "env-demo"
+            collection_bait = root / ".conda" / "skills" / "collection-bait"
+            env_skill.mkdir(parents=True)
+            collection_bait.mkdir(parents=True)
+            (env_skill / "SKILL.md").write_text("# Env Demo\n\nUse conda environment-local guidance.\n", encoding="utf-8")
+            (collection_bait / "SKILL.md").write_text("# Collection Bait\n\nUse misattributed collection guidance.\n", encoding="utf-8")
+            with (
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=False)
+            self.assertEqual([skill["id"] for skill in data["skills"]], ["environment/env-demo"])
+
     def test_duplicate_skill_ids_are_preserved_with_source_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -479,6 +518,102 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             package_skill = next(skill for skill in data["skills"] if skill["id"] == "demo-pkg/help")
             self.assertEqual(package_skill["source"]["type"], "python-package")
             self.assertEqual(package_skill["source"]["package"], "demo-pkg")
+
+    def test_global_cli_discovers_project_conda_package_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            (root / ".conda" / "conda-meta").mkdir(parents=True)
+            skill_dir = root / ".conda" / "lib" / "python3.13" / "site-packages" / "demo_pkg" / ".skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo Package Help\n\nUse conda package-distributed guidance.\n", encoding="utf-8")
+            with (
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            skill_ids = {skill["id"] for skill in data["skills"]}
+            self.assertIn("demo-pkg/help", skill_ids)
+            package_skill = next(skill for skill in data["skills"] if skill["id"] == "demo-pkg/help")
+            self.assertEqual(package_skill["source"]["type"], "python-package")
+            self.assertEqual(package_skill["source"]["package"], "demo-pkg")
+
+    def test_global_cli_discovers_project_conda_named_env_package_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            home = root / "home"
+            state = root / ".skillager"
+            conda_env = root / ".conda" / "envs" / "gis"
+            (conda_env / "conda-meta").mkdir(parents=True)
+            skill_dir = conda_env / "lib" / "python3.13" / "site-packages" / "demo_pkg" / ".skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo Package Help\n\nUse conda named-env package guidance.\n", encoding="utf-8")
+            with (
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=home),
+            ):
+                data = build_index(state, include_packages=True)
+            skill_ids = {skill["id"] for skill in data["skills"]}
+            self.assertIn("demo-pkg/help", skill_ids)
+            package_skill = next(skill for skill in data["skills"] if skill["id"] == "demo-pkg/help")
+            self.assertEqual(package_skill["source"]["type"], "python-package")
+            self.assertEqual(package_skill["source"]["package"], "demo-pkg")
+
+    def test_active_project_conda_prefix_package_skills_are_discovered(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            conda_env = root / "envs" / "gis"
+            skill_dir = conda_env / "lib" / "python3.13" / "site-packages" / "demo_pkg" / ".skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo Package Help\n\nUse active conda package guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"CONDA_PREFIX": str(conda_env), "CONDA_DEFAULT_ENV": "gis"}, clear=True),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            skill_ids = {skill["id"] for skill in data["skills"]}
+            self.assertIn("demo-pkg/help", skill_ids)
+
+    def test_active_base_conda_prefix_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            conda_env = root / "miniconda3"
+            skill_dir = conda_env / "lib" / "python3.13" / "site-packages" / "stale_pkg" / ".skills" / "stale"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Stale\n\nUse stale base guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"CONDA_PREFIX": str(conda_env), "CONDA_DEFAULT_ENV": "base"}, clear=True),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            self.assertEqual(data["skills"], [])
+
+    def test_active_conda_prefix_without_default_env_is_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            conda_env = root / "miniconda3"
+            skill_dir = conda_env / "lib" / "python3.13" / "site-packages" / "stale_pkg" / ".skills" / "stale"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Stale\n\nUse stale unnamed conda guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"CONDA_PREFIX": str(conda_env)}, clear=True),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            self.assertEqual(data["skills"], [])
 
     def test_package_discovery_does_not_scan_skillager_runtime_environment(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

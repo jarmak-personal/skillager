@@ -363,6 +363,31 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 ["personal/legacy-root", "personal/project-a/review-pr", "personal/project-b/deploy-preview"],
             )
 
+    def test_collection_add_ignores_nested_conda_envs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            skill_dir = collection / "gis-domain"
+            top_level_conda_bait = collection / ".conda" / "skills" / "conda-bait"
+            named_env_conda_bait = collection / ".conda" / "envs" / "gis" / "skills" / "named-env-bait"
+            skill_dir.mkdir(parents=True)
+            top_level_conda_bait.mkdir(parents=True)
+            named_env_conda_bait.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (top_level_conda_bait / "SKILL.md").write_text("# Conda Bait\n\nUse top-level conda bait.\n", encoding="utf-8")
+            (named_env_conda_bait / "SKILL.md").write_text("# Named Env Bait\n\nUse named conda env bait.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                index = json.loads((state / "collections" / "community.json").read_text(encoding="utf-8"))
+            self.assertEqual([skill["id"] for skill in index["skills"]], ["community/gis-domain"])
+
     def test_collection_refresh_migrates_flattened_trust_and_tag_by_old_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

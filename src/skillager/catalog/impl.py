@@ -20,6 +20,7 @@ from ..trust import approval_key_for, content_hash, load_trust, save_trust, trus
 COLLECTION_MIGRATIONS_SCHEMA = "skillager.collection-migrations.v1"
 IGNORED_SKILL_DIR_NAMES = {
     ".cache",
+    ".conda",
     ".git",
     ".gradle",
     ".next",

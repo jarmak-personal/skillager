@@ -22,7 +22,7 @@ uv tool install skillager
    - Work through any required approvals etc. (don't blindly trust skills from sources you don't know.)
 4. Open your agent of choice and tell them to run `skillager handoff --agent [your agent]`
 
-`setup` automatically discovers project skills, package-provided skills, virtualenv skills, collections, and native agent skills. It scans them and only marks content available to your agent after user approval. Skillager is meant to be installed once as a user tool; it does not need to live inside every project virtualenv.
+`setup` automatically discovers project skills, package-provided skills, Python environment skills from project virtualenv or conda environments, collections, and native agent skills. It scans them and only marks content available to your agent after user approval. Skillager is meant to be installed once as a user tool; it does not need to live inside every project environment.
 
 Skillager writes a small project note in `AGENTS/CLAUDE.MD` so the agent knows to run `skillager working`, use metadata commands, and ask you to run setup or bootstrap when user-authority review is needed.
 
@@ -101,7 +101,7 @@ your_package/
       scripts/
 ```
 
-Skillager discovers package skills after install without importing the package. Users still review and approve them before an agent can activate them.
+Skillager discovers package skills after install from project Python environments, including virtualenv and conda environments, without importing the package. Users still review and approve them before an agent can activate them.
 
 `skillager.yaml` is optional and structured-only to support safe skills. Put searchable prose in `SKILL.md`; manifests can declare audience, activation, compatibility constraints, and typed package targets. For CI, run `uvx --from skillager-linter skillager-lint .`.
 
