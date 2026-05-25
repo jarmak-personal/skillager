@@ -79,11 +79,15 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assertTrue(search_data[0]["available"])
             self.assertNotIn("trust", search_data[0])
 
-            materialize = cli.run("materialize", "project/gis-domain", "--mode", "stub", "--agent", "codex", "--json")
-            self.assert_code(materialize, 0)
-            self.assert_body_not_exposed(materialize)
-            materialized = {item["skill_id"]: item for item in materialize.json()}
-            self.assertEqual(materialized["project/gis-domain"]["status"], "materialized")
+            expose = cli.run("expose", "project/gis-domain", "--mode", "stub", "--agent", "codex", "--json")
+            self.assert_code(expose, 0)
+            self.assert_body_not_exposed(expose)
+            exposed = {item["skill_id"]: item for item in expose.json()}
+            self.assertEqual(exposed["project/gis-domain"]["status"], "exposed")
+            self.assertEqual(exposed["project/gis-domain"]["exposure_id"], "project-gis-domain")
+            self.assertEqual(exposed["project/gis-domain"]["mode"], "stub")
+            self.assertTrue(exposed["project/gis-domain"]["restart_required"])
+            self.assertNotIn("materialized", expose.stdout)
 
             stub = project / ".agents" / "skills" / "project-gis-domain" / "SKILL.md"
             working = project / ".agents" / "skills" / "skillager-working" / "SKILL.md"

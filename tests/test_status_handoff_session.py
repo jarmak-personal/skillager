@@ -403,7 +403,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertIn("router, stub, native skill, or no new exposure", data["next"]["message"])
             self.assertIn("skillager list --summary-json --agent codex", data["next"]["next_commands"])
             self.assertIn('skillager search "<user-goal>" --agent codex --json', data["next"]["next_commands"])
-            self.assertIn("skillager materialize --tag <task-tag> --mode router --agent codex --scope project", data["next"]["next_commands"])
+            self.assertIn("skillager expose --tag <task-tag> --mode router --agent codex --scope project", data["next"]["next_commands"])
 
             text = StringIO()
             with (
@@ -605,7 +605,7 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
                     self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 0)
                     self.assertEqual(main(["bootstrap", "--agent", "codex"]), 0)
-                    self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "router", "--agent", "codex", "--scope", "project"]), 0)
+                    self.assertEqual(main(["expose", "--tag", "gis", "--mode", "router", "--agent", "codex", "--scope", "project"]), 0)
 
                 output = StringIO()
                 with redirect_stdout(output):
@@ -620,9 +620,9 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
             self.assertEqual(data["state"]["attached_tags"], ["gis"])
             self.assertEqual(data["state"]["materialized_router_tags"], ["gis"])
             self.assertEqual(data["state"]["unmaterialized_attached_tags"], [])
-            self.assertIn("Existing materialized router tag(s)", data["next"]["message"])
+            self.assertIn("Existing exposed router tag(s)", data["next"]["message"])
             self.assertIn('skillager search "<user-goal>" --tag gis --agent codex --json', data["next"]["next_commands"])
-            self.assertIn("Materialized router tags: gis", text_output.getvalue())
+            self.assertIn("Exposed router tags: gis", text_output.getvalue())
 
     def test_handoff_exposure_breakdown_reports_routed_and_stubbed_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -646,8 +646,8 @@ class SkillagerStatusHandoffSessionTests(unittest.TestCase):
                     self.assertEqual(main(["tag", "create", "mapping"]), 0)
                     self.assertEqual(main(["tag", "add", "mapping", "project/gis-domain"]), 0)
                     self.assertEqual(main(["project", "attach-tag", "mapping"]), 0)
-                    self.assertEqual(main(["materialize", "--tag", "mapping", "--mode", "router", "--agent", "codex", "--scope", "project"]), 0)
-                    self.assertEqual(main(["materialize", "project/api-example", "--mode", "stub", "--agent", "codex", "--scope", "project"]), 0)
+                    self.assertEqual(main(["expose", "--tag", "mapping", "--mode", "router", "--agent", "codex", "--scope", "project"]), 0)
+                    self.assertEqual(main(["expose", "project/api-example", "--mode", "stub", "--agent", "codex", "--scope", "project"]), 0)
 
                 output = StringIO()
                 with redirect_stdout(output):

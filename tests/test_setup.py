@@ -362,7 +362,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 self.assertEqual(json.loads(shown.getvalue())["skill"]["id"], "path/gis-domain")
 
                 with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["materialize", "path/gis-domain", "--mode", "stub", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["expose", "path/gis-domain", "--mode", "stub", "--agent", "codex"]), 0)
                 self.assertTrue((project / ".agents" / "skills" / "path-gis-domain" / "SKILL.md").exists())
 
                 status = StringIO()
@@ -524,7 +524,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("sessions cleared=1", text)
             self.assertIn("saved setup scope cleared=1", text)
             self.assertIn("Retained global state: 1 approval(s), 0 catalog tag(s), 0 tag member(s), 1 collection(s)", text)
-            self.assertIn("materialized skill target(s)", text)
+            self.assertIn("exposed skill target(s)", text)
             self.assertFalse((state / "tags.json").exists())
             self.assertFalse((state / "sessions").exists())
             self.assertFalse((state / "status_scope.json").exists())
@@ -769,7 +769,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertFalse((root / ".agents" / "skills" / "project-low" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-high" / "SKILL.md").exists())
 
-    def test_interactive_setup_offers_materialize_after_manual_yes_no_review(self) -> None:
+    def test_interactive_setup_offers_exposure_after_manual_yes_no_review(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -798,8 +798,8 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("What you have", text)
             self.assertIn("Stub candidates", text)
             self.assertIn("please stub 1, 5, 8", text)
-            self.assertNotIn("project/gis-domain: materialized", text)
-            self.assertNotIn("project/api-example: materialized", text)
+            self.assertNotIn("project/gis-domain: exposed", text)
+            self.assertNotIn("project/api-example: exposed", text)
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-api-example" / "SKILL.md").exists())
@@ -830,7 +830,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("project/shell-helper: blocked", text)
             self.assertEqual(load_index(state)["skills"][0]["trust"], "blocked")
 
-    def test_interactive_setup_can_materialize_narrow_native_set(self) -> None:
+    def test_interactive_setup_can_expose_narrow_native_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -853,13 +853,13 @@ class SkillagerSetupTests(unittest.TestCase):
                 self.assertEqual(main(["setup", "--audience", "other", "--no-packages"]), 0)
             text = stdout.getvalue()
             self.assertIn("Native skill selection", text)
-            self.assertIn("project/gis-domain: materialized", text)
-            self.assertNotIn("project/api-example: materialized", text)
+            self.assertIn("project/gis-domain: exposed", text)
+            self.assertNotIn("project/api-example: exposed", text)
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-api-example" / "SKILL.md").exists())
 
-    def test_interactive_setup_no_bootstrap_still_allows_native_materialization(self) -> None:
+    def test_interactive_setup_no_bootstrap_still_allows_native_exposure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -880,7 +880,7 @@ class SkillagerSetupTests(unittest.TestCase):
             text = stdout.getvalue()
             self.assertIn("Working artifacts not ready: run skillager bootstrap --agent codex", text)
             self.assertIn("Native skill selection", text)
-            self.assertIn("project/gis-domain: materialized", text)
+            self.assertIn("project/gis-domain: exposed", text)
             self.assertIn("Skillager-managed native skills from the native skill directory", text)
             self.assertNotIn("Project working note:", text)
             self.assertTrue((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
@@ -1075,7 +1075,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 self.assertEqual(main(["setup", "--audience", "other", "--no-packages"]), 0)
             text = stdout.getvalue()
             self.assertIn("cross-agent source", text)
-            self.assertIn("project/gis-domain: materialized", text)
+            self.assertIn("project/gis-domain: exposed", text)
             self.assertTrue((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
 
     def test_interactive_setup_suggests_router_for_attached_tag(self) -> None:
@@ -1106,7 +1106,7 @@ class SkillagerSetupTests(unittest.TestCase):
             text = stdout.getvalue()
             self.assertIn("No narrow native project skill candidates found", text)
             self.assertIn("Router suggestions", text)
-            self.assertIn("skillager materialize --tag mapping --mode router --agent claude --scope project", text)
+            self.assertIn("skillager expose --tag mapping --mode router --agent claude --scope project", text)
 
     def test_interactive_setup_splits_low_risk_approval_by_audience(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

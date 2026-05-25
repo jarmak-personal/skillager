@@ -4,7 +4,7 @@ Skillager is released as two independently versioned distributions from this
 repository:
 
 - `skillager-linter`: standalone manifest linter and shared validator package
-- `skillager`: core CLI, approval, discovery, search, and materialization runtime
+- `skillager`: core CLI, approval, discovery, search, and exposure runtime
 
 The core `skillager` wheel depends on the supported linter minor series
 (`skillager-linter>=0.1,<0.2`). A new install of an existing Skillager release

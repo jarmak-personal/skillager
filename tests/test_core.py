@@ -66,7 +66,7 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertIn("skillager handoff", help_text)
         self.assertIn("Continue silently unless the task may benefit from a skill", help_text)
         self.assertIn("Tag available skills and expose a narrow router, stub, native skill, or no new exposure", help_text)
-        self.assertIn("Do not activate or materialize unavailable skills", help_text)
+        self.assertIn("Do not activate or expose unavailable skills", help_text)
         self.assertIn("owner review", help_text)
         self.assertIn("--catalog-state-dir", help_text)
         self.assertNotIn("lookback", help_text)
@@ -127,7 +127,7 @@ class SkillagerCoreTests(unittest.TestCase):
     def test_working_skill_has_exposure_signal_hierarchy(self) -> None:
         text = render_working_skill("codex")
         self.assertIn("Every available skill can be activated through Skillager", text)
-        self.assertIn("Not every available skill should be materialized", text)
+        self.assertIn("Not every available skill should be exposed", text)
         self.assertIn("Use search for the long tail", text)
         self.assertIn("Use routers for broad recurring tags", text)
         self.assertIn("Tags are agent-maintained curation for available skills", text)

@@ -856,7 +856,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertEqual(project_tags["catalog_state_dir"], str(catalog_state.resolve()))
 
                 with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["expose", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
                 activated = StringIO()
                 with redirect_stdout(activated):
                     self.assertEqual(main(["activate", "community/gis-domain", "--from-router", "skillager-gis"]), 0)
@@ -864,7 +864,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertIn(f"Source root: `{collection.resolve()}`", activated.getvalue())
                 self.assertIn("Resolve relative paths and run repository-local commands from the source root", activated.getvalue())
 
-    def test_tag_router_materialization_and_guarded_activation(self) -> None:
+    def test_tag_router_exposure_and_guarded_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -894,7 +894,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
 
                 router_output = StringIO()
                 with redirect_stdout(router_output):
-                    self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["expose", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
                 self.assertIn("Continue curation:", router_output.getvalue())
                 self.assertIn("skillager handoff --agent codex", router_output.getvalue())
                 saved_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
@@ -940,7 +940,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
 
                 self.assertEqual(main(["activate", "community/other", "--from-router", "skillager-gis"]), 2)
 
-    def test_router_materialization_does_not_rewarn_for_approved_routed_skills(self) -> None:
+    def test_router_exposure_does_not_rewarn_for_approved_routed_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -965,7 +965,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["project", "attach-tag", "gpu"]), 0)
                 router_output = StringIO()
                 with redirect_stdout(router_output):
-                    self.assertEqual(main(["materialize", "--tag", "gpu", "--mode", "router", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["expose", "--tag", "gpu", "--mode", "router", "--agent", "codex"]), 0)
                 tag_output = StringIO()
                 with redirect_stdout(tag_output):
                     self.assertEqual(main(["tag", "show", "gpu", "--json"]), 0)
@@ -1007,7 +1007,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["tag", "add", "gis", "vibespatial/gis-domain"]), 0)
                     self.assertEqual(main(["project", "attach-tag", "gis"]), 0)
-                    self.assertEqual(main(["materialize", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["expose", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
 
                 router = root / ".agents" / "skills" / "skillager-gis" / "SKILL.md"
                 router_text = router.read_text(encoding="utf-8")
@@ -1044,7 +1044,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
                     self.assertEqual(main(["collection", "enable", "community", "--tag", "all"]), 0)
-                    self.assertEqual(main(["materialize", "--tag", "all", "--mode", "router", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["expose", "--tag", "all", "--mode", "router", "--agent", "codex"]), 0)
             router = root / ".agents" / "skills" / "skillager-all" / "SKILL.md"
             router_text = router.read_text(encoding="utf-8")
             self.assertIn("This tag contains 21 available skills.", router_text)

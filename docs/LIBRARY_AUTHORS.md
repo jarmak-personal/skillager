@@ -45,7 +45,7 @@ your-crate/
 
 `SKILL.md` contains the agent-facing instructions. Supporting files may live beside it.
 
-Optional release evidence files such as `skill.oms.sig` and `skill-card.md` may live at the skill root for published/shared skills. They are not Skillager metadata, and they are not exposed to agents during normal activation or materialization.
+Optional release evidence files such as `skill.oms.sig` and `skill-card.md` may live at the skill root for published/shared skills. They are not Skillager metadata, and they are not exposed to agents during normal activation or exposure.
 
 ## Minimal Metadata
 
@@ -121,7 +121,7 @@ Use the standalone linter before publishing package skills:
 
 `uvx --from skillager-linter skillager-lint .`
 
-It uses the same strict manifest loader and validator as `skillager lint`, but stays dependency-light and does not read trust state, activate skills, materialize files, or emit skill bodies. V1 validates the existing skill root contract: strict `skillager.yaml`, canonical `SKILL.md`, body-derived compatibility warnings, and current description-quality warnings.
+It uses the same strict manifest loader and validator as `skillager lint`, but stays dependency-light and does not read trust state, activate skills, write exposure artifacts, or emit skill bodies. V1 validates the existing skill root contract: strict `skillager.yaml`, canonical `SKILL.md`, body-derived compatibility warnings, and current description-quality warnings.
 
 GitHub Actions example:
 
@@ -155,7 +155,7 @@ Skillager treats signatures and skill cards as release evidence, separate from a
 - A verified signature means the current skill root matches what a signer published. It does not mean the skill is safe or approved.
 - In full review metadata this evidence appears under `review_gates.signature`; it does not change `approval` or `review_gates.availability`.
 - `skill-card.md` is for curious reviewers and auditors. Skillager does not parse card prose, index it for search, or show it in normal agent-facing commands.
-- Signature and card files are excluded from Skillager's review content hash, static instruction scan, and native materialized copies.
+- Signature and card files are excluded from Skillager's review content hash, static instruction scan, and native exposed copies.
 - Missing cards are not reported in normal `skillager-lint` output. The linter only keeps a debug-level release-evidence note so this can be promoted later if cards become useful publisher hygiene.
 
 Skillager recognizes root-level card files named `skill-card.md`, `Skill Card.md`, `card.yaml`, `card.yml`, `SKILLCARD.yaml`, or `SKILLCARD.yml`. `SKILL.md` is never treated as a card because it is the reviewed instruction entrypoint.
@@ -198,7 +198,7 @@ compatibility:
     codex: parallel_subagents_unsupported
 ```
 
-Skillager may also infer compatibility warnings from inert text, such as Claude skill paths, Codex skill paths, agent-team language, file-writing workflows, shell command language, or agent-specific environment variables. Inferred warnings do not block approval, search, router materialization, or stub materialization.
+Skillager may also infer compatibility warnings from inert text, such as Claude skill paths, Codex skill paths, agent-team language, file-writing workflows, shell command language, or agent-specific environment variables. Inferred warnings do not block approval, search, router exposure, or stub exposure.
 
 ## Audience
 
@@ -224,7 +224,7 @@ From a fresh project with your package installed:
 ```bash
 skillager setup --fresh
 skillager review --package your-package --summary
-skillager materialize <your-package-skill-id> --agent codex --scope project
+skillager expose <your-package-skill-id> --agent codex --scope project
 ```
 
-Interactive setup installs Skillager's bootstrap skill and may optionally materialize a narrow native set. Use the explicit `materialize` command when testing that a package-provided skill copies correctly with its supporting files.
+Interactive setup installs Skillager's bootstrap skill and may optionally expose a narrow native set. Use the explicit `expose` command when testing that a package-provided skill copies correctly with its supporting files.

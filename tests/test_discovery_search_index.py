@@ -1134,7 +1134,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
-                    self.assertEqual(main(["materialize", "project/plain", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["expose", "project/plain", "--agent", "codex"]), 0)
                     self.assertEqual(main(["activate", "project/plain", "--agent", "codex", "--no-session-record"]), 0)
             self.assertTrue((root / ".agents" / "skills" / "project-plain" / "SKILL.md").exists())
 

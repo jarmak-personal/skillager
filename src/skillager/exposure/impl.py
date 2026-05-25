@@ -20,7 +20,7 @@ WORKING_SKILL_ID = "skillager/working"
 WORKING_REASON_LOCAL_CUSTOMIZATION = "target has local customizations"
 WORKING_REASON_UNMANAGED = "target exists without Skillager provenance"
 AGENT_NOTE = (
-    "Run `skillager working` after context resets or resumed sessions. It is a quiet readiness check; use only available/materialized "
+    "Run `skillager working` after context resets or resumed sessions. It is a quiet readiness check; use only available/exposed "
     "Skillager-managed skills, ask before setup or approval changes, ask the user to run `skillager doctor --agent <agent>` if state seems off, "
     "and report curation/exposure changes."
 )
@@ -32,7 +32,7 @@ LEGACY_AGENT_NOTES = (
     "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
     "ask the user to run `skillager setup` if review is needed.",
     "Skillager-managed skills are installed for this project; run `skillager --help` "
-    "for review/materialization commands, and only use available materialized skills.",
+    "for review/exposure commands, and only use available exposed skills.",
     "Skillager-managed skills are installed for this project; at session start run `skillager status`, "
     "and if it reports new/unreviewed skills ask the user to run `skillager setup` before using them.",
 )
@@ -180,7 +180,7 @@ description: "Use Skillager safely from an agent: quiet readiness checks, availa
 
 # Skillager Working
 
-Use when starting work in a project that has Skillager-managed skills, when `skillager status` reports available skills, or when the user asks you to set up, expose, route, activate, or review skills.
+Use when starting work in a project that has Skillager-managed skills, when `skillager working` reports available skills, or when the user asks you to set up, expose, route, activate, or review skills.
 
 This skill is a protocol for using Skillager safely. It does not approve third-party skills and it does not contain any third-party skill bodies.
 
@@ -189,7 +189,7 @@ Availability is the eligibility gate. If a skill appears in normal Skillager lis
 ## Session Start
 
 1. Run `skillager working --agent {agent}` after context resets or resumed sessions.
-2. If it prints nothing, continue with the user's request. Do not mention Skillager unless the task needs a skill, review, curation, materialization, activation, or repair.
+2. If it prints nothing, continue with the user's request. Do not mention Skillager unless the task needs a skill, review, curation, exposure, activation, or repair.
 3. External package, environment, collection, and global skills require owner review before body access or activation.
 4. Use `skillager handoff --agent {agent}` only after setup or when the user explicitly wants curation/onboarding guidance.
 5. If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent {agent}` in their terminal. Re-run `skillager working --agent {agent}` after repairs if readiness changes.
@@ -199,12 +199,12 @@ Availability is the eligibility gate. If a skill appears in normal Skillager lis
 Do not search Skillager on every user message. Search only when:
 
 - The user starts a new domain or task.
-- The current task would benefit from specialized skills not already materialized.
+- The current task would benefit from specialized skills not already exposed.
 - You are unsure how to approach the task and an available skill may contain the right workflow.
 - The user adds project-local skills.
 - The user asks about available skills.
 
-Once you choose a native skill or router path for a task, keep using that choice until the task changes. Keep Skillager checks quiet unless review, tag curation, materialization, activation, or user approval is needed.
+Once you choose a native skill or router path for a task, keep using that choice until the task changes. Keep Skillager checks quiet unless review, tag curation, exposure, activation, or user approval is needed.
 
 ## Safe Metadata Commands
 
@@ -229,7 +229,7 @@ Before curating tags or exposure for a new task, build your own slate from avail
 
 - Start with `skillager search "<user goal>" --agent {agent} --json`.
 - Run a few focused searches when the goal has multiple facets, for example domain terms, package/project names, and workflow terms.
-- Search JSON is ranked and includes `score` and `reasons`; use `--limit <n>` to widen or narrow the slate. Use `--full-json` only for diagnostics such as `score_detail`, source paths, and full materialization records.
+- Search JSON is ranked and includes `score` and `reasons`; use `--limit <n>` to widen or narrow the slate. Use `--full-json` only for diagnostics such as `score_detail`, source paths, and full exposure records.
 - Use `skillager list --summary-json --agent {agent}` when you need orientation before a targeted search.
 - Consider 5-20 plausible available skills or skill groups when enough relevant options exist.
 - A skill group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation.
@@ -240,18 +240,18 @@ Before curating tags or exposure for a new task, build your own slate from avail
 
 ## Exposure Policy
 
-- Every available skill can be activated through Skillager. Not every available skill should be materialized.
+- Every available skill can be activated through Skillager. Not every available skill should be exposed.
 - Tags are agent-maintained curation for available skills. Add relevant available skills to an existing tag or create a focused tag when it helps the current project.
 - Curate focused project-local tags with:
   `skillager tag add <tag> <skill-id> [<skill-id> ...]`
 - A tag exists for this project as soon as it is created or receives a skill; `project attach-tag` is only a legacy compatibility alias.
 - Use search for the long tail.
 - Use routers for broad recurring tags:
-  `skillager materialize --tag <tag> --mode router --agent {agent} --scope project`
+  `skillager expose --tag <tag> --mode router --agent {agent} --scope project`
 - Use stubs for specific skills the user is likely to ask for by name:
-  `skillager materialize <skill-id> --mode stub --agent {agent} --scope project`
+  `skillager expose <skill-id> --mode stub --agent {agent} --scope project`
 - Use native exposure for tiny always-relevant project skills:
-  `skillager materialize <skill-id> --agent {agent} --scope project`
+  `skillager expose <skill-id> --agent {agent} --scope project`
 - Prefer no new exposure for one-off tasks.
 - You may tag and expose available skills after the user states their task; report what changed and how to adjust it.
 - Never use override flags unless the user explicitly asks for that exact override.
@@ -662,7 +662,7 @@ def _working_skill(agent: str) -> dict[str, Any]:
     return {
         "id": WORKING_SKILL_ID,
         "name": "Skillager Working",
-        "summary": "Use Skillager safely from an agent: quiet readiness checks, available metadata only, agent-managed tags, narrow router/native materialization, and guarded activation.",
+        "summary": "Use Skillager safely from an agent: quiet readiness checks, available metadata only, agent-managed tags, narrow router/native exposure, and guarded activation.",
         "source": {"type": "skillager-working"},
         "content_hash": source_hash,
         "trust": "reviewed",

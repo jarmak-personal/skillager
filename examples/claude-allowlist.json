@@ -19,7 +19,7 @@
     "skillager block",
     "skillager activate",
     "skillager show --content",
-    "skillager materialize",
+    "skillager expose",
     "skillager tag add",
     "skillager project attach-tag"
   ],

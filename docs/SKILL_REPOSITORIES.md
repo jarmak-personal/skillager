@@ -70,7 +70,7 @@ skillager state migrate-tags --to projects
 
 This copies legacy global tag attachments into project-local tag files and leaves the old global tag data in place for rollback.
 
-After review, keep most large-repository skills searchable behind Skillager. Materialize only a small native set that is always relevant to the project, use stub mode for approved commands that should be visible by name, or use router mode for a curated tag when the agent needs broad access without loading every skill. Agents may update tags and scoped exposure after you tell them what you are working on; they should report the changes they made.
+After review, keep most large-repository skills searchable behind Skillager. Expose only a small native set that is always relevant to the project, use stub mode for approved commands that should be visible by name, or use router mode for a curated tag when the agent needs broad access without loading every skill. Agents may update tags and scoped exposure after you tell them what you are working on; they should report the changes they made.
 
 After review, available collection skills are part of effective project inventory whether or not they are in a project tag. Agents can use normal project commands instead of collection-specific commands:
 
@@ -87,7 +87,7 @@ skillager list --summary-json --agent codex
 For large tags, prefer router mode:
 
 ```bash
-skillager materialize --tag gis --mode router --agent codex --scope project
+skillager expose --tag gis --mode router --agent codex --scope project
 ```
 
 This writes one compact native router skill. The router includes available skill IDs and author summaries, then tells the agent to activate a specific skill through Skillager when needed.
@@ -95,7 +95,7 @@ This writes one compact native router skill. The router includes available skill
 For personal command collections where the names themselves are useful, expose selected commands as stubs:
 
 ```bash
-skillager materialize personal/deploy-preview --mode stub --agent codex --scope project
+skillager expose personal/deploy-preview --mode stub --agent codex --scope project
 ```
 
 A stub is a tiny native skill containing the author summary and activation command. It does not include the full skill body.

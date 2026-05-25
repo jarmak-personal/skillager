@@ -20,9 +20,9 @@ Use `--agent claude` instead for Claude projects. `setup` is the user approval f
 
 Install Skillager as a global user tool with `uv tool install skillager` or `pipx install skillager`. It scans the current project's `.venv`, `venv`, `.conda`, project-local active conda environments, top-level `node_modules`, and `Cargo.lock`-selected Cargo crates for installed package skills, but ordinary projects do not need Skillager installed inside their own Python, JavaScript, or Rust environment.
 
-At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also materialize a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working` after context resets and can use available metadata to add useful skills to project-local tags and expose narrow native skills, stubs, a compact router skill for a tag, or nothing. Run `skillager handoff` when you want explicit post-setup curation guidance.
+At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also expose a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working` after context resets and can use available metadata to add useful skills to project-local tags and expose narrow native skills, stubs, a compact router skill for a tag, or nothing. Run `skillager handoff` when you want explicit post-setup curation guidance.
 
-Setup does not materialize every approved skill by default. Approval makes a skill available for consideration; tagging and exposure are reversible project ergonomics based on what you are doing.
+Setup does not expose every approved skill by default. Approval makes a skill available for consideration; tagging and exposure are reversible project ergonomics based on what you are doing.
 
 Run `skillager doctor --agent codex` when the state seems off or the agent is stuck. `doctor` does not approve skills or expose third-party skills; it reports the exact setup, bootstrap, lint, or migration command to run. Use `skillager status` when you want a broader metadata report. Both commands avoid printing skill bodies.
 
@@ -32,8 +32,8 @@ Run `skillager doctor --agent codex` when the state seems off or the agent is st
 - `reviewed`: approved for the current content hash.
 - `trusted`: stronger user trust for recurring use.
 - `pinned`: approved for an exact content hash.
-- `blocked`: hidden from normal search, activation, and materialization.
-- `lint_blocked`: manifest or structure failed a blocking lint rule; hidden from normal list/search/show/materialize flows until fixed or explicitly overridden.
+- `blocked`: hidden from normal search, activation, and exposure.
+- `lint_blocked`: manifest or structure failed a blocking lint rule; hidden from normal list/search/show/expose flows until fixed or explicitly overridden.
 
 Agent-facing commands hide `discovered` and `lint_blocked` skills from normal use. Use setup, review, lint, or doctor yourself when you want to inspect why a skill is not available.
 
@@ -89,10 +89,8 @@ skillager manifest init <path>
 skillager state migrate
 skillager block <skill-id>
 skillager tag add gis vibespatial/gis-domain
-skillager materialize --tag gis --mode router --agent codex --scope project
-skillager materialize --all-reviewed --agent codex --scope project
-skillager materialize --all-reviewed --agent claude --scope project
-skillager materialize <skill-id> --mode stub --agent codex --scope project
+skillager expose --tag gis --mode router --agent codex --scope project
+skillager expose <skill-id> --mode stub --agent codex --scope project
 ```
 
 Use `--json` when another program needs stable output. `status --json`, `handoff --json`, `list --json`, `show --json`, `tag show --json`, and `search --json` are compact and available-only for agent use; pass `--full-json` for explicit user-directed diagnostics where available. Agents should use `search --agent <agent> --json`, `list --summary-json --agent <agent>`, and project tag metadata to build their own candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `doctor --json` and `setup --summary-json` for owner-run diagnostics and setup automation.
@@ -114,7 +112,7 @@ Legacy in-tree `<project>/.skillager/` state is ignored by ordinary commands. If
 
 Use `--trust-all` or `--yolo` only for fully trusted sources. They are aliases: both mark all selected skills reviewed, including medium, high-risk, and lint-blocked findings, and record the current content hashes. For lint-blocked skills they write an audited shortcut override reason.
 
-Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-project --agent codex` when you want to reset project-local Skillager state and refresh Codex working artifacts in one run: it clears project-local decisions, project tags, legacy session records, and saved setup scope for the selected scope. It reports, but does not delete, retained reusable global approvals, global catalog collections, and materialized skill files.
+Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-project --agent codex` when you want to reset project-local Skillager state and refresh Codex working artifacts in one run: it clears project-local decisions, project tags, legacy session records, and saved setup scope for the selected scope. It reports, but does not delete, retained reusable global approvals, global catalog collections, and exposed skill files.
 
 `skillager list` shows the effective project inventory and hides global native skills unless you pass `--include-global`. Use `skillager list --no-packages` when you want local project, registered collection, and project-tag inventory without installed package skills. Use `skillager list --summary-json --agent codex` when an agent needs compact orientation: it includes counts, every listed skill ID, and duplicate native-variant hints. Use `skillager list --json --full-json` only for verbose Skillager diagnostics.
 
@@ -126,7 +124,7 @@ Setup and bootstrap keep a best-effort registry of known project paths in the us
 
 `skillager status` is a pure-read metadata command. It reports cached Skillager update information when present, but it does not contact PyPI or write update-check cache files.
 
-Use `skillager bootstrap --agent <agent>` when review is already complete but working artifacts are missing or stale. Use `skillager materialize` directly when you already know a reviewed skill or tag should be exposed to the agent. `materialize` requires explicit skill IDs, `--tag`, or `--all-reviewed`; it does not install or repair Skillager Working or project working notes.
+Use `skillager bootstrap --agent <agent>` when review is already complete but working artifacts are missing or stale. Use `skillager expose` directly when you already know a reviewed skill or tag should be exposed to the agent. Normal exposure uses explicit skill IDs or `--tag`; owner/admin bulk exposure can use `--all-reviewed`. `expose` does not install or repair Skillager Working or project working notes.
 
 Use `--mode stub` for skills you want visible by name without loading the full skill body into every session. A stub contains only the skill summary and an activation command; the full body still comes through Skillager's approval gate. After setup, Skillager prints numbered available-but-hidden stub candidates so you can say “please stub 1, 5, 8.”
 

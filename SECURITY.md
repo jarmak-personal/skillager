@@ -10,9 +10,9 @@ Useful reports include:
 
 - a minimal reproduction
 - the affected Skillager version
-- whether the issue affects scanning, trust, activation, materialization, session logs, or package discovery
+- whether the issue affects scanning, trust, activation, exposure, session logs, or package discovery
 - whether unreviewed skill content can be exposed
-- whether blocked skills can be activated or materialized
+- whether blocked skills can be activated or exposed
 
 ## Supported Versions
 
@@ -27,7 +27,7 @@ Skillager's built-in scanner is deterministic and local. It does not use an agen
 Skillager should not:
 
 - activate unreviewed skills by default
-- materialize blocked or lint-blocked skills
+- expose blocked or lint-blocked skills
 - expose full skill bodies through metadata commands
 - expose unreviewed manifest free text through search/list/show before review
 - allow authors to choose scanner behavior, trust requirements, source identity, package version, or the body file path from `skillager.yaml`

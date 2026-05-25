@@ -9,7 +9,7 @@ Skillager is a review and activation gate. It reduces accidental context exposur
 - Never index free-text from `skillager.yaml`; searchable identity comes from reviewed `SKILL.md` text and derived provenance.
 - Require explicit user approval before trust changes.
 - Require an audited lint override before approving a lint-blocked skill.
-- Require reviewed/trusted/pinned state before activation or materialization.
+- Require reviewed/trusted/pinned state before activation or exposure.
 - Assume agent compatibility by default; block only explicit agent exclusions unless the user overrides them.
 - Copy skills into project-local native directories so users can inspect and customize them.
 - Preserve content hashes so changed skills require fresh review.
@@ -39,7 +39,7 @@ Scanner findings include severity, line number, matched text, explanation, and r
 
 `skillager.yaml` is structured-only metadata. Unknown keys, invalid enum values, unsafe YAML features, invalid package specifiers, hidden/control characters, missing canonical `SKILL.md`, and invalid derived IDs produce a blocking lint finding.
 
-`skillager lint` and the standalone `skillager-lint` console script share the same strict loader and manifest validator. The standalone linter is meant for package and skill-repository CI; it reports safe diagnostics without reading or writing trust state, activating skills, materializing files, or emitting skill bodies.
+`skillager lint` and the standalone `skillager-lint` console script share the same strict loader and manifest validator. The standalone linter is meant for package and skill-repository CI; it reports safe diagnostics without reading or writing trust state, activating skills, writing exposure artifacts, or emitting skill bodies.
 
 The standalone linter reads `SKILL.md` to validate the canonical entrypoint, infer compatibility warnings, and check description quality, but it never emits body text or body-derived names/summaries in findings or output.
 
@@ -65,13 +65,13 @@ The override is stored in `trust.json` with the reason, timestamp, content hash,
 - `review_gates.signature`: indexed release-evidence status, such as `missing` or `not_checked`. Explicit `verify-signature` runs report `verified` or `failed`, but do not approve the skill or write a cached review gate.
 - `review_gates.availability`: whether the skill is `available`, `blocked`, `blocked_until_review`, or `blocked_until_lint_override`.
 
-These fields are diagnostics, not independent approvals. A low scan result, passing lint, or valid signature can inform review, but only approval makes a skill available for activation or materialization.
+These fields are diagnostics, not independent approvals. A low scan result, passing lint, or valid signature can inform review, but only approval makes a skill available for activation or exposure.
 
 ## Signatures And Release Evidence
 
 Detached OMS signatures such as `skill.oms.sig` are provenance and integrity evidence, not safety decisions. A valid signature can show that the current skill root matches what a signer published, but it never replaces user approval and never lowers scanner risk.
 
-Skill cards are treated as optional release evidence for human reviewers. Skillager detects recognized root-level card filenames for diagnostic/full metadata, but does not parse card prose, index it for search, include it in agent activation output, or copy it into native materialized skills.
+Skill cards are treated as optional release evidence for human reviewers. Skillager detects recognized root-level card filenames for diagnostic/full metadata, but does not parse card prose, index it for search, include it in agent activation output, or copy it into native exposed skills.
 
 Signature and card files are excluded from the reviewed content hash and static instruction scan. The reviewed artifact remains the skill instructions and supporting files that an agent may actually use. Use `skillager verify-signature <skill-id-or-path> --certificate-chain <pem>` for explicit local verification.
 
@@ -83,7 +83,7 @@ Skillager uses negative-only compatibility:
 
 - no compatibility metadata means the skill is assumed usable
 - advisory assumptions and inferred warnings do not block use
-- `exclusive_to` and `incompatible_with` block activation and native/stub materialization for the excluded agent by default
+- `exclusive_to` and `incompatible_with` block activation and native/stub exposure for the excluded agent by default
 - `--allow-incompatible` is the explicit user-approved override
 
 Inferred warnings come from inert text only. Examples include agent-specific skill paths, agent-team language, file-writing assumptions, shell command language, and agent-specific environment variables.
@@ -107,8 +107,8 @@ Users own the final trust decision.
 ## Recommended Review Policy
 
 - Approve only the audience you need for the current work.
-- Prefer project-scope materialization over global materialization.
+- Prefer project-scope exposure over global exposure.
 - Block skills that request secrets, hidden prompts, or unapproved autonomy.
 - Fix lint-blocked manifests instead of overriding when possible.
 - Re-run `skillager setup --fresh` after major dependency or skill-repo changes.
-- Use router mode for broad skill collections where native materialization would add too much context.
+- Use router mode for broad skill collections where native exposure would add too much context.

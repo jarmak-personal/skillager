@@ -1,9 +1,9 @@
 # Skillager
 
-Skillager is a local CLI for discovering, reviewing, organizing, and materializing agent skills without loading every skill into every chat.
+Skillager is a local CLI for discovering, reviewing, organizing, and exposing agent skills without loading every skill into every chat.
 
 ```text
-Register/discover -> review -> approve -> search metadata -> materialize on demand
+Register/discover -> review -> approve -> search metadata -> expose on demand
 ```
 
 Projects, Python libraries, npm packages, Cargo crates, tools, and personal skill repos can ship useful agent guidance. Skillager keeps that guidance searchable and reviewed, but out of the agent context until it is needed.
@@ -38,14 +38,14 @@ Skillager keeps three decisions separate:
 
 - **Approval:** the user reviewed a skill at its current content hash.
 - **Curation:** a project groups available skills into local tags such as `gis`, `workflows`, or `release`.
-- **Materialization:** Skillager writes native, stub, or router skills for a specific agent and project.
+- **Exposure:** Skillager writes native, stub, or router skills for a specific agent and project.
 
 > [!TIP]
-> Approval is not materialization. Keep useful skills approved and searchable, then materialize only what the current project needs.
+> Approval is not exposure. Keep useful skills approved and searchable, then expose only what the current project needs.
 >
 > Routers are usually the best fit for larger tags because the agent sees one compact skill and activates specific reviewed skills on demand.
 
-Materialization modes:
+Exposure modes:
 
 - `native`: copy the full reviewed skill into the agent's project skill directory.
   - Regular working project skills
@@ -64,8 +64,8 @@ Metadata commands stay metadata-only. `status`, `list`, `search`, `show` without
 - Create a project tag: `skillager tag create spatial-python`
 - Add a skill to a tag: `skillager tag add spatial-python vibespatial/gis-domain`
 - Inspect a tag: `skillager tag show spatial-python`
-- Materialize a tag as one router skill: `skillager materialize --tag spatial-python --mode router --agent codex --scope project`
-- Materialize one skill as a stub: `skillager materialize vibespatial/gis-domain --mode stub --agent codex --scope project`
+- Expose a tag as one router skill: `skillager expose --tag spatial-python --mode router --agent codex --scope project`
+- Expose one skill as a stub: `skillager expose vibespatial/gis-domain --mode stub --agent codex --scope project`
 - Reuse tags across projects: `skillager tag sync --from ../project-a --to ../project-b`
 
 For agent permission prompts, Skillager ships example read-only allowlists in [`examples/codex-allowlist.json`](examples/codex-allowlist.json) and [`examples/claude-allowlist.json`](examples/claude-allowlist.json). They cover metadata commands; setup, review, doctor fixes, and other mutating commands should stay user-run unless you intentionally delegate them.
@@ -79,11 +79,11 @@ skillager collection add ~/skills/workflows --name workflows
 skillager setup --agent codex
 skillager search "release workflow" --agent codex --json  # Usually run by your agent
 ```
-After review, collection skills are searchable from any project on your machine. Use project-local tags only when you want a curated group or router/stub materializations:
+After review, collection skills are searchable from any project on your machine. Use project-local tags only when you want a curated group or router/stub exposure:
 
 ```bash
 skillager tag add workflows --from-collection workflows
-skillager materialize --tag workflows --mode router --agent codex --scope project
+skillager expose --tag workflows --mode router --agent codex --scope project
 ```
 
 ## Package Authors
@@ -135,7 +135,7 @@ It is a review aid, not a proof of safety. Human review decides availability, an
 
 Full review metadata separates the decision axes: `approval` records the owner decision, while `review_gates` reports scan, lint, signature, and availability status. The legacy `trust` field remains for compatibility.
 
-Signatures are treated as provenance/integrity evidence, not safety signals. A verified signed skill still requires normal review before activation or materialization.
+Signatures are treated as provenance/integrity evidence, not safety signals. A verified signed skill still requires normal review before activation or exposure.
 
 ## Docs
 

@@ -142,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
-            Skillager is a pure CLI registry and materialization tool for agent skills.
+            Skillager is a pure CLI registry and exposure tool for agent skills.
 
             Agent-safe default workflow:
               1. skillager working
@@ -152,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
               5. Use skillager handoff only for explicit post-setup curation/onboarding
 
             Important rules:
-              - Do not activate or materialize unavailable skills unless the user explicitly asks.
+              - Do not activate or expose unavailable skills unless the user explicitly asks.
               - Agents should run `skillager working` after context resets; it is silent on normal success.
               - Agents should ask the user to run `skillager setup` when external skills need owner review.
               - Prefer project scope inside repos so users can inspect and customize local copies.
@@ -162,7 +162,7 @@ def build_parser() -> argparse.ArgumentParser:
               working is a pure-read readiness check and does not emit skill bodies.
               handoff/status/search/list/show without --content are safe metadata commands.
               setup/review/trust/block change approval state and need user intent.
-              tag/project/materialize may curate or expose only available skills; report changes.
+              tag/project/expose may curate or expose only available skills; report changes.
               activate/show --content reveal skill bodies and require prior approval.
             """
         ),
@@ -220,7 +220,7 @@ def build_parser() -> argparse.ArgumentParser:
         "search",
         help="Search effective project skill metadata.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Search compact available project skill metadata. Search does not activate or materialize skills.",
+        description="Search compact available project skill metadata. Search does not activate or expose skills.",
         epilog=(
             "Examples:\n"
             "  skillager search dataframe\n"
@@ -266,7 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true", help="Allow activation despite review state. Use only with explicit user approval.")
     p.add_argument("--allow-incompatible", action="store_true", help="Allow activation even when skill metadata explicitly excludes this agent.")
     p.add_argument("--from-router", help="Router skill slug, e.g. skillager-gis. Refuses skills outside the attached router tag.")
-    p.add_argument("--from-stub", help="Stub skill slug, e.g. fastapi-fastapi. Refuses activation unless that stub is materialized in this project.")
+    p.add_argument("--from-stub", help="Stub skill slug, e.g. fastapi-fastapi. Refuses activation unless that stub is exposed in this project.")
     p.add_argument("--agent", help="Agent name for compatibility checks, e.g. codex or claude.")
     p.add_argument("--external-session-id", help=argparse.SUPPRESS)
     p.add_argument("--no-session-record", action="store_true", help=argparse.SUPPRESS)
@@ -331,14 +331,14 @@ def build_parser() -> argparse.ArgumentParser:
         "block",
         help="Block a skill.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Block one skill so it is hidden from default list/search/materialize flows.",
+        description="Block one skill so it is hidden from default list/search/expose flows.",
         epilog="Example:\n  skillager block suspicious/skill",
     )
     p.add_argument("skill_id")
     p.set_defaults(func=cmd_block)
 
     add_review_parser(sub)
-    add_materialize_parser(sub)
+    add_expose_parser(sub)
     add_manifest_parser(sub)
 
     return parser
@@ -407,11 +407,11 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     p.add_argument("paths", nargs="*", type=Path, help="Optional skill roots or directories to scan instead of default discovery roots.")
     p.add_argument("--no-packages", action="store_true", help="Skip installed package skill discovery.")
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills in setup review. Defaults to local/environment/package skills only.")
-    p.add_argument("--fresh", action="store_true", help="Clear prior project-local trust decisions for the selected setup scope before review. Does not revoke reusable global approvals or delete materialized skill files.")
+    p.add_argument("--fresh", action="store_true", help="Clear prior project-local trust decisions for the selected setup scope before review. Does not revoke reusable global approvals or delete exposed skill files.")
     p.add_argument(
         "--fresh-project",
         action="store_true",
-        help="Reset this project's Skillager state before setup. Clears project trust decisions, tags, legacy session files, and saved setup scope; keeps reusable global approvals, global catalog entries, and materialized skill files.",
+        help="Reset this project's Skillager state before setup. Clears project trust decisions, tags, legacy session files, and saved setup scope; keeps reusable global approvals, global catalog entries, and exposed skill files.",
     )
     add_review_filters(p)
     add_review_actions(p)
@@ -436,7 +436,7 @@ def add_status_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             Check Skillager availability for the current project/environment.
             Compact JSON is available-only for agents. Full JSON is intended for
             explicit owner diagnostics. This command does not activate skills,
-            emit skill bodies, approve anything, or materialize anything.
+            emit skill bodies, approve anything, or expose anything.
 
             Agents should prefer `skillager working` after context resets. Use status
             for explicit readiness diagnostics. If review is needed, ask the user to
@@ -511,7 +511,7 @@ def add_working_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
             """\
             Read Skillager's local inventory for a resumed agent session.
             External package, collection, environment, and global skills still
-            require review before body access, activation, or materialization.
+            require review before body access, activation, or exposure.
             """
         ),
         epilog=textwrap.dedent(
@@ -537,7 +537,7 @@ def add_handoff_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
             """\
             Report the current Skillager state for explicit post-setup curation or
             onboarding without approving skills, activating skills, or fixing
-            materialized files. Handoff lists relevant conditions and chooses one
+            exposed files. Handoff lists relevant conditions and chooses one
             highest-priority next action. It is read-only except for completing pending
             collection trust migrations from earlier collection refreshes.
             """
@@ -769,7 +769,7 @@ def add_review_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         description=textwrap.dedent(
             """\
             Review already-indexed skills. Use this after setup, after package changes,
-            or when deciding whether to trust/block/materialize a selected subset.
+            or when deciding whether to trust/block/expose a selected subset.
             """
         ),
         epilog=textwrap.dedent(
@@ -794,57 +794,60 @@ def add_review_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.set_defaults(func=cmd_review)
 
 
-def add_materialize_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
-        "materialize",
-        help="Copy available skills into agent-native skill directories.",
+        "expose",
+        help="Expose eligible skills as native, stub, or router artifacts.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
-            Copy available skill directories into Codex or Claude native
-            skill directories. This is how Skillager presents skills to agents.
+            Expose eligible skills to Codex or Claude as native, stub, or
+            router artifacts. Exposure writes files for a specific agent/scope;
+            availability remains the eligibility gate before exposure.
 
-            Native materialization copies the full skill directory and writes
-            provenance. Stub materialization writes a tiny native handle that
+            Native exposure copies the full skill directory and writes
+            provenance. Stub exposure writes a tiny native handle that
             tells the agent how to activate the full available body through
-            Skillager on demand. Materialization does not install or repair
-            Skillager Working or project working notes; use `skillager bootstrap`
-            or `skillager doctor --fix` for first-party working artifacts.
+            Skillager on demand. Router exposure writes one compact router for
+            a project-local tag. Exposure does not install or repair Skillager
+            Working or project working notes; use `skillager doctor --fix` for
+            first-party working artifacts.
             Customized local copies are not overwritten unless --force is used.
             """
         ),
         epilog=textwrap.dedent(
             """\
             Examples:
-              skillager materialize --all-reviewed --agent codex --scope project
-              skillager materialize --all-reviewed --agent claude --scope project
-              skillager materialize --all-reviewed --all-agents --scope project
-              skillager materialize fastapi/fastapi --agent codex
-              skillager materialize --tag gis --mode router --agent codex
-              skillager materialize fastapi/fastapi --mode stub --agent codex
-              skillager materialize --dry-run --json
+              skillager expose fastapi/fastapi --agent codex
+              skillager expose --tag gis --mode router --agent codex
+              skillager expose fastapi/fastapi --mode stub --agent codex
+              skillager expose --list --agent codex --scope project
+              skillager expose --remove fastapi-fastapi --agent codex --scope project
+              skillager expose fastapi/fastapi --dry-run --json
             """
         ),
     )
     p.add_argument("skill_ids", nargs="*")
-    p.add_argument("--tag", help="Materialize skills from a curated tag.")
+    p.add_argument("--tag", help="Expose skills from a curated tag.")
     p.add_argument(
         "--mode",
         choices=["native", "router", "stub"],
-        default="native",
+        default=None,
         help="native copies each skill; stub writes tiny activation handles; router creates one router skill for --tag.",
     )
     p.add_argument("--agent", action="append", choices=["codex", "claude"], help="Agent target. Repeat to target multiple agents. Defaults to codex.")
     p.add_argument("--all-agents", action="store_true", help="Target both codex and claude.")
-    p.add_argument("--scope", choices=["project", "global"], default="project", help="Materialize into project .agents or global agent skill directory.")
-    p.add_argument("--include-unreviewed", action="store_true", help="Allow discovered skills to be materialized.")
-    p.add_argument("--all-reviewed", action="store_true", help="Materialize every available skill selected by filters.")
-    p.add_argument("--allow-incompatible", action="store_true", help="Allow native/stub materialization even when skill metadata explicitly excludes the selected agent.")
+    p.add_argument("--scope", choices=["project", "global"], default="project", help="Expose into project .agents or global agent skill directory.")
+    p.add_argument("--include-unreviewed", action="store_true", help="Allow discovered skills to be exposed.")
+    p.add_argument("--all-reviewed", action="store_true", help="Expose every available skill selected by filters. Owner/admin only; prefer explicit IDs, tags, or routers.")
+    p.add_argument("--allow-incompatible", action="store_true", help="Allow native/stub exposure even when skill metadata explicitly excludes the selected agent.")
+    p.add_argument("--list", action="store_true", dest="list_exposures", help="List Skillager-managed exposed targets for the selected agent/scope.")
+    p.add_argument("--remove", metavar="EXPOSURE_ID", help="Remove one Skillager-managed exposed target by exposure id.")
     p.add_argument("--dry-run", action="store_true", help="Report target paths without writing files.")
     p.add_argument("--force", action="store_true", help="Overwrite existing Skillager-managed customized targets.")
     add_review_filters(p, include_lint_flag=False)
-    p.add_argument("--json", action="store_true", help="Emit materialization results as JSON.")
-    p.set_defaults(func=cmd_materialize)
+    p.add_argument("--json", action="store_true", help="Emit exposure results as JSON.")
+    p.set_defaults(func=cmd_expose)
 
 
 def add_review_filters(parser: argparse.ArgumentParser, *, include_lint_flag: bool = True) -> None:
@@ -1487,7 +1490,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if args.summary_json:
         print(json.dumps(_compact_setup_report(report), indent=2, sort_keys=True))
     elif args.json:
-        print(json.dumps(report, indent=2, sort_keys=True))
+        print(json.dumps(_public_setup_report(report), indent=2, sort_keys=True))
     else:
         _print_setup_scan_report(report, project_dir=project_dir, agents=setup_agents)
         if args.fresh_project:
@@ -1504,13 +1507,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 f"{retained.get('catalog_tags', 0)} catalog tag(s), "
                 f"{retained.get('catalog_tag_members', 0)} tag member(s), "
                 f"{retained.get('collections', 0)} collection(s), "
-                f"plus {retained.get('materialized_skill_targets', 0)} materialized skill target(s)."
+                f"plus {retained.get('materialized_skill_targets', 0)} exposed skill target(s)."
             )
         elif args.fresh:
             print(
                 "Fresh reset: "
                 f"project trust decisions cleared={report.get('fresh_reset', 0)}. "
-                "Reusable global approvals, tags, collections, and materialized skill files were retained."
+                "Reusable global approvals, tags, collections, and exposed skill files were retained."
             )
         if report.get("errors"):
             _print_discovery_errors(report["errors"])
@@ -1721,8 +1724,15 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
         "lint_blocked_ids": [skill.get("id") for skill in lint_blocked],
     }
     if "bootstrap" in report:
-        compact["bootstrap"] = report["bootstrap"]
+        compact["bootstrap"] = _public_bootstrap_payload(report["bootstrap"])
     return compact
+
+
+def _public_setup_report(report: dict[str, Any]) -> dict[str, Any]:
+    public = dict(report)
+    if "bootstrap" in public:
+        public["bootstrap"] = _public_bootstrap_payload(public["bootstrap"])
+    return public
 
 
 def _setup_action_requested(args: argparse.Namespace) -> bool:
@@ -1794,6 +1804,14 @@ def _setup_bootstrap_payload(
         "artifacts": artifacts,
         "summary": (bootstrap or {}).get("summary") or _bootstrap_summary(artifacts),
     }
+
+
+def _public_bootstrap_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    public = dict(payload)
+    artifacts = [_public_bootstrap_artifact(item) for item in payload.get("artifacts", [])]
+    public["artifacts"] = artifacts
+    public["summary"] = _bootstrap_summary(artifacts)
+    return public
 
 
 def _setup_bootstrap_saves_scope(bootstrap: dict[str, Any]) -> bool:
@@ -2573,10 +2591,11 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
         "artifacts": bootstrap["artifacts"],
         "summary": bootstrap["summary"],
     }
+    public_result = _public_bootstrap_result(result)
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        print(json.dumps(public_result, indent=2, sort_keys=True))
     else:
-        _print_bootstrap_result(result)
+        _print_bootstrap_result(public_result)
     return 11 if _bootstrap_has_local_blocker(bootstrap["artifacts"]) else 0
 
 
@@ -2616,6 +2635,14 @@ def _perform_bootstrap(*, agents: list[str], project_dir: Path, dry_run: bool, f
         "artifacts": artifacts,
         "summary": _bootstrap_summary(artifacts),
     }
+
+
+def _public_bootstrap_result(result: dict[str, Any]) -> dict[str, Any]:
+    public = dict(result)
+    artifacts = [_public_bootstrap_artifact(item) for item in result.get("artifacts", [])]
+    public["artifacts"] = artifacts
+    public["summary"] = _bootstrap_summary(artifacts)
+    return public
 
 
 def _bootstrap_working_results(*, agents: list[str], project_dir: Path, dry_run: bool, force: bool) -> list[dict[str, Any]]:
@@ -2704,6 +2731,10 @@ def _bootstrap_note_artifact(agent: str, path: Path, status: str, reason: str | 
     }
 
 
+def _public_bootstrap_artifact(item: dict[str, Any]) -> dict[str, Any]:
+    return dict(item)
+
+
 def _bootstrap_summary(artifacts: list[dict[str, Any]]) -> dict[str, Any]:
     by_status = Counter(str(item.get("status") or "unknown") for item in artifacts)
     return {
@@ -2733,7 +2764,7 @@ def _print_bootstrap_result(result: dict[str, Any]) -> None:
     ready = sum(
         1
         for item in artifacts
-        if item.get("status") == "materialized"
+        if item.get("status") in {"materialized", "exposed"}
         or (item.get("status") == "skipped" and item.get("reason") == "already up to date")
     )
     print(f"Ready: {ready} of {len(artifacts)} artifacts current.")
@@ -2771,7 +2802,7 @@ def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, a
         "attached_tags": view["attached_tags"],
         "materialized_router_tags": view["materialized_router_tags"],
         "unmaterialized_attached_tags": view["unmaterialized_attached_tags"],
-        "unmaterialized_attached_tags_policy": "diagnostic only; materialize a router only after the user's goal makes that tag relevant",
+        "unmaterialized_attached_tags_policy": "diagnostic only; expose a router only after the user's goal makes that tag relevant",
         "inventory": inventory,
     }
     next_step = _handoff_next(state, agent=agent, readiness=readiness)
@@ -2937,9 +2968,9 @@ def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any
         return {
             "status": "ready",
             "message": (
-                "Ask the user what they plan to do. Existing materialized router tag(s) are already available: "
+                "Ask the user what they plan to do. Existing exposed router tag(s) are already available: "
                 f"{', '.join(materialized_router_tags)}. Search within an existing router tag when it matches the user's goal; "
-                "otherwise search available metadata, curate a task tag, and materialize a narrow router, stub, native skill, or no new exposure as appropriate. "
+                "otherwise search available metadata, curate a task tag, and expose a narrow router, stub, native skill, or no new exposure as appropriate. "
                 "Report any curation or exposure changes."
             ),
             "command": None,
@@ -2947,7 +2978,7 @@ def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any
         }
     return {
         "status": "ready",
-        "message": "Ask the user what they plan to do, search available metadata when a specialized skill may help, build a scored slate of skills or groups, then tag available skills and materialize a narrow router, stub, native skill, or no new exposure as appropriate. Report any curation or exposure changes.",
+        "message": "Ask the user what they plan to do, search available metadata when a specialized skill may help, build a scored slate of skills or groups, then tag available skills and expose a narrow router, stub, native skill, or no new exposure as appropriate. Report any curation or exposure changes.",
         "command": None,
         "next_commands": _ready_handoff_commands(agent),
     }
@@ -2959,8 +2990,8 @@ def _ready_handoff_commands(agent: str, *, materialized_router_tags: list[str] |
         f"skillager search \"<user-goal>\" --agent {agent} --json",
         "skillager tag create <task-tag>",
         "skillager tag add <task-tag> <skill-id>...",
-        f"skillager materialize --tag <task-tag> --mode router --agent {agent} --scope project",
-        f"skillager materialize <skill-id> --mode stub --agent {agent} --scope project",
+        f"skillager expose --tag <task-tag> --mode router --agent {agent} --scope project",
+        f"skillager expose <skill-id> --mode stub --agent {agent} --scope project",
     ]
     router_commands = [
         f"skillager search \"<user-goal>\" --tag {tag} --agent {agent} --json"
@@ -3063,9 +3094,9 @@ def _print_handoff(handoff: dict[str, Any]) -> None:
     note_statuses = ", ".join(f"{Path(note['path']).name}={note['status']}" for note in artifacts.get("project_notes", []))
     print(f"  Project note: {note_statuses or 'missing'}")
     print(f"  Attached tags: {', '.join(state['attached_tags']) if state['attached_tags'] else 'none'}")
-    print(f"  Materialized router tags: {', '.join(state['materialized_router_tags']) if state['materialized_router_tags'] else 'none'}")
+    print(f"  Exposed router tags: {', '.join(state['materialized_router_tags']) if state['materialized_router_tags'] else 'none'}")
     print(
-        "  Unmaterialized attached tags: "
+        "  Attached tags without exposed router: "
         f"{', '.join(state['unmaterialized_attached_tags']) if state['unmaterialized_attached_tags'] else 'none'}"
     )
     tagging = state.get("tagging") or {}
@@ -3401,7 +3432,7 @@ def _print_tag_review_warning(summary: dict[str, Any], *, indent: str = "") -> N
     print(
         f"{indent}warning: tag {summary['tag']} contains "
         f"{summary.get('review_needed', 0)} unreviewed and {summary.get('lint_blocked', 0)} lint-blocked skill(s); "
-        "search and router materialization will use only available members."
+        "search and router exposure will use only available members."
     )
     print(f"{indent}review remaining tag members with: skillager setup")
 
@@ -3497,7 +3528,7 @@ def _status_message(
         if command:
             return f"Skillager: review is complete, but working artifacts need refresh. Run `{command}`."
         return f"Skillager: review is complete, but working artifacts need manual repair. {handoff.get('message', '').strip()}"
-    return "Skillager: no skills pending owner review. Use available metadata and materialize only when the task needs exposure."
+    return "Skillager: no skills pending owner review. Use available metadata and expose only when the task needs it."
 
 
 def _print_status(status: dict[str, Any]) -> None:
@@ -3598,7 +3629,7 @@ def _print_status(status: dict[str, Any]) -> None:
     materialized = status.get("materialized", {})
     if materialized:
         parts = [f"{agent}={count}" for agent, count in sorted(materialized.items())]
-        print(f"  - materialized project skills: {', '.join(parts)}")
+        print(f"  - exposed project skills: {', '.join(parts)}")
     if status.get("exposure_count"):
         print(f"  - exposure detail: {_exposure_summary_text(exposure)}")
     _print_inventory_block(status.get("inventory") or {}, indent="  - ")
@@ -4623,7 +4654,7 @@ def _project_tag_reference_report(state_root: Path, catalog_root: Path, tag: str
         trust = skill.get("trust") or "unknown"
         item = {"id": skill_id, "status": trust}
         if trust == "blocked":
-            item["note"] = "blocked by owner; materialize and activation skip this reference"
+            item["note"] = "blocked by owner; exposure and activation skip this reference"
         elif trust == "lint_blocked":
             item["note"] = "lint-blocked; owner review or source fix required"
         elif trust == "discovered":
@@ -4959,11 +4990,17 @@ def _review_extra_skills(args: argparse.Namespace) -> list[dict[str, Any]]:
     )
 
 
-def cmd_materialize(args: argparse.Namespace) -> int:
-    mode = args.mode
+def cmd_expose(args: argparse.Namespace) -> int:
+    if args.list_exposures:
+        _require_expose_management_only(args, "--list")
+        return _cmd_expose_list(args)
+    if args.remove:
+        _require_expose_management_only(args, "--remove")
+        return _cmd_expose_remove(args)
+    mode = args.mode or "native"
     if mode == "router" and not args.tag:
         raise ValueError("--mode router requires --tag")
-    _require_materialize_selection(args)
+    _require_expose_selection(args)
     agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
     agent_notes_ready_before = _agent_notes_ready(Path.cwd(), agents=agents) if args.scope == "project" else False
     materialized_targets_before = _materialized_target_paths(Path.cwd(), agents=agents) if args.scope == "project" else set()
@@ -5012,10 +5049,11 @@ def cmd_materialize(args: argparse.Namespace) -> int:
             project_dir=Path.cwd(),
             allow_incompatible=args.allow_incompatible,
         )
+    _annotate_exposure_results(results, mode=mode)
     if args.json:
-        print(json.dumps(results, indent=2, sort_keys=True))
+        print(json.dumps([_public_exposure_result(item) for item in results], indent=2, sort_keys=True))
     else:
-        _print_materialize_results(results)
+        _print_expose_results(results)
         if args.scope == "project" and mode == "router" and args.tag and not args.dry_run:
             _print_router_verification(args.tag, agents, results)
         if args.scope == "project" and not args.dry_run and any(item.get("status") == "materialized" for item in results):
@@ -5038,14 +5076,171 @@ def cmd_materialize(args: argparse.Namespace) -> int:
     return 0
 
 
-def _require_materialize_selection(args: argparse.Namespace) -> None:
+def _require_expose_management_only(args: argparse.Namespace, flag: str) -> None:
+    if args.list_exposures and args.remove:
+        raise ValueError("--list cannot be combined with --remove")
+    if args.agent and args.all_agents:
+        raise ValueError("--agent cannot be combined with --all-agents")
+    conflicts: list[str] = []
+    if args.skill_ids:
+        conflicts.append("skill IDs")
+    for attr, option in (
+        ("tag", "--tag"),
+        ("all_reviewed", "--all-reviewed"),
+        ("include_unreviewed", "--include-unreviewed"),
+        ("allow_incompatible", "--allow-incompatible"),
+        ("include_blocked", "--include-blocked"),
+        ("source", "--source"),
+        ("audience", "--audience"),
+        ("package", "--package"),
+        ("activation", "--activation"),
+        ("mode", "--mode"),
+        ("force", "--force"),
+    ):
+        if getattr(args, attr, None):
+            conflicts.append(option)
+    if flag == "--list" and args.dry_run:
+        conflicts.append("--dry-run")
+    if conflicts:
+        raise ValueError(f"{flag} cannot be combined with {', '.join(conflicts)}")
+
+
+def _cmd_expose_list(args: argparse.Namespace) -> int:
+    agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
+    records = _exposure_records(_current_project_dir(), agents=agents, scope=args.scope)
+    if args.json:
+        print(json.dumps({"schema": "skillager.exposures.v1", "exposures": records}, indent=2, sort_keys=True))
+    else:
+        if not records:
+            print("No Skillager-managed exposures found.")
+            return 0
+        for item in records:
+            print(f"{item['exposure_id']}\t{item['mode']}\t{item['skill_id']}\t{item['agent']}\t{item['scope']}\t{item['target']}")
+    return 0
+
+
+def _cmd_expose_remove(args: argparse.Namespace) -> int:
+    agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
+    records = _exposure_records(_current_project_dir(), agents=agents, scope=args.scope)
+    matches = [item for item in records if _exposure_record_matches(item, args.remove)]
+    if not matches:
+        raise KeyError(f"exposure not found: {args.remove}")
+    if len(matches) > 1:
+        details = ", ".join(f"{item['agent']}:{item['target']}" for item in matches)
+        raise ValueError(f"ambiguous exposure id: {args.remove} ({details})")
+    results: list[dict[str, Any]] = []
+    item = matches[0]
+    target = Path(item["target"])
+    result = dict(item)
+    if args.dry_run:
+        result["status"] = "would_remove"
+        result["reason"] = None
+    else:
+        shutil.rmtree(target)
+        result["status"] = "removed"
+        result["reason"] = None
+    results.append(result)
+    if args.json:
+        print(json.dumps({"schema": "skillager.exposure-remove.v1", "results": results}, indent=2, sort_keys=True))
+    else:
+        for item in results:
+            print(f"{item['exposure_id']}: {item['status']} {item['target']}")
+    return 0
+
+
+def _exposure_record_matches(item: dict[str, Any], value: str) -> bool:
+    return value == str(item.get("exposure_id") or "")
+
+
+def _exposure_records(project_dir: Path, *, agents: list[str], scope: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    seen: set[Path] = set()
+    for agent, roots in _exposure_roots(project_dir, agents=agents, scope=scope).items():
+        for root_path in roots:
+            if not root_path.is_dir():
+                continue
+            for sidecar in sorted(root_path.glob("*/skillager.materialized.yaml")):
+                try:
+                    resolved = sidecar.resolve()
+                except OSError:
+                    continue
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                try:
+                    data = load_mapping(sidecar)
+                except Exception:
+                    continue
+                record = _exposure_record(sidecar, data, fallback_agent=agent, fallback_scope=scope)
+                if record is not None:
+                    records.append(record)
+    return sorted(records, key=lambda item: (item["agent"], item["scope"], item["exposure_id"]))
+
+
+def _exposure_roots(project_dir: Path, *, agents: list[str], scope: str) -> dict[str, list[Path]]:
+    if scope == "project":
+        project_roots = _project_skill_roots(project_dir)
+        return {agent: project_roots.get(agent, []) for agent in agents}
+    if scope == "global":
+        roots: dict[str, list[Path]] = {}
+        for agent in agents:
+            if agent == "codex":
+                roots[agent] = [Path.home() / ".codex" / "skills"]
+            elif agent == "claude":
+                roots[agent] = [Path.home() / ".claude" / "skills"]
+            else:
+                roots[agent] = [Path.home() / ".skillager" / "agents" / agent / "skills"]
+        return roots
+    raise ValueError("scope must be project or global")
+
+
+def _exposure_record(sidecar: Path, data: dict[str, Any], *, fallback_agent: str, fallback_scope: str) -> dict[str, Any] | None:
+    if data.get("schema") not in {"skillager.materialized.v1", "skillager.router.v1"}:
+        return None
+    source_type = data.get("source_type")
+    if source_type == "skillager-working":
+        return None
+    if source_type == "skillager-router":
+        mode = "router"
+        skill_id = data.get("source_id") or data.get("id")
+    elif source_type == "skillager-stub":
+        mode = "stub"
+        skill_id = data.get("source_id") or data.get("id")
+    else:
+        mode = "native"
+        skill_id = data.get("source_id") or data.get("id")
+    if not skill_id:
+        return None
+    target = sidecar.parent
+    record: dict[str, Any] = {
+        "schema": "skillager.exposure.v1",
+        "exposure_id": target.name,
+        "skill_id": str(skill_id),
+        "mode": mode,
+        "agent": str(data.get("agent") or fallback_agent),
+        "scope": str(data.get("scope") or fallback_scope),
+        "target": str(target),
+        "status": "exposed",
+        "reason": None,
+        "restart_required": True,
+    }
+    if data.get("tag"):
+        record["tag"] = data.get("tag")
+    if data.get("skill_ids"):
+        record["skill_ids"] = list(data.get("skill_ids") or [])
+    return record
+
+
+def _require_expose_selection(args: argparse.Namespace) -> None:
     if args.tag or args.skill_ids or args.all_reviewed:
         if args.all_reviewed and args.include_unreviewed:
             raise ValueError("--all-reviewed cannot be combined with --include-unreviewed")
+        if args.all_reviewed and args.mode is None:
+            raise ValueError("--all-reviewed requires explicit --mode")
         return
     raise ValueError(
-        "materialize requires explicit skill IDs, --tag, or --all-reviewed. "
-        "To refresh first-party working artifacts, run skillager bootstrap --agent <agent>."
+        "expose requires explicit skill IDs, --tag, or --all-reviewed. "
+        "To refresh first-party working artifacts, run skillager doctor --agent <agent> --fix."
     )
 
 
@@ -5069,16 +5264,53 @@ def _require_materialize_matches(
             raise ValueError(f"skill is not selectable with the requested filters: {skill_id}")
 
 
-def _print_materialize_results(results: list[dict[str, Any]]) -> None:
+def _annotate_exposure_results(results: list[dict[str, Any]], *, mode: str) -> None:
+    for item in results:
+        item.setdefault("mode", mode)
+
+
+def _print_expose_results(results: list[dict[str, Any]]) -> None:
     for item in results:
         if _suppress_materialize_result(item):
             continue
-        line = f"{item['skill_id']}: {item['status']}"
-        if item.get("target"):
-            line += f" {item['target']}"
-        if item.get("reason"):
-            line += f" ({item['reason']})"
+        public = _public_exposure_result(item)
+        line = f"{public['skill_id']}: {public['status']}"
+        if public.get("target"):
+            line += f" {public['target']}"
+        if public.get("reason"):
+            line += f" ({public['reason']})"
         print(line)
+
+
+def _public_exposure_status(status: object) -> object:
+    return {
+        "materialized": "exposed",
+        "would_write": "would_expose",
+    }.get(str(status), status)
+
+
+def _public_exposure_result(item: dict[str, Any]) -> dict[str, Any]:
+    status = item.get("status")
+    public_status = _public_exposure_status(status)
+    raw_target = item.get("target")
+    target = str(raw_target) if raw_target else None
+    result = {
+        "schema": "skillager.exposure-result.v1",
+        "exposure_id": Path(target).name if target else None,
+        "skill_id": item.get("skill_id"),
+        "mode": item.get("mode"),
+        "agent": item.get("agent"),
+        "scope": item.get("scope"),
+        "target": target,
+        "status": public_status,
+        "reason": item.get("reason"),
+        "restart_required": status == "materialized",
+    }
+    return result
+
+
+def _print_materialize_results(results: list[dict[str, Any]]) -> None:
+    _print_expose_results(results)
 
 
 def _suppress_materialize_result(item: dict[str, Any]) -> bool:
@@ -5494,7 +5726,7 @@ def _print_setup_next_steps(skills: list[dict[str, Any]]) -> None:
     print(_style("Suggested next steps", "bold"))
     if approved and not unreviewed:
         print("  - Run interactive setup to install Skillager Working for your agent target: skillager setup")
-        print("  - Or materialize a specific approved skill/tag when it is clearly relevant.")
+        print("  - Or expose a specific approved skill/tag when it is clearly relevant.")
         print("  - Show full list: skillager setup --details")
         return
     print("  - Inspect candidates: skillager review --summary")
@@ -5516,7 +5748,7 @@ def _print_setup_bootstrap_result(result: dict[str, Any]) -> None:
             print(line)
     if result.get("handoff_ready"):
         agents = list(result.get("agents") or [])
-        print("Hand Skillager skill discovery, tagging, materialization, and router/stub/native exposure to the agent so it can shape the project's skill surface:")
+        print("Hand Skillager skill discovery, tagging, and router/stub/native exposure to the agent so it can shape the project's skill surface:")
         if len(agents) == 1:
             print(f"  skillager handoff --agent {agents[0]}")
         elif agents:
@@ -5530,10 +5762,11 @@ def _print_setup_bootstrap_result(result: dict[str, Any]) -> None:
 
 def _setup_bootstrap_artifact_line(item: dict[str, Any]) -> str | None:
     kind = item.get("kind")
+    status = item.get("status")
     if kind == "working_skill":
-        line = f"{item.get('skill_id')}: {item.get('status')}"
+        line = f"{item.get('skill_id')}: {status}"
     elif kind == "project_note":
-        line = f"{item.get('agent')} project note: {item.get('status')}"
+        line = f"{item.get('agent')} project note: {status}"
     else:
         return None
     if item.get("target"):
@@ -5601,7 +5834,7 @@ def _interactive_setup(
                 _print_setup_completion_summary(selected, results, agents=result_agents)
                 _print_agent_next_steps(results)
             else:
-                print("Setup complete; no skills materialized.")
+                print("Setup complete; no skills exposed.")
             return
         print()
         print(_style("Choose an action", "bold"))
@@ -5924,13 +6157,7 @@ def _materialize_reviewed_for_project(
             scope="project",
             project_dir=project_dir,
         )
-        for item in native_results:
-            line = f"{item['skill_id']}: {item['status']}"
-            if item.get("target"):
-                line += f" {item['target']}"
-            if item.get("reason"):
-                line += f" ({item['reason']})"
-            print(line)
+        _print_expose_results(native_results)
         results.extend(native_results)
     _print_router_suggestions(state_root, catalog_root=catalog_root, agents=agents)
     return results or None
@@ -5954,7 +6181,7 @@ def _print_router_suggestions(state_root: Path, *, catalog_root: Path | None, ag
     print("  Broad project-local tags are best exposed as router skills when relevant to the task:")
     for tag, count in suggestions:
         print(f"  - {tag}: {count} approved skill(s)")
-        print(f"    skillager materialize --tag {tag} --mode router --agent {agent} --scope project")
+        print(f"    skillager expose --tag {tag} --mode router --agent {agent} --scope project")
 
 
 def _print_setup_completion_summary(
@@ -6010,7 +6237,7 @@ def _print_setup_completion_summary(
             print(f"    ... {len(hidden) - 25} more available hidden skill(s)")
         print()
         print("    To stub specific skills:")
-        print(f"    skillager materialize <skill-id> --mode stub --agent {agent} --scope project")
+        print(f"    skillager expose <skill-id> --mode stub --agent {agent} --scope project")
         print("    Or ask your agent: please stub 1, 5, 8 from the Skillager setup summary.")
 
 
@@ -6019,7 +6246,7 @@ def _choose_native_project_skills(skills: list[dict[str, Any]], *, agents: list[
     if not skills:
         print("No narrow native project skill candidates found. Broad collection skills can be exposed later with router mode.")
         return []
-    if not _confirm("Materialize a narrow always-relevant set of approved skills now?"):
+    if not _confirm("Expose a narrow always-relevant set of approved skills now?"):
         return []
     selected: list[dict[str, Any]] = []
     print()
@@ -6043,7 +6270,7 @@ def _choose_native_project_skills(skills: list[dict[str, Any]], *, agents: list[
         print(f"  audience: {_audience_label(skill)}")
         if skill.get("summary"):
             _print_wrapped("  used for: ", skill["summary"], width=_output_width(), max_chars=220)
-        choice = _interactive_input("  Materialize this native skill? [y/N/q] ").strip().lower()
+        choice = _interactive_input("  Expose this native skill? [y/N/q] ").strip().lower()
         if choice in {"q", "quit", "exit"}:
             break
         if choice in {"y", "yes"}:

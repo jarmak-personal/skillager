@@ -500,7 +500,7 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
             self.assertIn("local/existing: wrote", stdout.getvalue())
             self.assertTrue((skill_dir / "skillager.yaml").exists())
 
-    def test_explicit_agent_incompatibility_blocks_native_materialization_until_overridden(self) -> None:
+    def test_explicit_agent_incompatibility_blocks_native_exposure_until_overridden(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -528,11 +528,11 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
                     blocked = StringIO()
                     with redirect_stdout(blocked):
-                        self.assertEqual(main(["materialize", "project/claude-only", "--agent", "codex"]), 0)
+                        self.assertEqual(main(["expose", "project/claude-only", "--agent", "codex"]), 0)
                     self.assertIn("skipped", blocked.getvalue())
                     self.assertIn("incompatible with codex", blocked.getvalue())
                     self.assertFalse((root / ".agents" / "skills" / "project-claude-only").exists())
-                    self.assertEqual(main(["materialize", "project/claude-only", "--agent", "codex", "--allow-incompatible"]), 0)
+                    self.assertEqual(main(["expose", "project/claude-only", "--agent", "codex", "--allow-incompatible"]), 0)
             self.assertTrue((root / ".agents" / "skills" / "project-claude-only" / "SKILL.md").exists())
 
     def test_explicit_agent_incompatibility_blocks_activation_until_overridden(self) -> None:
@@ -595,7 +595,7 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                         self.assertEqual(main(["search", "teams", "--agent", "codex", "--json", "--full-json"]), 0)
                     full_data = json.loads(full_output.getvalue())
                     self.assertIn("warnings", full_data[0]["compatibility"])
-                    self.assertEqual(main(["materialize", "project/teams", "--mode", "stub", "--agent", "codex"]), 0)
+                    self.assertEqual(main(["expose", "project/teams", "--mode", "stub", "--agent", "codex"]), 0)
             stub = (root / ".agents" / "skills" / "project-teams" / "SKILL.md").read_text(encoding="utf-8")
             self.assertIn("Compatibility notes", stub)
             self.assertIn("parallel subagents", stub)
