@@ -39,9 +39,9 @@ Agent-facing commands hide `discovered` and `lint_blocked` skills from normal us
 
 For diagnostics, full JSON and review output split this into `approval` plus `review_gates`: scan risk, lint status, signature verification status, and availability reason. For example, an unreviewed low-risk signed skill may show `approval=unreviewed scan=low lint=ok signature=not_checked availability=blocked_until_review`.
 
-Approvals for portable sources, such as git-backed skill repositories, registered collections, Python packages, npm packages, and Cargo packages, are reusable across projects by default. Skillager stores the logical source key and current content hash in the reusable catalog state. If the same skill content appears in another clone or project, it is treated as already approved; if the content changes, the approval no longer matches and the skill returns to review. Use `--project-only` with `setup`, `review`, or `trust` when an approval should stay local to the current project.
+Approvals for portable sources, such as git-backed skill repositories, registered collections, Python packages, npm packages, and Cargo packages, are reusable across projects by default. Skillager stores the logical source key and current content hash in the reusable catalog state. If the same skill content appears in another clone or project, it is treated as already approved; if the content changes, the approval no longer matches and the skill returns to review. Use `--project-only` with `setup`, `review approve`, or `review pin` when an approval should stay local to the current project.
 
-Direct native skills are not automatically trusted. If you place a skill in a project or global agent skill directory, Skillager discovers and scans it, but it remains `discovered` until reviewed. Use `skillager new <skill-id>` for self-authored project skills; it scaffolds `.agents/skills/<slug>/SKILL.md` by default, records a user-local authored marker, and surfaces a fast `skillager trust <id> --state reviewed` hint after you review the content.
+Direct native skills are not automatically approved. If you place a skill in a project or global agent skill directory, Skillager discovers and scans it, but it remains `discovered` until reviewed. Use `skillager new <skill-id>` for self-authored project skills; it scaffolds `.agents/skills/<slug>/SKILL.md` by default, records a user-local authored marker, and surfaces a fast `skillager review approve <id>` hint after you review the content.
 
 ## Manifest Lint
 
@@ -58,8 +58,7 @@ skillager lint --json
 Lint output reports finding codes, fields, and safe details. It does not print skill bodies or raw manifest contents. Fix lint-blocked manifests when possible. To approve one anyway, use an explicit audited override:
 
 ```bash
-skillager trust <skill-id> --override-lint --reason "Reviewed manifest and accepted the finding"
-skillager review <skill-id> --override-lint --reason "Reviewed manifest and accepted the finding"
+skillager review approve <skill-id> --override-lint --reason "Reviewed manifest and accepted the finding"
 ```
 
 The override is tied to the current content hash and finding identities. Content changes or new blocking lint findings require a new review.
@@ -78,16 +77,22 @@ skillager bootstrap --agent codex
 skillager doctor --agent codex
 skillager list --summary-json --agent codex
 skillager search "spatial workflow" --agent codex --json
-skillager setup --source collection --trust-all
-skillager setup --source collection --yolo
-skillager setup --source collection --trust-all --project-only
+skillager setup --collection workflows --agent codex
+skillager setup --collection workflows --bulk-approve --agent codex
+skillager setup --collection workflows --yolo --agent codex
+skillager setup --collection workflows --bulk-approve --project-only --agent codex
 skillager review --summary
-skillager review <skill-id> --trust-selected reviewed
+skillager review approve <skill-id>
+skillager review approve <skill-id> --project-only
+skillager review approve <skill-id> --override-lint --reason "Reviewed manifest and accepted the finding"
+skillager review pin <skill-id>
+skillager review pin <skill-id> --project-only
+skillager review block <skill-id>
+skillager review unblock <skill-id>
 skillager lint
 skillager new <skill-id>
 skillager manifest init <path>
 skillager state migrate
-skillager block <skill-id>
 skillager tag add gis vibespatial/gis-domain
 skillager expose --tag gis --mode router --agent codex --scope project
 skillager expose <skill-id> <skill-id> --mode router --agent codex --scope project
@@ -113,13 +118,13 @@ Skillager does not require git. In a plain directory, it treats the current dire
 
 Legacy in-tree `<project>/.skillager/` state is ignored by ordinary commands. If you intentionally want to import reviewed local state from an older Skillager version, run `skillager state migrate` from the project and review the records it will copy. Legacy reusable `global_approvals` require the separate `skillager state import-global-approvals` command.
 
-Use `--trust-all` or `--yolo` only for fully trusted sources. They are aliases: both mark all selected skills reviewed, including medium, high-risk, and lint-blocked findings, and record the current content hashes. For lint-blocked skills they write an audited shortcut override reason.
+Use `--bulk-approve` only for fully trusted sources. It marks all selected skills reviewed, including medium, high-risk, and lint-blocked findings, and records the current content hashes. For lint-blocked skills it writes an audited shortcut override reason. `--yolo` is the fun alias for the same serious bulk approval path.
 
 Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-project --agent codex` when you want to reset project-local Skillager state and refresh Codex working artifacts in one run: it clears project-local decisions, project tags, legacy session records, and saved setup scope for the selected scope. It reports, but does not delete, retained reusable global approvals, global catalog collections, and exposed skill files.
 
 `skillager list` shows the effective project inventory and hides global native skills unless you pass `--include-global`. Use `skillager list --no-packages` when you want local project, registered collection, and project-tag inventory without installed package skills. Use `skillager list --summary-json --agent codex` when an agent needs compact orientation: it includes counts, every listed skill ID, and duplicate native-variant hints. Use `skillager list --json --full-json` only for verbose Skillager diagnostics.
 
-Collection repositories are user-global catalog inventory. Ordinary `skillager setup` includes registered collection skills; `skillager setup --source collection` narrows review to collections only. After review, available collection skills are searchable from any project using the same catalog. Use project-local tags only when you want task/project curation or router/stub exposure.
+Collection repositories are user-global catalog inventory. Ordinary `skillager setup` includes registered collection skills; `skillager setup --collection <name> --agent codex` narrows review to one collection. For a fully trusted collection, use `skillager setup --collection <name> --bulk-approve --agent codex`; `--yolo` is the optional alias. After review, available collection skills are searchable from any project using the same catalog. Use project-local tags only when you want task/project curation or router/stub exposure.
 
 Tags are project-local curation. Users can curate them manually, and agents can maintain them after setup by adding available skills that match the current project or task. `tag add` accepts available registered collection skill IDs and available IDs from the current project inventory, including skills from auto-discovered child repositories.
 

@@ -7,9 +7,9 @@ Skillager is a review and activation gate. It reduces accidental context exposur
 - Never expose unapproved skill bodies to agents by default.
 - Keep discovery and search metadata-only.
 - Never index free-text from `skillager.yaml`; searchable identity comes from reviewed `SKILL.md` text and derived provenance.
-- Require explicit user approval before trust changes.
+- Require explicit user approval before approval-state changes.
 - Require an audited lint override before approving a lint-blocked skill.
-- Require reviewed/trusted/pinned state before activation or exposure.
+- Require approve or pin state before activation or exposure.
 - Assume agent compatibility by default; block only explicit agent exclusions unless the user overrides them.
 - Copy skills into project-local native directories so users can inspect and customize them.
 - Preserve content hashes so changed skills require fresh review.
@@ -48,18 +48,18 @@ Lint-blocked skills are indexed only as quarantined records with safe derived fi
 Approving a lint-blocked skill requires:
 
 ```bash
-skillager review <skill-id> --trust-selected reviewed --override-lint --reason "<why this is acceptable>"
+skillager review approve <skill-id> --override-lint --reason "<why this is acceptable>"
 ```
 
-For fully trusted sources, `--trust-all` and `--yolo` also approve selected lint-blocked skills and store a standard audited shortcut reason.
+For fully reviewed sources, `--bulk-approve` also approves selected lint-blocked skills and stores a standard audited shortcut reason. `--yolo` is the fun alias for the same bulk approval path.
 
 The override is stored in `trust.json` with the reason, timestamp, content hash, and the accepted finding identities. Content changes or new blocking finding identities drop the skill back to `lint_blocked`.
 
 ## Review Metadata
 
-`trust` is retained as the legacy state bucket for existing callers. Full review metadata also exposes clearer axes:
+`trust` is retained as an internal legacy state bucket for existing callers. Full review metadata also exposes clearer public axes:
 
-- `approval`: the owner decision, such as `unreviewed`, `reviewed`, `trusted`, `pinned`, or `blocked`.
+- `approval`: the owner decision, such as `unreviewed`, `approve`, `pin`, or `blocked`.
 - `review_gates.scan`: the static scanner risk, such as `low`, `medium`, or `high`.
 - `review_gates.lint`: manifest/structure lint status, such as `ok`, `warned`, or `blocked`.
 - `review_gates.signature`: indexed release-evidence status, such as `missing` or `not_checked`. Explicit `verify-signature` runs report `verified` or `failed`, but do not approve the skill or write a cached review gate.
@@ -102,7 +102,7 @@ Inferred warnings come from inert text only. Examples include agent-specific ski
 - Skillager does not inspect runtime behavior after activation.
 - User-installed native skills are discovered and scanned, but remain unreviewed until explicitly approved.
 
-Users own the final trust decision.
+Users own the final approval decision.
 
 ## Recommended Review Policy
 

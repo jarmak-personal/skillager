@@ -70,7 +70,7 @@ from ..search import search as search_index
 from ..selection import select_visible_skills
 from ..signing import verify_oms_signature
 from ..simple_yaml import YamlError, load_mapping
-from ..trust import content_hash, load_trust, make_lint_override, save_trust, set_trust
+from ..trust import content_hash, load_trust, save_trust, set_trust
 from ..update_check import check_for_update
 
 
@@ -119,13 +119,52 @@ _PROJECT_NOTE_REASON_CODES = {
     "missing": HANDOFF_REASON_PROJECT_NOTE_MISSING,
     "stale": HANDOFF_REASON_PROJECT_NOTE_STALE,
 }
+REVIEW_ACTION_VERBS = {"approve", "pin", "block", "unblock"}
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _removed_top_level_command(argv: list[str]) -> int | None:
+    command = _first_top_level_command(argv)
+    if command == "trust":
+        print(
+            "skillager: error: top-level `trust` was removed; use `skillager review approve <skill-id>` or `skillager review pin <skill-id>`.",
+            file=sys.stderr,
+        )
+        return 2
+    if command == "block":
+        print(
+            "skillager: error: top-level `block` was removed; use `skillager review block <skill-id>`.",
+            file=sys.stderr,
+        )
+        return 2
+    return None
+
+
+def _first_top_level_command(argv: list[str]) -> str | None:
+    value_options = {"--state-dir", "--catalog-state-dir"}
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token in value_options:
+            index += 2
+            continue
+        if any(token.startswith(f"{option}=") for option in value_options):
+            index += 1
+            continue
+        if token.startswith("-"):
+            return None
+        return token
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    removed_command = _removed_top_level_command(argv)
+    if removed_command is not None:
+        return removed_command
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -162,7 +201,7 @@ def build_parser() -> argparse.ArgumentParser:
             Agent command contract:
               working is a pure-read readiness check and does not emit skill bodies.
               handoff/status/search/list/show without --content are safe metadata commands.
-              setup/review/trust/block change approval state and need user intent.
+              setup/review approval actions change approval state and need user intent.
               tag/project/expose may curate or expose only available skills; report changes.
               activate/show --content reveal skill bodies and require prior approval.
             """
@@ -314,30 +353,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true", help="Emit verification result as JSON.")
     p.set_defaults(func=cmd_verify_signature)
 
-    p = sub.add_parser(
-        "trust",
-        help="Trust a skill.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Mark one skill reviewed/trusted/pinned by recording its current directory hash.",
-        epilog="Examples:\n  skillager trust fastapi/fastapi\n  skillager trust fastapi/fastapi --state pinned",
-    )
-    p.add_argument("skill_id")
-    p.add_argument("--state", choices=["reviewed", "trusted", "pinned"], default="reviewed")
-    p.add_argument("--project-only", action="store_true", help="Store this approval only in the current project state instead of the reusable global catalog.")
-    p.add_argument("--override-lint", action="store_true", help="Approve a lint-blocked skill with an audit reason.")
-    p.add_argument("--reason", help="Required reason when --override-lint is used.")
-    p.set_defaults(func=cmd_trust)
-
-    p = sub.add_parser(
-        "block",
-        help="Block a skill.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Block one skill so it is hidden from default list/search/expose flows.",
-        epilog="Example:\n  skillager block suspicious/skill",
-    )
-    p.add_argument("skill_id")
-    p.set_defaults(func=cmd_block)
-
     add_review_parser(sub)
     add_expose_parser(sub)
     add_manifest_parser(sub)
@@ -369,14 +384,14 @@ def add_manifest_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
 def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "setup",
-        help="First-run environment review: discover, select, scan, and optionally trust skills.",
+        help="First-run environment review: discover, select, scan, and optionally approve skills.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
             Discover skills in the current project/environment and present a review summary.
 
             This is the first command to run in a new environment. It scans discovered
-            skills and shows risk/trust buckets. It does not trust anything unless an
+            skills and shows review buckets. It does not approve anything unless an
             explicit action flag is provided. In interactive mode, after review is
             complete, setup asks which agent target you use and installs Skillager
             Working plus any narrow native project skills you choose one by one.
@@ -391,14 +406,14 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
               skillager setup --source project --accept-low
               skillager setup --source project --accept-low --agent codex
               skillager setup --include-global
-              skillager setup --package pandas --trust-selected reviewed
-              skillager setup --block-high
+              skillager setup --collection company --bulk-approve
+              skillager setup --package pandas --bulk-approve
               skillager setup --details
               skillager setup --non-interactive
               skillager setup --json
               skillager setup --summary-json
 
-            Next step after trust changes:
+            Next step after approval changes:
               Restart the chosen agent in this project. It should run `skillager working`
               after context resets. Run `skillager handoff` when you want explicit
               post-setup curation/onboarding guidance.
@@ -415,7 +430,7 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
         help="Reset this project's Skillager state before setup. Clears project trust decisions, tags, legacy session files, and saved setup scope; keeps reusable global approvals, global catalog entries, and exposed skill files.",
     )
     add_review_filters(p)
-    add_review_actions(p)
+    add_review_actions(p, setup=True)
     target = p.add_mutually_exclusive_group()
     target.add_argument("--agent", action="append", choices=["codex", "claude"], help="Bootstrap this agent's first-party project working artifacts after setup. Repeat to target multiple agents.")
     target.add_argument("--all-agents", action="store_true", help="Bootstrap first-party project working artifacts for both Codex and Claude after setup.")
@@ -765,12 +780,12 @@ def add_new_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
 def add_review_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "review",
-        help="Review indexed skills before trusting or enabling them.",
+        help="Review indexed skills before approving or enabling them.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
             Review already-indexed skills. Use this after setup, after package changes,
-            or when deciding whether to trust/block/expose a selected subset.
+            or when deciding whether to approve, block, unblock, or expose a selected subset.
             """
         ),
         epilog=textwrap.dedent(
@@ -779,9 +794,12 @@ def add_review_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
               skillager review --summary
               skillager review --source project
               skillager review --include-global --summary
-              skillager review fastapi/fastapi --trust-selected reviewed
-              skillager review --source collection --trust-all
-              skillager review --block-high
+              skillager review approve fastapi/fastapi
+              skillager review pin fastapi/fastapi
+              skillager review block suspicious/skill
+              skillager review unblock suspicious/skill
+              skillager review approve --collection company --bulk-approve
+              skillager review approve --collection company --yolo
               skillager review --json
             """
         ),
@@ -858,6 +876,7 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 
 def add_review_filters(parser: argparse.ArgumentParser, *, include_lint_flag: bool = True) -> None:
     parser.add_argument("--source", help="Filter by source type, e.g. project, global, environment, python-package, npm-package, cargo-package.")
+    parser.add_argument("--collection", help="Select skills from one registered collection. Implies --source collection.")
     parser.add_argument("--audience", help="Filter by declared audience: user, dev, or other/everything_else for undeclared skills.")
     parser.add_argument("--package", help="Filter by package name.")
     parser.add_argument("--activation", help="Filter by activation mode.")
@@ -866,13 +885,15 @@ def add_review_filters(parser: argparse.ArgumentParser, *, include_lint_flag: bo
         parser.add_argument("--include-lint-blocked", action="store_true", help="Include lint-blocked skills in read-only review output.")
 
 
-def add_review_actions(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--accept-low", action="store_true", help="Mark selected low-risk skills as reviewed.")
-    parser.add_argument("--yolo", action="store_true", help="Mark all selected skills reviewed, including high-risk and lint-blocked findings. Same behavior as --trust-all; use only for fully trusted sources.")
-    parser.add_argument("--trust-all", action="store_true", help="Mark all selected skills reviewed, including high-risk and lint-blocked findings. Use only for fully trusted sources.")
-    parser.add_argument("--trust-selected", choices=["reviewed", "trusted", "pinned"], help="Trust selected skills after review.")
+def add_review_actions(parser: argparse.ArgumentParser, *, setup: bool = False) -> None:
+    if setup:
+        parser.add_argument("--accept-low", action="store_true", help="Approve selected low-risk skills.")
+    parser.add_argument("--bulk-approve", action="store_true", help="Approve all selected skills, including high-risk and lint-blocked findings. Use only for fully reviewed trusted sources.")
+    parser.add_argument("--yolo", action="store_true", help="Alias for --bulk-approve.")
+    parser.add_argument("--trust-all", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--trust-selected", choices=["reviewed", "trusted", "pinned"], help=argparse.SUPPRESS)
     parser.add_argument("--project-only", action="store_true", help="Store approval decisions only in this project state instead of the reusable global catalog.")
-    parser.add_argument("--block-high", action="store_true", help="Block selected high-risk skills.")
+    parser.add_argument("--block-high", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--override-lint", action="store_true", help="Approve selected lint-blocked skills with an audit reason, or allow them with another review action.")
     parser.add_argument("--reason", help="Required reason when --override-lint is used.")
 
@@ -902,6 +923,45 @@ def catalog_root(args: argparse.Namespace) -> Path:
     if stored:
         return Path(stored).expanduser().resolve()
     return catalog_state_root()
+
+
+def _selection_source(args: argparse.Namespace) -> str | None:
+    collection = getattr(args, "collection", None)
+    source = getattr(args, "source", None)
+    if collection and source and source != "collection":
+        raise ValueError("--collection can only be combined with --source collection")
+    return "collection" if collection else source
+
+
+def _selection_collection(args: argparse.Namespace) -> str | None:
+    collection = getattr(args, "collection", None)
+    return _slug(str(collection)) if collection else None
+
+
+def _deprecated_review_flag_message(args: argparse.Namespace) -> str | None:
+    if getattr(args, "trust_all", False):
+        return "--trust-all was removed; use --bulk-approve or --yolo."
+    if getattr(args, "trust_selected", None):
+        return "--trust-selected was removed; use `skillager review approve <skill-id>` or `skillager review pin <skill-id>`."
+    if getattr(args, "block_high", False):
+        return "--block-high was removed; use `skillager review block <skill-id>` for explicit blocks."
+    return None
+
+
+def _reject_deprecated_review_flags(args: argparse.Namespace) -> int | None:
+    message = _deprecated_review_flag_message(args)
+    if not message:
+        return None
+    print(f"skillager: error: {message}", file=sys.stderr)
+    return 2
+
+
+def _review_action_from_args(args: argparse.Namespace) -> str | None:
+    tokens = list(getattr(args, "skill_ids", []) or [])
+    if tokens and tokens[0] in REVIEW_ACTION_VERBS:
+        args.skill_ids = tokens[1:]
+        return tokens[0]
+    return None
 
 
 def _warn_legacy_project_state(new_state_root: Path) -> None:
@@ -1276,7 +1336,7 @@ def cmd_new(args: argparse.Namespace) -> int:
     record_authored_skill(skill_root, project_root=project, agent=args.agent)
     print(f"Created {skill_root}")
     print(f"Edit {skill_file}, then review before use.")
-    print(f"Fast approval after review: skillager trust project/{slug} --state reviewed")
+    print(f"Fast approval after review: skillager review approve project/{slug}")
     return 0
 
 
@@ -1436,9 +1496,14 @@ def _refuse_unsafe_migration_project(project: Path) -> None:
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
-    args.yolo = bool(args.yolo or args.trust_all)
+    deprecated = _reject_deprecated_review_flags(args)
+    if deprecated is not None:
+        return deprecated
     if args.json and args.summary_json:
         raise ValueError("--json and --summary-json cannot be combined")
+    source = _selection_source(args)
+    collection = _selection_collection(args)
+    bulk_approve = bool(args.bulk_approve or args.yolo)
     action_requested = _setup_action_requested(args)
     setup_agents = _bootstrap_agents(args)
     project_dir = (find_project_root() or Path.cwd()).resolve()
@@ -1457,7 +1522,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
         extra_paths=_active_setup_paths(root(args), args.paths or None),
         include_packages=not args.no_packages,
         extra_skills=_review_extra_skills(args),
-        source=args.source,
+        source=source,
+        collection=collection,
         audience=audience,
         package=args.package,
         activation=args.activation,
@@ -1467,9 +1533,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         fresh=args.fresh,
         fresh_project=args.fresh_project,
         accept_low=args.accept_low,
-        yolo=args.yolo,
-        trust_state=args.trust_selected,
-        block_high=args.block_high,
+        bulk_approve=bulk_approve,
         override_lint=args.override_lint,
         reason=args.reason,
         approval_root=catalog_root(args),
@@ -1742,7 +1806,7 @@ def _public_setup_report(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def _setup_action_requested(args: argparse.Namespace) -> bool:
-    return any((args.accept_low, args.yolo, args.trust_selected, args.block_high, args.override_lint))
+    return any((args.accept_low, args.bulk_approve, args.yolo, args.override_lint))
 
 
 def _setup_bootstrap_after_review(
@@ -3872,7 +3936,7 @@ def _should_prompt_setup_audience(args: argparse.Namespace) -> bool:
         not args.audience
         and not args.json
         and not args.non_interactive
-        and not any((args.accept_low, args.trust_selected, args.block_high, args.override_lint))
+        and not any((args.accept_low, args.bulk_approve, args.yolo, args.override_lint))
         and sys.stdin.isatty()
         and sys.stdout.isatty()
     )
@@ -3897,7 +3961,8 @@ def _prompt_setup_audience(state_root: Path, args: argparse.Namespace, *, catalo
         data["skills"] = [*data.get("skills", []), *extra_skills]
     skills = select_visible_skills(
         data.get("skills", []),
-        source=args.source,
+        source=_selection_source(args),
+        collection=_selection_collection(args),
         package=args.package,
         activation=args.activation,
         include_blocked=args.include_blocked,
@@ -4547,6 +4612,7 @@ def _collection_inventory_skills(
     *,
     catalog_root: Path,
     project_dir: Path,
+    collection: str | None = None,
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
 ) -> list[dict[str, Any]]:
@@ -4555,6 +4621,7 @@ def _collection_inventory_skills(
     by_id: dict[str, dict[str, Any]] = {}
     for skill in select_collection_skills(
         catalog_root,
+        collection,
         trust_root=state_root,
         approval_root=catalog_root,
         include_blocked=include_blocked,
@@ -4825,7 +4892,7 @@ def _find_project_skill(
 def _approval_hint(skill: dict[str, Any]) -> str:
     skill_id = skill.get("id") or "<skill-id>"
     if skill.get("authored") and skill.get("scan", {}).get("risk") == "low":
-        return f"to approve authored skill after review: skillager trust {skill_id} --state reviewed"
+        return f"to approve authored skill after review: skillager review approve {skill_id}"
     return f"review first: skillager review {skill_id}"
 
 
@@ -4973,55 +5040,46 @@ def _title_from_slug(value: str) -> str:
     return " ".join(part.capitalize() for part in value.split("-") if part)
 
 
-def cmd_trust(args: argparse.Namespace) -> int:
-    skill = _find_project_skill(root(args), args.skill_id, catalog_root=catalog_root(args), include_lint_blocked=True)
-    if skill.get("scan", {}).get("risk") == "high":
-        print(f"warning: trusting high-risk skill {args.skill_id}", file=sys.stderr)
-    lint_override = make_lint_override(args.reason or "", skill.get("lint") or {}) if args.override_lint else None
-    record = set_trust(
-        root(args),
-        args.skill_id,
-        args.state,
-        skill["content_hash"],
-        skill["source"],
-        lint=skill.get("lint"),
-        lint_override=lint_override,
-        approval_key=skill.get("approval_key"),
-        approval_root=catalog_root(args),
-        global_scope=not args.project_only,
-    )
-    print(f"{args.skill_id}: {record['state']}")
-    return 0
-
-
-def cmd_block(args: argparse.Namespace) -> int:
-    skill = _find_project_skill(root(args), args.skill_id, catalog_root=catalog_root(args), include_lint_blocked=True)
-    record = set_trust(root(args), args.skill_id, "blocked", skill["content_hash"], skill["source"], lint=skill.get("lint"))
-    print(f"{args.skill_id}: {record['state']}")
-    return 0
-
-
 def cmd_review(args: argparse.Namespace) -> int:
-    args.yolo = bool(args.yolo or args.trust_all)
+    deprecated = _reject_deprecated_review_flags(args)
+    if deprecated is not None:
+        return deprecated
+    review_action = _review_action_from_args(args)
+    setattr(args, "_review_action", review_action)
+    source = _selection_source(args)
+    collection = _selection_collection(args)
+    bulk_approve = bool(args.bulk_approve or args.yolo)
+    if review_action in {"approve", "pin"} and not args.skill_ids and not bulk_approve:
+        raise ValueError(f"`skillager review {review_action}` requires skill IDs unless --bulk-approve or --yolo is supplied")
+    if review_action in {"block", "unblock"} and not args.skill_ids:
+        raise ValueError(f"`skillager review {review_action}` requires at least one skill ID")
+    if not review_action and bulk_approve:
+        raise ValueError("--bulk-approve/--yolo must be used with `skillager review approve`")
+    if not review_action and args.override_lint:
+        raise ValueError("--override-lint must be used with `skillager review approve`")
     data = load_index(root(args), approval_root=catalog_root(args))
     extra_skills = _review_extra_skills(args)
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
-    review_include_lint_blocked = args.include_lint_blocked or args.override_lint or args.yolo
+    action_includes_blocked = review_action in {"block", "unblock"}
+    review_include_lint_blocked = args.include_lint_blocked or args.override_lint or bulk_approve or review_action in {"approve", "pin", "block"}
     skills = select_visible_skills(
         data.get("skills", []),
         skill_ids=args.skill_ids,
-        source=args.source,
+        source=source,
+        collection=collection,
         audience=args.audience,
         package=args.package,
         activation=args.activation,
-        include_blocked=args.include_blocked,
+        include_blocked=args.include_blocked or action_includes_blocked,
         include_lint_blocked=review_include_lint_blocked,
         include_global=args.include_global,
     )
     duplicate_context = select_visible_skills(
         data.get("skills", []),
-        include_blocked=args.include_blocked,
+        source=source,
+        collection=collection,
+        include_blocked=args.include_blocked or action_includes_blocked,
         include_lint_blocked=review_include_lint_blocked,
         include_global=args.include_global,
     )
@@ -5030,10 +5088,8 @@ def cmd_review(args: argparse.Namespace) -> int:
     action = apply_review_action(
         root(args),
         skills,
-        accept_low=args.accept_low,
-        yolo=args.yolo,
-        trust_state=args.trust_selected,
-        block_high=args.block_high,
+        bulk_approve=bulk_approve,
+        review_action=review_action,
         override_lint=args.override_lint,
         reason=args.reason,
         approval_root=catalog_root(args),
@@ -5047,17 +5103,20 @@ def cmd_review(args: argparse.Namespace) -> int:
         skills = select_visible_skills(
             data.get("skills", []),
             skill_ids=args.skill_ids,
-            source=args.source,
+            source=source,
+            collection=collection,
             audience=args.audience,
             package=args.package,
             activation=args.activation,
-            include_blocked=args.include_blocked or args.block_high,
+            include_blocked=args.include_blocked or review_action == "block",
             include_lint_blocked=True,
             include_global=args.include_global,
         )
         duplicate_context = select_visible_skills(
             data.get("skills", []),
-            include_blocked=args.include_blocked or args.block_high,
+            source=source,
+            collection=collection,
+            include_blocked=args.include_blocked or review_action == "block",
             include_lint_blocked=True,
             include_global=args.include_global,
         )
@@ -5071,14 +5130,15 @@ def cmd_review(args: argparse.Namespace) -> int:
 
 
 def _review_extra_skills(args: argparse.Namespace) -> list[dict[str, Any]]:
-    source = getattr(args, "source", None)
+    source = _selection_source(args)
     if source not in {None, "collection"}:
         return []
     return _collection_inventory_skills(
         root(args),
         catalog_root=catalog_root(args),
         project_dir=_current_project_dir(),
-        include_blocked=getattr(args, "include_blocked", False),
+        collection=_selection_collection(args),
+        include_blocked=getattr(args, "include_blocked", False) or getattr(args, "_review_action", None) in {"block", "unblock"},
         include_lint_blocked=True,
     )
 
@@ -5121,7 +5181,8 @@ def cmd_expose(args: argparse.Namespace) -> int:
             skills = select_visible_skills(
                 inventory,
                 skill_ids=args.skill_ids,
-                source=args.source,
+                source=_selection_source(args),
+                collection=_selection_collection(args),
                 audience=args.audience,
                 package=args.package,
                 activation=args.activation,
@@ -5164,7 +5225,8 @@ def cmd_expose(args: argparse.Namespace) -> int:
         skills = select_visible_skills(
             inventory,
             skill_ids=args.skill_ids,
-            source=args.source,
+            source=_selection_source(args),
+            collection=_selection_collection(args),
             audience=args.audience,
             package=args.package,
             activation=args.activation,
@@ -5195,7 +5257,8 @@ def cmd_expose(args: argparse.Namespace) -> int:
         skills = select_visible_skills(
             inventory,
             skill_ids=args.skill_ids,
-            source=args.source,
+            source=_selection_source(args),
+            collection=_selection_collection(args),
             audience=args.audience,
             package=args.package,
             activation=args.activation,
@@ -5615,7 +5678,9 @@ def _matches_filters(skill: dict[str, Any], args: argparse.Namespace) -> bool:
         return False
     if skill.get("trust") == "lint_blocked" and not getattr(args, "include_lint_blocked", False):
         return False
-    if args.source and skill.get("source", {}).get("type") != args.source:
+    if getattr(args, "source", None) and skill.get("source", {}).get("type") != args.source:
+        return False
+    if getattr(args, "collection", None) and skill.get("source", {}).get("collection") != _selection_collection(args):
         return False
     if getattr(args, "trust", None) and skill.get("trust") != args.trust:
         return False
@@ -5948,7 +6013,7 @@ def _print_setup_next_steps(skills: list[dict[str, Any]]) -> None:
     if by_package:
         package = max(by_package, key=by_package.__getitem__)
         print(f"  - Narrow by package: skillager review --package {package}")
-    print("  - Approve one skill: skillager review <skill-id> --trust-selected reviewed")
+    print("  - Approve one skill: skillager review approve <skill-id>")
     print("  - Show full list: skillager setup --details")
 
 
@@ -6331,7 +6396,7 @@ def _materialize_reviewed_for_project(
 ) -> list[dict[str, Any]] | None:
     project_dir = (project_dir or find_project_root() or Path.cwd()).resolve()
     if not skills:
-        print("No reviewed/trusted/pinned skills are ready for project setup.")
+        print("No approved or pinned skills are ready for project setup.")
         print("Approve low-risk skills first with setup option 2, or review warned/high-risk skills with option 1.")
         return None
     agents = list(agents or [])

@@ -21,6 +21,7 @@ DEFAULT_HASH_EXCLUDES = {
     "skillager.materialized.yaml",
 }
 APPROVED_TRUST_STATES = {"reviewed", "trusted", "pinned"}
+PRESERVED_BLOCK_APPROVAL_KEY = "previous_approval"
 
 
 def content_hash(path: Path) -> str:
@@ -176,6 +177,10 @@ def set_trust(
         "source": source,
         "scope": "global" if use_global else "project",
     }
+    if state == "blocked" and not use_global:
+        previous = _preserved_block_approval(data.setdefault("skills", {}).get(skill_id), current_hash, lint=lint)
+        if previous:
+            record[PRESERVED_BLOCK_APPROVAL_KEY] = previous
     if approval_key:
         record["approval_key"] = approval_key
     if lint_override:
@@ -190,6 +195,85 @@ def set_trust(
     data.setdefault("skills", {})[skill_id] = record
     save_trust(target_root, data)
     return data["skills"][skill_id]
+
+
+def unblock_trust(
+    state_root: Path,
+    skill_id: str,
+    current_hash: str,
+    *,
+    lint: dict[str, Any] | None = None,
+    approval_key: str | None = None,
+    approval_root: Path | None = None,
+) -> dict[str, Any]:
+    data = load_trust(state_root)
+    skills = data.setdefault("skills", {})
+    record = skills.get(skill_id)
+    if not isinstance(record, dict) or record.get("state") != "blocked":
+        return _effective_unblocked_info(
+            state_root,
+            skill_id,
+            current_hash,
+            lint=lint,
+            approval_key=approval_key,
+            approval_root=approval_root,
+        )
+    previous = _preserved_block_approval(record, current_hash, lint=lint)
+    if previous:
+        skills[skill_id] = previous
+        save_trust(state_root, data)
+        return skills[skill_id]
+    del skills[skill_id]
+    save_trust(state_root, data)
+    return _effective_unblocked_info(
+        state_root,
+        skill_id,
+        current_hash,
+        lint=lint,
+        approval_key=approval_key,
+        approval_root=approval_root,
+    )
+
+
+def _effective_unblocked_info(
+    state_root: Path,
+    skill_id: str,
+    current_hash: str,
+    *,
+    lint: dict[str, Any] | None,
+    approval_key: str | None,
+    approval_root: Path | None,
+) -> dict[str, Any]:
+    info = trust_info(
+        state_root,
+        skill_id,
+        current_hash,
+        lint=lint,
+        approval_key=approval_key,
+        approval_root=approval_root,
+    )
+    return {
+        "state": info.get("state", "discovered"),
+        "content_hash": current_hash,
+        "scope": info.get("scope", "project"),
+    }
+
+
+def _preserved_block_approval(
+    record: dict[str, Any] | None,
+    current_hash: str,
+    *,
+    lint: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(record, dict):
+        return None
+    candidate = record.get(PRESERVED_BLOCK_APPROVAL_KEY) if record.get("state") == "blocked" else record
+    if not isinstance(candidate, dict):
+        return None
+    info = _record_trust_info(candidate, current_hash, lint=lint, scope=str(candidate.get("scope") or "project"))
+    if not info or info.get("state") not in APPROVED_TRUST_STATES:
+        return None
+    return dict(candidate)
 
 
 def approval_key_for(

@@ -8,12 +8,12 @@ from ..families import agent_variant_family_key, duplicate_content_family_key
 from ..index import build_index, load_index
 from ..review_gates import approval_state, review_gates
 from ..selection import select_visible_skills
-from ..trust import clear_trust, make_lint_override, set_trust, trust_state
+from ..trust import clear_trust, make_lint_override, set_trust, trust_state, unblock_trust
 from .audience import audience_bucket
 
 
 APPROVED_REVIEW_STATES = {"reviewed", "trusted", "pinned"}
-YOLO_LINT_OVERRIDE_REASON = "accepted by --yolo/--trust-all trusted-source shortcut"
+YOLO_LINT_OVERRIDE_REASON = "accepted by --bulk-approve/--yolo approval shortcut"
 
 
 def review_summary(skills: list[dict[str, Any]]) -> dict[str, Any]:
@@ -229,7 +229,9 @@ def apply_review_action(
     approval_root: Path | None = None,
     global_scope: bool = False,
     accept_low: bool = False,
+    bulk_approve: bool = False,
     yolo: bool = False,
+    review_action: str | None = None,
     trust_state: str | None = None,
     block_high: bool = False,
     override_lint: bool = False,
@@ -239,21 +241,52 @@ def apply_review_action(
         raise ValueError("--reason is required with --override-lint")
     changed: list[dict[str, str]] = []
     skipped: list[dict[str, str]] = []
-    override_lint_only = override_lint and not any((accept_low, yolo, trust_state, block_high))
+    bulk_approve = bool(bulk_approve or yolo)
+    if review_action not in {None, "approve", "pin", "block", "unblock"}:
+        raise ValueError(f"invalid review action: {review_action}")
+    override_lint_only = override_lint and not any((accept_low, bulk_approve, review_action, trust_state, block_high))
     for skill in skills:
         risk = skill.get("scan", {}).get("risk")
         lint_override = None
         if skill.get("trust") == "lint_blocked":
-            if override_lint or yolo:
+            if override_lint or bulk_approve:
                 lint_override = make_lint_override(reason or YOLO_LINT_OVERRIDE_REASON, skill.get("lint") or {})
-            elif not block_high:
+            elif review_action == "block" or block_high:
+                lint_override = None
+            else:
                 skipped.append({"skill_id": skill["id"], "reason": "lint-blocked; fix source or use --override-lint --reason"})
                 continue
+        if review_action == "block":
+            record = set_trust(state_root, skill["id"], "blocked", skill["content_hash"], skill["source"], lint=skill.get("lint"))
+            changed.append(_review_action_item(skill, record))
+            continue
+        if review_action == "unblock":
+            record = unblock_trust(
+                state_root,
+                skill["id"],
+                skill["content_hash"],
+                lint=skill.get("lint"),
+                approval_key=skill.get("approval_key"),
+                approval_root=approval_root,
+            )
+            changed.append(_review_action_item(skill, record))
+            continue
+        if review_action in {"approve", "pin"}:
+            record = _set_review_trust(
+                state_root,
+                skill,
+                "pinned" if review_action == "pin" else "reviewed",
+                lint_override=lint_override,
+                approval_root=approval_root,
+                global_scope=global_scope,
+            )
+            changed.append(_review_action_item(skill, record))
+            continue
         if block_high and risk == "high":
             record = set_trust(state_root, skill["id"], "blocked", skill["content_hash"], skill["source"], lint=skill.get("lint"))
             changed.append(_review_action_item(skill, record))
             continue
-        if yolo:
+        if bulk_approve:
             record = _set_review_trust(
                 state_root,
                 skill,
@@ -354,15 +387,17 @@ def setup_environment(
     fresh: bool = False,
     fresh_project: bool = False,
     accept_low: bool = False,
+    bulk_approve: bool = False,
     trust_state: str | None = None,
     block_high: bool = False,
     yolo: bool = False,
+    collection: str | None = None,
     override_lint: bool = False,
     reason: str | None = None,
     approval_root: Path | None = None,
     global_scope: bool = False,
 ) -> dict[str, Any]:
-    review_include_lint_blocked = include_lint_blocked or override_lint or yolo
+    review_include_lint_blocked = include_lint_blocked or override_lint or bulk_approve or yolo
     data = build_index(state_root, paths, include_packages=include_packages, approval_root=approval_root, extra_paths=extra_paths)
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
@@ -373,6 +408,7 @@ def setup_environment(
         data.get("skills", []),
         skill_ids=skill_ids,
         source=source,
+        collection=collection,
         audience=audience,
         package=package,
         activation=activation,
@@ -393,6 +429,7 @@ def setup_environment(
             data.get("skills", []),
             skill_ids=skill_ids,
             source=source,
+            collection=collection,
             audience=audience,
             package=package,
             activation=activation,
@@ -405,6 +442,7 @@ def setup_environment(
         state_root,
         skills,
         accept_low=accept_low,
+        bulk_approve=bulk_approve,
         yolo=yolo,
         trust_state=trust_state,
         block_high=block_high,
@@ -421,6 +459,7 @@ def setup_environment(
         refreshed.get("skills", []),
         skill_ids=skill_ids,
         source=source,
+        collection=collection,
         audience=audience,
         package=package,
         activation=activation,
@@ -460,5 +499,7 @@ def _refresh_extra_skill_trust(
                 approval_key=item.get("approval_key"),
                 approval_root=approval_root,
             )
+            item["approval"] = approval_state(item)
+            item["review_gates"] = review_gates(item)
         refreshed.append(item)
     return refreshed

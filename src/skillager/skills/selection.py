@@ -10,6 +10,7 @@ def select_visible_skills(
     *,
     skill_ids: list[str] | None = None,
     source: str | None = None,
+    collection: str | None = None,
     audience: str | None = None,
     package: str | None = None,
     activation: str | None = None,
@@ -28,6 +29,8 @@ def select_visible_skills(
         if skill.get("trust") == "lint_blocked" and not include_lint_blocked:
             continue
         if source and source_type != source:
+            continue
+        if collection and skill.get("source", {}).get("collection") != collection:
             continue
         if not include_global and source is None and source_type == "global":
             continue

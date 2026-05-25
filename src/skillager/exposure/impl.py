@@ -81,7 +81,7 @@ def materialize_skills(
 
 def _unreviewed_reason(skill: dict[str, Any]) -> str:
     if skill.get("authored") and skill.get("scan", {}).get("risk") == "low":
-        return f"not available; to approve authored skill after owner review: skillager trust {skill.get('id')} --state reviewed"
+        return f"not available; to approve authored skill after owner review: skillager review approve {skill.get('id')}"
     return f"not available; owner review first: skillager review {skill.get('id')}"
 
 

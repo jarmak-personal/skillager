@@ -69,6 +69,8 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertIn("Do not activate or expose unavailable skills", help_text)
         self.assertIn("owner review", help_text)
         self.assertIn("--catalog-state-dir", help_text)
+        self.assertNotIn("trust", help_text.split("commands:")[-1])
+        self.assertNotIn("block", help_text.split("commands:")[-1])
         self.assertNotIn("lookback", help_text)
         self.assertNotIn("recommend", help_text)
 
@@ -241,7 +243,7 @@ class SkillagerCoreTests(unittest.TestCase):
                 with redirect_stdout(created):
                     self.assertEqual(main(["new", "gis-workflow"]), 0)
                 self.assertTrue((project / ".agents" / "skills" / "gis-workflow" / "SKILL.md").exists())
-                self.assertIn("Fast approval after review: skillager trust project/gis-workflow --state reviewed", created.getvalue())
+                self.assertIn("Fast approval after review: skillager review approve project/gis-workflow", created.getvalue())
 
                 status = StringIO()
                 with redirect_stdout(status):
@@ -252,7 +254,7 @@ class SkillagerCoreTests(unittest.TestCase):
                 activated = StringIO()
                 with redirect_stdout(activated):
                     self.assertEqual(main(["activate", "project/gis-workflow", "--no-session-record"]), 2)
-                self.assertIn("skillager trust project/gis-workflow --state reviewed", stderr.getvalue())
+                self.assertIn("skillager review approve project/gis-workflow", stderr.getvalue())
 
                 handoff = StringIO()
                 with redirect_stdout(handoff):
@@ -287,7 +289,7 @@ class SkillagerCoreTests(unittest.TestCase):
                     self.assertEqual(main(["activate", "project/risky", "--no-session-record"]), 2)
             text = stderr.getvalue()
             self.assertIn("review first: skillager review project/risky", text)
-            self.assertNotIn("skillager trust project/risky --state reviewed", text)
+            self.assertNotIn("skillager review approve project/risky", text)
 
     def test_user_state_json_refuses_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -79,10 +79,10 @@ Skill repositories, shared skills, any grouping of skills etc are collections to
 
 ```bash
 skillager collection add ~/skills/workflows --name workflows
-skillager setup --agent codex
+skillager setup --collection workflows --agent codex
 skillager search "release workflow" --agent codex --json  # Usually run by your agent
 ```
-After review, collection skills are searchable from any project on your machine. Use project-local tags only when you want a curated group or router/stub exposure:
+For a fully trusted personal or company collection, use `skillager setup --collection workflows --bulk-approve --agent codex`; `--yolo` is the fun alias for the same bulk approval path. After review, collection skills are searchable from any project on your machine. Use project-local tags only when you want a curated group or router/stub exposure:
 
 ```bash
 skillager tag add workflows --from-collection workflows

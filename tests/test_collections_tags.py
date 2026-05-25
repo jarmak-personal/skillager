@@ -961,7 +961,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--bulk-approve"]), 0)
 
                 expose_output = StringIO()
                 with redirect_stdout(expose_output):
@@ -1032,7 +1032,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--bulk-approve"]), 0)
                 expose_output = StringIO()
                 with redirect_stdout(expose_output):
                     self.assertEqual(main(["expose", "community/gis-domain", "--mode", "router", "--agent", "codex", "--json"]), 0)
@@ -1077,7 +1077,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--bulk-approve"]), 0)
 
                 expose_output = StringIO()
                 with redirect_stdout(expose_output):
@@ -1129,7 +1129,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--bulk-approve"]), 0)
                 initial_output = StringIO()
                 explicit_expose = [
                     "expose",
@@ -1212,7 +1212,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--bulk-approve"]), 0)
                     self.assertEqual(main(["tag", "create", "gpu"]), 0)
                     self.assertEqual(main(["tag", "add", "gpu", "community/gpu-review"]), 0)
                     self.assertEqual(main(["project", "attach-tag", "gpu"]), 0)

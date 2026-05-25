@@ -116,7 +116,7 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                 trust_error = StringIO()
                 with redirect_stderr(trust_error):
                     self.assertEqual(main(["trust", "project/demo"]), 2)
-                self.assertIn("override-lint", trust_error.getvalue())
+                self.assertIn("review approve", trust_error.getvalue())
 
                 activate_error = StringIO()
                 with redirect_stderr(activate_error):
@@ -130,7 +130,8 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                 self.assertEqual(lint_report["lint"]["status"], "blocked")
                 self.assertNotIn("hostile manifest bait", lint_output.getvalue())
 
-                self.assertEqual(main(["trust", "project/demo", "--override-lint", "--reason", "local test fixture"]), 0)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["review", "approve", "project/demo", "--override-lint", "--reason", "local test fixture"]), 0)
                 trusted = load_index(state)["skills"][0]
                 self.assertEqual(trusted["trust"], "reviewed")
                 trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
@@ -155,7 +156,10 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                 chdir(root),
             ):
                 build_index(state, include_packages=False)
-                self.assertEqual(main(["review", "project/demo", "--override-lint", "--reason", "known good"]), 0)
+                review_output = StringIO()
+                with redirect_stdout(review_output):
+                    self.assertEqual(main(["review", "approve", "project/demo", "--override-lint", "--reason", "known good"]), 0)
+                self.assertNotIn("Use demo guidance", review_output.getvalue())
 
             trusted = load_index(state)["skills"][0]
             self.assertEqual(trusted["trust"], "reviewed")

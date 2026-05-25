@@ -11,7 +11,7 @@ Availability is the eligibility gate. Agent-facing Skillager commands only surfa
 - Start resumed work with `skillager working`; it is silent unless external skills newly need review.
 - Use `skillager handoff` only for explicit post-setup curation/onboarding.
 - If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent <agent>` before guessing. Re-run working after repairs if readiness changes.
-- Do not run `skillager setup`, `review`, `trust`, or `block` unless the user asked for setup or approval changes.
+- Do not run `skillager setup` or `skillager review ...` unless the user asked for setup or approval changes.
 - Do not run `skillager expose` until you have asked what the user plans to do and can justify the narrow router, stub, or native exposure.
 - You may add available skills to project-local tags and create scoped router/stub/native exposure after the user states their task. Report what changed.
 - Do not run `skillager activate` or `skillager show --content` for unavailable skills. Ask the user to run setup when Skillager says a skill is unavailable.
@@ -133,14 +133,17 @@ These commands change approval state or expose full instructions:
 ```bash
 skillager setup --agent codex
 skillager setup --agent claude
-skillager setup --source collection --trust-all
-skillager setup --source collection --yolo
-skillager review <skill-id> --trust-selected reviewed
-skillager review <skill-id> --override-lint --reason "<why this is acceptable>"
-skillager trust <skill-id>
-skillager trust <skill-id> --override-lint --reason "<why this is acceptable>"
-skillager trust <skill-id> --project-only
-skillager block <skill-id>
+skillager setup --collection <name> --agent codex
+skillager setup --collection <name> --bulk-approve --agent codex
+skillager setup --collection <name> --yolo --agent codex
+skillager setup --collection <name> --bulk-approve --project-only --agent codex
+skillager review approve <skill-id>
+skillager review approve <skill-id> --project-only
+skillager review approve <skill-id> --override-lint --reason "<why this is acceptable>"
+skillager review pin <skill-id>
+skillager review pin <skill-id> --project-only
+skillager review block <skill-id>
+skillager review unblock <skill-id>
 skillager activate <skill-id>
 skillager show <skill-id> --content
 ```

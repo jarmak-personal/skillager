@@ -1068,7 +1068,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                     self.assertEqual(main(["review", "demo-pkg/mapping", "--summary"]), 0)
                 action_output = StringIO()
                 with redirect_stdout(action_output):
-                    self.assertEqual(main(["review", "demo-pkg/mapping", "--trust-selected", "reviewed"]), 0)
+                    self.assertEqual(main(["review", "approve", "demo-pkg/mapping"]), 0)
 
             self.assertIn("duplicate approved content", review_output.getvalue())
             self.assertIn("demo-pkg/mapping", review_output.getvalue())

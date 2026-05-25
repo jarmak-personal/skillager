@@ -15,8 +15,6 @@
     "skillager doctor --fix",
     "skillager setup",
     "skillager review",
-    "skillager trust",
-    "skillager block",
     "skillager activate",
     "skillager show --content",
     "skillager expose",

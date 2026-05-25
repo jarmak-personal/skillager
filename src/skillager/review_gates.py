@@ -13,8 +13,12 @@ def apply_review_metadata(skill: dict[str, Any]) -> dict[str, Any]:
 
 def approval_state(skill: dict[str, Any]) -> str:
     trust = skill.get("trust")
-    if trust in APPROVED_APPROVAL_STATES or trust == "blocked":
-        return str(trust)
+    if trust in {"reviewed", "trusted"}:
+        return "approve"
+    if trust == "pinned":
+        return "pin"
+    if trust == "blocked":
+        return "blocked"
     return "unreviewed"
 
 

@@ -20,12 +20,12 @@ If you clone a skill repository directly inside a project directory, `skillager 
 To review only collection skills:
 
 ```bash
-skillager setup --source collection --agent codex
+skillager setup --collection community --agent codex
 ```
 
-Ordinary `skillager setup --agent <agent>` also includes registered collections. For fully trusted personal or company repositories, `skillager setup --source collection --trust-all` is the fast path; `--yolo` is the same trusted-source shortcut with a blunter name. Both trusted-source shortcuts review selected lint-blocked skills with an audited shortcut override. For untrusted repositories, use the normal review flow.
+Ordinary `skillager setup --agent <agent>` also includes registered collections. For fully trusted personal or company repositories, `skillager setup --collection community --bulk-approve --agent codex` is the fast path; `--yolo` is the fun alias for the same bulk approval path. Bulk approval reviews selected lint-blocked skills with an audited shortcut override. For untrusted repositories, use the normal review flow.
 
-`setup --source collection --agent <agent>` reviews registered collection skills and refreshes that agent's first-party working artifacts after approval. If review is complete but status still reports missing or stale artifacts, run `skillager doctor --agent <agent>` for the exact repair command.
+`setup --collection <name> --agent <agent>` reviews that registered collection and refreshes that agent's first-party working artifacts after approval. If review is complete but status still reports missing or stale artifacts, run `skillager doctor --agent <agent>` for the exact repair command.
 
 Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager lint` or `skillager collection show <skill-id> --include-lint-blocked` to inspect them without printing hostile manifest contents.
 
@@ -123,4 +123,4 @@ skillager collection refresh community
 skillager status --all
 ```
 
-Reviewed git-backed collection skills are approved by logical source and content hash, so the same unchanged skill can appear in another clone or project without another approval prompt. Changed skill content gets a new content hash and must be reviewed again before activation. Use `--project-only` during setup/review when a decision should not be reusable.
+Reviewed git-backed collection skills are approved by logical source and content hash, so the same unchanged skill can appear in another clone or project without another approval prompt. Changed skill content gets a new content hash and must be reviewed again before activation. Use `--project-only` with `setup`, `review approve`, or `review pin` when a decision should not be reusable.
