@@ -39,11 +39,11 @@ Scanner findings include severity, line number, matched text, explanation, and r
 
 `skillager.yaml` is structured-only metadata. Unknown keys, invalid enum values, unsafe YAML features, invalid package specifiers, hidden/control characters, missing canonical `SKILL.md`, and invalid derived IDs produce a blocking lint finding.
 
-`skillager lint` and the standalone `skillager-lint` console script share the same strict loader and manifest validator. The standalone linter is meant for package and skill-repository CI; it reports safe diagnostics without reading or writing trust state, activating skills, writing exposure artifacts, or emitting skill bodies.
+The standalone `skillager-lint` console script uses the same strict loader and manifest validator as Skillager's runtime review path. It is meant for package and skill-repository CI; it reports safe diagnostics without reading or writing trust state, activating skills, writing exposure artifacts, or emitting skill bodies.
 
 The standalone linter reads `SKILL.md` to validate the canonical entrypoint, infer compatibility warnings, and check description quality, but it never emits body text or body-derived names/summaries in findings or output.
 
-Lint-blocked skills are indexed only as quarantined records with safe derived fields, `trust: lint_blocked`, and safe lint findings. Skillager does not expose hostile manifest values through `search`, `list`, `show`, or `lint` output.
+Lint-blocked skills are indexed only as quarantined records with safe derived fields, `trust: lint_blocked`, and safe lint findings. Skillager does not expose hostile manifest values through normal `search`, `list`, or `show` output.
 
 Approving a lint-blocked skill requires:
 
@@ -62,7 +62,7 @@ The override is stored in `trust.json` with the reason, timestamp, content hash,
 - `approval`: the owner decision, such as `unreviewed`, `approve`, `pin`, or `blocked`.
 - `review_gates.scan`: the static scanner risk, such as `low`, `medium`, or `high`.
 - `review_gates.lint`: manifest/structure lint status, such as `ok`, `warned`, or `blocked`.
-- `review_gates.signature`: indexed release-evidence status, such as `missing` or `not_checked`. Explicit `verify-signature` runs report `verified` or `failed`, but do not approve the skill or write a cached review gate.
+- `review_gates.signature`: indexed release-evidence status, such as `missing` or `not_checked`. External signature verification can inform review, but does not approve the skill or write a cached review gate.
 - `review_gates.availability`: whether the skill is `available`, `blocked`, `blocked_until_review`, or `blocked_until_lint_override`.
 
 These fields are diagnostics, not independent approvals. A low scan result, passing lint, or valid signature can inform review, but only approval makes a skill available for activation or exposure.
@@ -73,7 +73,7 @@ Detached OMS signatures such as `skill.oms.sig` are provenance and integrity evi
 
 Skill cards are treated as optional release evidence for human reviewers. Skillager detects recognized root-level card filenames for diagnostic/full metadata, but does not parse card prose, index it for search, include it in agent activation output, or copy it into native exposed skills.
 
-Signature and card files are excluded from the reviewed content hash and static instruction scan. The reviewed artifact remains the skill instructions and supporting files that an agent may actually use. Use `skillager verify-signature <skill-id-or-path> --certificate-chain <pem>` for explicit local verification.
+Signature and card files are excluded from the reviewed content hash and static instruction scan. The reviewed artifact remains the skill instructions and supporting files that an agent may actually use. Use external signing tooling for explicit local verification.
 
 ## Compatibility Gate
 

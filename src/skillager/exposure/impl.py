@@ -306,7 +306,7 @@ skillager list --summary-json --agent {agent}
 skillager search "<user goal>" --agent {agent} --json
 skillager show <skill-id> --json
 skillager tag show <tag> --json
-skillager project tags --json
+skillager tag list --json
 ```
 
 Use these to decide which available skills are relevant.
@@ -332,7 +332,7 @@ Before curating tags or exposure for a new task, build your own slate from avail
 - Tags are agent-maintained curation for available skills. Add relevant available skills to an existing tag or create a focused tag when it helps the current project.
 - Curate focused project-local tags with:
   `skillager tag add <tag> <skill-id> [<skill-id> ...]`
-- A tag exists for this project as soon as it is created or receives a skill; `project attach-tag` is only a legacy compatibility alias.
+- A tag exists for this project as soon as it is created or receives a skill.
 - Use search for the long tail.
 - Use routers for broad recurring tags:
   `skillager expose --tag <tag> --mode router --agent {agent} --scope project`

@@ -7,10 +7,10 @@ This repository builds Skillager, a local CLI approval and activation layer for 
 - Treat the CLI as the public API. Prefer behavior-preserving changes and keep user-facing command contracts stable.
 - Treat discovery as part of the public product contract. Skillager should continue to find project skills, child skill repositories, project `.venv`/`venv` environment skills, installed package skills, and relevant native agent skill directories without users hand-wiring paths.
 - Keep approval and exposure separate: approval records reviewed content hashes; exposure writes native, stub, or router skills for an agent.
-- Do not expose full skill bodies in metadata commands. `status`, `list`, `search`, `show` without `--content`, `handoff`, `lint`, and summary JSON outputs should stay metadata-only.
+- Do not expose full skill bodies in metadata commands. `working`, `list`, `search`, `show` without `--content`, `tag show`, and summary JSON outputs should stay metadata-only.
 - `skillager.yaml` is structured metadata only. Searchable identity and prose come from `SKILL.md` and derived source provenance.
 - Lint-blocked skills are quarantined until fixed or approved with an audited override reason.
-- Missing compatibility metadata means usable by default. Only explicit incompatibility should block activation or materialization.
+- Missing compatibility metadata means usable by default. Only explicit incompatibility should block activation or exposure.
 
 ## Testing
 
@@ -42,7 +42,7 @@ Runnable docs examples should stay opt-in. Use an HTML comment immediately befor
 ````markdown
 <!-- skillager-test fixture=basic_project -->
 ```bash
-skillager status --json
+skillager working --agent codex --json
 ```
 ````
 

@@ -326,7 +326,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse ordinary guidance.\n", encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root):
-                    self.assertEqual(main(["index", "--no-packages"]), 0)
+                    build_index(state, include_packages=False)
                 self.assertEqual(main(["activate", "project/demo"]), 2)
                 self.assertEqual(main(["activate", "project/demo", "--force", "--no-session-record"]), 0)
 
@@ -608,7 +608,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
-                    self.assertEqual(main(["index", "--no-packages"]), 0)
+                    build_index(state, include_packages=False)
                     self.assertEqual(main(["expose", "project/demo", "--agent", "codex"]), 0)
             target = root / ".agents" / "skills" / "project-demo"
             self.assertFalse((target / "SKILL.md").exists())

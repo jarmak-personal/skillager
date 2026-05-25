@@ -27,14 +27,13 @@ Ordinary `skillager setup --agent <agent>` also includes registered collections.
 
 `setup --collection <name> --agent <agent>` reviews that registered collection and refreshes that agent's first-party working artifacts after approval. If review is complete but `working --agent <agent> --json` still reports missing or stale artifacts, run `skillager doctor --agent <agent> --fix`.
 
-Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager lint` or `skillager collection show <skill-id> --include-lint-blocked` to inspect them without printing hostile manifest contents.
+Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager collection show <skill-id> --include-lint-blocked` to inspect them without printing hostile manifest contents. Repository authors can run `uvx --from skillager-linter skillager-lint .` in CI before publishing.
 
 ## Curate With Tags
 
 After review, collection skills are already part of effective project inventory. Tags are useful when a large collection should be split into smaller project-relevant groups or exposed through a compact router:
 
 ```bash
-skillager tag create gis
 skillager tag add gis community/gis-domain community/topology community/projections
 skillager tag add gis vibespatial/gis-domain
 skillager tag add all-community --from-collection community
@@ -57,18 +56,12 @@ From the project directory:
 
 ```bash
 skillager tag add gis community/gis-domain
-skillager project tags
+skillager tag list
 ```
 
-A tag belongs to a project by existing in that project's tag file. `project attach-tag` remains as a compatibility alias for old workflows, but new flows should create or update tags directly. When a project tag is created while using an external catalog location, Skillager records that catalog path in the tag file so later `search`, `show`, and guarded `activate` commands work without repeating `--catalog-state-dir`.
+A tag belongs to a project by existing in that project's tag file. Create or update tags directly with `skillager tag add`, inspect them with `skillager tag list` and `skillager tag show`, remove them with `skillager tag delete`, and copy reviewed curation explicitly with `skillager tag sync`. When a project tag is created while using an external catalog location, Skillager records that catalog path in the tag file so later `search`, `show`, and guarded `activate` commands work without repeating `--catalog-state-dir`.
 
-For older global-tag installs, run this once from a user shell after setup has recorded your projects:
-
-```bash
-skillager state migrate-tags --to projects
-```
-
-This copies legacy global tag attachments into project-local tag files and leaves the old global tag data in place for rollback.
+For older global-tag installs, review any curation you still want, recreate it with `skillager tag add` or copy from another reviewed project with `skillager tag sync`, then remove obsolete legacy state.
 
 After review, keep most large-repository skills searchable behind Skillager. Expose only a small native set that is always relevant to the project, use stub mode for approved commands that should be visible by name, or use router mode for a curated tag when the agent needs broad access without loading every skill. Agents may update tags and scoped exposure after you tell them what you are working on; they should report the changes they made.
 

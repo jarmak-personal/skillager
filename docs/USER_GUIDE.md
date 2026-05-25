@@ -35,27 +35,25 @@ Run `skillager doctor --agent codex` when the state seems off or the agent is st
 - `blocked`: hidden from normal search, activation, and exposure.
 - `lint_blocked`: manifest or structure failed a blocking lint rule; hidden from normal list/search/show/expose flows until fixed or explicitly overridden.
 
-Agent-facing commands hide `discovered` and `lint_blocked` skills from normal use. Use setup, review, lint, or doctor yourself when you want to inspect why a skill is not available.
+Agent-facing commands hide `discovered` and `lint_blocked` skills from normal use. Use setup, review, doctor, or `collection show --include-lint-blocked` yourself when you want to inspect why a skill is not available.
 
 For diagnostics, full JSON and review output split this into `approval` plus `review_gates`: scan risk, lint status, signature verification status, and availability reason. For example, an unreviewed low-risk signed skill may show `approval=unreviewed scan=low lint=ok signature=not_checked availability=blocked_until_review`.
 
 Approvals for portable sources, such as git-backed skill repositories, registered collections, Python packages, npm packages, and Cargo packages, are reusable across projects by default. Skillager stores the logical source key and current content hash in the reusable catalog state. If the same skill content appears in another clone or project, it is treated as already approved; if the content changes, the approval no longer matches and the skill returns to review. Use `--project-only` with `setup`, `review approve`, or `review pin` when an approval should stay local to the current project.
 
-Direct native skills are not automatically approved. If you place a skill in a project or global agent skill directory, Skillager discovers and scans it, but it remains `discovered` until reviewed. Use `skillager new <skill-id>` for self-authored project skills; it scaffolds `.agents/skills/<slug>/SKILL.md` by default, records a user-local authored marker, and surfaces a fast `skillager review approve <id>` hint after you review the content.
+Direct native skills are not automatically approved. If you place a skill in a project or global agent skill directory, Skillager discovers and scans it, but it remains `discovered` until reviewed. For self-authored project skills, create `.agents/skills/<slug>/SKILL.md` manually or with your authoring tools, then run setup and review the discovered content before approval.
 
 ## Manifest Lint
 
 `skillager.yaml` is structured metadata only. Skill identity and searchable prose come from `SKILL.md`, not from manifest free text.
 
-Use `skillager lint` to inspect safe lint findings:
+For author and CI checks, use the standalone linter to inspect safe lint findings:
 
 ```bash
-skillager lint
-skillager lint <skill-id>
-skillager lint --json
+uvx --from skillager-linter skillager-lint .
 ```
 
-Lint output reports finding codes, fields, and safe details. It does not print skill bodies or raw manifest contents. Fix lint-blocked manifests when possible. To approve one anyway, use an explicit audited override:
+At runtime, setup/review diagnostics and `skillager collection show <skill-id> --include-lint-blocked` report finding codes, fields, and safe details. They do not print skill bodies or raw manifest contents. Fix lint-blocked manifests when possible. To approve one anyway, use an explicit audited override:
 
 ```bash
 skillager review approve <skill-id> --override-lint --reason "Reviewed manifest and accepted the finding"
@@ -90,10 +88,6 @@ skillager review pin <skill-id>
 skillager review pin <skill-id> --project-only
 skillager review block <skill-id>
 skillager review unblock <skill-id>
-skillager lint
-skillager new <skill-id>
-skillager manifest init <path>
-skillager state migrate
 skillager tag add gis vibespatial/gis-domain
 skillager expose --tag gis --mode router --agent codex --scope project
 skillager expose <skill-id> <skill-id> --mode router --agent codex --scope project
@@ -117,7 +111,7 @@ The setup summary JSON includes compact first-party working artifact details whe
 
 Skillager does not require git. In a plain directory, it treats the current directory as the project root. Project state is user-local at `${XDG_STATE_HOME:-~/.local/state}/skillager/projects/<sha256(project_path)>/`, or `SKILLAGER_STATE_DIR` when explicitly set. Reusable catalog state is separate at `${XDG_CONFIG_HOME:-~/.config}/skillager/`, or `SKILLAGER_CATALOG_STATE_DIR` / `--catalog-state-dir` when explicitly set.
 
-Legacy in-tree `<project>/.skillager/` state is ignored by ordinary commands. If you intentionally want to import reviewed local state from an older Skillager version, run `skillager state migrate` from the project and review the records it will copy. Legacy reusable `global_approvals` require the separate `skillager state import-global-approvals` command.
+Legacy in-tree `<project>/.skillager/` trust state is ignored by ordinary commands. If you are upgrading from an older Skillager version, review any old decisions you still trust, remove the obsolete legacy state after review, and rerun setup so current content hashes are reviewed through the normal flow.
 
 Use `--bulk-approve` only for fully trusted sources. It marks all selected skills reviewed, including medium, high-risk, and lint-blocked findings, and records the current content hashes. For lint-blocked skills it writes an audited shortcut override reason. `--yolo` is the fun alias for the same serious bulk approval path.
 
@@ -129,7 +123,7 @@ Collection repositories are user-global catalog inventory. Ordinary `skillager s
 
 Tags are project-local curation. Users can curate them manually, and agents can maintain them after setup by adding available skills that match the current project or task. `tag add` accepts available registered collection skill IDs and available IDs from the current project inventory, including skills from auto-discovered child repositories.
 
-Setup and doctor repair keep a best-effort registry of known project paths in the user catalog. It is only for tag discovery/sync convenience; missing or stale entries do not affect normal project operation. Use `skillager tag sync --from <project> --to .` to copy tag curation explicitly between projects, or `skillager state migrate-tags --to projects` once when migrating older global tag attachments.
+Setup and doctor repair keep a best-effort registry of known project paths in the user catalog. It is only for tag discovery/sync convenience; missing or stale entries do not affect normal project operation. Use `skillager tag sync --from <project> --to .` to copy tag curation explicitly between projects, or recreate older global tag attachments with `skillager tag add` after review.
 
 `skillager doctor` is the human diagnostic command. It reports cached Skillager update information when present, but it does not contact PyPI or write update-check cache files unless the selected diagnostic path explicitly says it will.
 
@@ -137,9 +131,9 @@ Use `skillager doctor --agent <agent> --fix` when review is already complete but
 
 Use `--mode stub` for skills you want visible by name without loading the full skill body into every session. A stub contains only the skill summary and an activation command; the full body still comes through Skillager's approval gate. After setup, Skillager prints numbered available-but-hidden stub candidates so you can say “please stub 1, 5, 8.”
 
-`skillager manifest init <path>` can add a minimal structured `skillager.yaml` to existing skill directories. It records audience and activation metadata only; identity and searchable prose remain derived from `SKILL.md` and path/source provenance. If it writes sidecars for skills already reviewed, run `skillager setup` again so the new content hashes are reviewed.
+`skillager.yaml` files can be added manually or by external authoring tools to existing skill directories. They record audience and activation metadata only; identity and searchable prose remain derived from `SKILL.md` and path/source provenance. After changing sidecars for skills already reviewed, run `skillager setup` again so the new content hashes are reviewed.
 
-Published skill collections may include detached OMS signatures (`skill.oms.sig`) and skill cards, usually `skill-card.md` or `card.yaml`, as release evidence. Skillager keeps these separate from approval: signatures can be verified explicitly with `skillager verify-signature <skill-id-or-path> --certificate-chain <pem>`, but verified content still goes through normal setup/review before activation. Verification is read-only, so indexed review metadata continues to show `signature=not_checked` until Skillager has a provenance cache.
+Published skill collections may include detached OMS signatures (`skill.oms.sig`) and skill cards, usually `skill-card.md` or `card.yaml`, as release evidence. Skillager keeps these separate from approval: signed release evidence can be inspected with external signing tooling, but verified content still goes through normal setup/review before activation. External verification is read-only, so indexed review metadata continues to show `signature=not_checked` until Skillager has a provenance cache.
 
 Environment overrides:
 

@@ -18,7 +18,8 @@
     "skillager show --content",
     "skillager expose",
     "skillager tag add",
-    "skillager project attach-tag"
+    "skillager tag delete",
+    "skillager tag sync"
   ],
   "notes": [
     "Adapt these command patterns to the permission format your Codex environment uses.",

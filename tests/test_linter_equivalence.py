@@ -7,10 +7,7 @@ import unittest
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
 
-from support import chdir
-from skillager.cli import main as skillager_main
 from skillager.index import build_index
 from skillager_linter.cli import main as linter_main
 from skillager_linter.findings import RULE_KEYS
@@ -168,20 +165,9 @@ class LinterEquivalenceTests(unittest.TestCase):
                 symlink_entrypoint=symlink_entrypoint,
                 extra_files=extra_files,
             )
-            with (
-                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
-                patch("skillager.discovery.find_project_root", return_value=root),
-                patch("pathlib.Path.home", return_value=root),
-                chdir(root),
-            ):
-                data = build_index(state, include_packages=False)
-                self.assertEqual(len(data["skills"]), 1)
-                skill_id = data["skills"][0]["id"]
-                output = StringIO()
-                with redirect_stdout(output):
-                    # Core lint is a metadata-listing command: findings are data, so JSON mode exits 0.
-                    self.assertEqual(skillager_main(["lint", skill_id, "--json"]), 0)
-            return json.loads(output.getvalue())[0]["lint"]["findings"]
+            data = build_index(state, [root / ".skills"], include_packages=False)
+            self.assertEqual(len(data["skills"]), 1)
+            return data["skills"][0]["lint"]["findings"]
 
 
 def _write_skill(

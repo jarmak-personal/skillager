@@ -63,12 +63,18 @@ def main(argv: list[str] | None = None) -> int:
         env = os.environ.copy()
         state = work / "state"
         env.update({"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"})
-        indexed = _json([str(python), "-m", "skillager", "index", "--no-packages", "--json"], cwd=project, env=env)
-        if not isinstance(indexed, dict) or not isinstance(indexed.get("skills"), list):
-            raise SystemExit("expected index JSON object with skills array")
-        skill_id = _skill_id_for_root(indexed["skills"], skill_dir, cwd=project)
-        core = _json([str(python), "-m", "skillager", "lint", skill_id, "--json"], cwd=project, env=env)
-        _assert_finding(core[0]["lint"]["findings"], "audience_both")
+        core = _json(
+            [str(python), "-m", "skillager", "setup", "--source", "project", "--no-packages", "--non-interactive", "--json"],
+            cwd=project,
+            env=env,
+        )
+        if not isinstance(core, dict) or not isinstance(core.get("selected"), list):
+            raise SystemExit("expected setup JSON object with selected skills array")
+        skill = _skill_for_root(core["selected"], skill_dir, cwd=project)
+        lint = skill.get("lint")
+        if not isinstance(lint, dict) or not isinstance(lint.get("findings"), list):
+            raise SystemExit(f"expected setup lint findings for {skill_dir}, got {skill!r}")
+        _assert_finding(lint["findings"], "audience_both")
 
     return 0
 
@@ -98,7 +104,7 @@ def _json(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | 
     return json.loads(completed.stdout)
 
 
-def _skill_id_for_root(listing: object, skill_dir: Path, *, cwd: Path) -> str:
+def _skill_for_root(listing: object, skill_dir: Path, *, cwd: Path) -> dict[str, object]:
     if not isinstance(listing, list):
         raise SystemExit(f"expected skill list JSON array, got {type(listing).__name__}")
     target = skill_dir.resolve()
@@ -115,11 +121,8 @@ def _skill_id_for_root(listing: object, skill_dir: Path, *, cwd: Path) -> str:
         if root_path.resolve() == target:
             matches.append(skill)
     if len(matches) != 1:
-        raise SystemExit(f"expected exactly one indexed skill rooted at {target}, found {len(matches)}")
-    skill_id = matches[0].get("id")
-    if not isinstance(skill_id, str) or not skill_id:
-        raise SystemExit(f"indexed skill at {target} is missing a string id")
-    return skill_id
+        raise SystemExit(f"expected exactly one selected skill rooted at {target}, found {len(matches)}")
+    return matches[0]
 
 
 def _assert_finding(findings: list[dict[str, str]], code: str) -> None:

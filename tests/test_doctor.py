@@ -335,7 +335,7 @@ class SkillagerDoctorTests(unittest.TestCase):
                     self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--json"]), 12)
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "lint-blocked")
-            self.assertEqual(data["next"]["command"], "skillager lint")
+            self.assertEqual(data["next"]["command"], "skillager review --include-lint-blocked --summary")
 
     def test_doctor_migration_review_exits_thirteen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

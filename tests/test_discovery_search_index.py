@@ -1062,7 +1062,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages", "--summary-json"]), 0)
-                    self.assertEqual(main(["index"]), 0)
+                    build_index(state)
                 review_output = StringIO()
                 with redirect_stdout(review_output):
                     self.assertEqual(main(["review", "--summary"]), 0)

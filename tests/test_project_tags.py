@@ -4,14 +4,13 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 from support import chdir
 from skillager.cli import main
-from skillager.paths import project_state_root
 
 
 class SkillagerProjectTagTests(unittest.TestCase):
@@ -95,7 +94,7 @@ class SkillagerProjectTagTests(unittest.TestCase):
                 self.assertEqual(main(["tag", "sync", "--from", str(source), "--to", str(dest)]), 2)
             self.assertFalse(dest.exists())
 
-    def test_state_migrate_tags_copies_legacy_attached_global_tags_to_project(self) -> None:
+    def test_state_migrate_tags_is_removed_without_writing_project_tags(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             catalog = root / "catalog"
@@ -104,17 +103,12 @@ class SkillagerProjectTagTests(unittest.TestCase):
             catalog.mkdir()
             (catalog / "tags.json").write_text(json.dumps({"tags": {"gis": ["community/gis"]}}, indent=2) + "\n", encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_CATALOG_STATE_DIR": str(catalog), "NO_COLOR": "1"}, clear=True), patch("pathlib.Path.home", return_value=root):
-                state = project_state_root(project)
-                state.mkdir(parents=True)
-                (state / "project_tags.json").write_text(json.dumps({"attached_tags": ["gis"]}, indent=2) + "\n", encoding="utf-8")
                 with chdir(project):
-                    output = StringIO()
-                    with redirect_stdout(output):
-                        self.assertEqual(main(["state", "migrate-tags", "--to", "projects", "--json"]), 0)
-            data = json.loads(output.getvalue())
-            self.assertEqual(data["migrated"], 1)
-            tags = json.loads((project / ".skillager" / "tags.json").read_text(encoding="utf-8"))
-            self.assertEqual(tags["tags"]["gis"]["skills"], ["community/gis"])
+                    stderr = StringIO()
+                    with redirect_stderr(stderr):
+                        self.assertEqual(main(["state", "migrate-tags", "--to", "projects", "--json"]), 2)
+            self.assertIn("`state` was removed", stderr.getvalue())
+            self.assertFalse((project / ".skillager" / "tags.json").exists())
 
 
 if __name__ == "__main__":

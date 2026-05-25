@@ -30,7 +30,7 @@ Skillager writes a small project note in `AGENTS/CLAUDE.MD` so the agent knows t
 > [!IMPORTANT]
 > Upgrading from 0.5.x? Tags are now project-local at `<project>/.skillager/tags.json`, and lookback/session telemetry has been removed.
 >
-> After setup has recorded your projects, run `skillager state migrate-tags --to projects`, then refresh active projects with `skillager setup --agent your-agent`.
+> Recreate or copy any tags you still need with `skillager tag add` or `skillager tag sync`, remove reviewed legacy state, then refresh active projects with `skillager setup --agent your-agent`.
 
 ## Core Model
 
@@ -56,7 +56,7 @@ Exposure modes:
 
 Routers expose compact available metadata only, not full skill bodies. Unavailable or incompatible members are skipped. `expose` output and JSON include the router exposure id/slug; activate a listed skill with `skillager activate <skill-id> --from-router <router-slug>`.
 
-Metadata commands stay metadata-only. `doctor`, `working`, `list`, `search`, `show` without `--content`, `lint`, and summary JSON outputs do not reveal full skill bodies.
+Metadata commands stay metadata-only. `doctor`, `working`, `list`, `search`, `show` without `--content`, `tag show`, and summary JSON outputs do not reveal full skill bodies.
 
 ## Daily Commands
 
@@ -64,8 +64,7 @@ Metadata commands stay metadata-only. `doctor`, `working`, `list`, `search`, `sh
 - Agent readiness preflight: `skillager working --agent codex --json`
 - Diagnose state: `skillager doctor --agent codex`
 - Repair first-party working artifacts: `skillager doctor --agent codex --fix`
-- Create a project tag: `skillager tag create spatial-python`
-- Add a skill to a tag: `skillager tag add spatial-python vibespatial/gis-domain`
+- Create or update a project tag: `skillager tag add spatial-python vibespatial/gis-domain`
 - Inspect a tag: `skillager tag show spatial-python`
 - Expose a tag as one router skill: `skillager expose --tag spatial-python --mode router --agent codex --scope project`
 - Expose selected skills as one deterministic router without a tag: `skillager expose vibespatial/gis-domain vibespatial/dispatch-wiring --mode router --agent codex --scope project`
@@ -133,7 +132,7 @@ Skillager discovers package skills after install from project Python environment
 
 `skillager.yaml` is optional and structured-only to support safe skills. Put searchable prose in `SKILL.md`; manifests can declare audience, activation, compatibility constraints, and typed package targets. For CI, run `uvx --from skillager-linter skillager-lint .`.
 
-Published/shared skill roots may also include optional release evidence such as `skill.oms.sig`, `skill-card.md`, or `card.yaml`. Skillager keeps these separate from approval and search; use `skillager verify-signature <skill-id-or-path> --certificate-chain <pem>` when you explicitly want to verify a signed skill.
+Published/shared skill roots may also include optional release evidence such as `skill.oms.sig`, `skill-card.md`, or `card.yaml`. Skillager keeps these separate from approval and search; inspect signed release evidence with external signing tooling when you explicitly want to verify provenance.
 
 See the [package author guide](docs/LIBRARY_AUTHORS.md) for metadata and packaging details.
 

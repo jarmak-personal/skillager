@@ -40,7 +40,7 @@ Project-aware JSON includes:
 - `exposure`: `hidden`, `native`, `stub`, `router`, or `multiple`.
 - `exposed_via`: compact router/stub/native exposure hints in search results.
 - `tagging`: available untagged collection skills that may be useful to curate for the current project.
-- `authored_pending_owner_review`: status count for user-local skills created with `skillager new` but not available yet.
+- `authored_pending_owner_review`: status count for user-local authored skills that are not available yet.
 - `agent_variant`: duplicate native-variant hints. Matching-agent variants are ranked first when the active agent is known, but alternatives remain visible and usable.
 - `compatibility`: negative-only compatibility metadata. Missing metadata means "assume usable." `problem` is set only when the skill explicitly excludes the requested `--agent`.
 

@@ -62,7 +62,6 @@ class SkillagerReadPurityTests(unittest.TestCase):
                 self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-packages"]), 0)
                 self.assertEqual(main(["tag", "create", "demo"]), 0)
                 self.assertEqual(main(["tag", "add", "demo", "project/demo"]), 0)
-                self.assertEqual(main(["project", "attach-tag", "demo"]), 0)
             (state / "index.json").unlink()
 
             before = snapshot_tree(state, catalog, cache, project)
@@ -72,9 +71,8 @@ class SkillagerReadPurityTests(unittest.TestCase):
                 ["search", "demo", "--agent", "codex", "--json"],
                 ["show", "project/demo", "--json"],
                 ["tag", "show", "demo", "--json"],
-                ["project", "tags", "--json"],
+                ["tag", "list", "--json"],
                 ["doctor", "--agent", "codex", "--no-packages", "--json"],
-                ["lint", "--json"],
             ]
             with (
                 patch.dict(os.environ, env),
@@ -86,7 +84,7 @@ class SkillagerReadPurityTests(unittest.TestCase):
                     output = StringIO()
                     with redirect_stdout(output):
                         self.assertEqual(main(command), 0, command)
-                    if command[0] in {"working", "list", "search", "show", "tag", "project", "doctor", "lint"}:
+                    if command[0] in {"working", "list", "search", "show", "tag", "doctor"}:
                         json.loads(output.getvalue())
 
             self.assertEqual(snapshot_tree(state, catalog, cache, project), before)

@@ -55,7 +55,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertEqual(sorted(collection_list_data["collections"]), ["community"])
                 project_tags = StringIO()
                 with redirect_stdout(project_tags):
-                    self.assertEqual(main(["project", "tags", "--json"]), 0)
+                    self.assertEqual(main(["tag", "list", "--json"]), 0)
                 self.assertEqual(json.loads(project_tags.getvalue())["attached_tags"], [])
 
                 setup = StringIO()
@@ -96,7 +96,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
 
                 project_tags = StringIO()
                 with redirect_stdout(project_tags):
-                    self.assertEqual(main(["project", "tags", "--json"]), 0)
+                    self.assertEqual(main(["tag", "list", "--json"]), 0)
                 project_tag_data = json.loads(project_tags.getvalue())
                 self.assertEqual(project_tag_data["attached_tags"], ["gis"])
                 self.assertEqual(project_tag_data["tag_summaries"][0]["available"], 1)
@@ -307,10 +307,10 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["tag", "show", "mixed", "--json"]), 0)
                 attach_text = StringIO()
                 with redirect_stdout(attach_text):
-                    self.assertEqual(main(["project", "attach-tag", "mixed"]), 0)
+                    self.assertEqual(main(["tag", "show", "mixed"]), 0)
                 project_output = StringIO()
                 with redirect_stdout(project_output):
-                    self.assertEqual(main(["project", "tags", "--json"]), 0)
+                    self.assertEqual(main(["tag", "list", "--json"]), 0)
 
             tag_data = json.loads(tag_output.getvalue())
             self.assertEqual(tag_data["summary"]["available"], 1)
@@ -805,7 +805,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertTrue(json.loads(project_b_working.getvalue())["readiness"]["review_ready"])
                     project_b_tags = StringIO()
                     with chdir(project_b), redirect_stdout(project_b_tags):
-                        self.assertEqual(main(["project", "tags", "--json"]), 0)
+                        self.assertEqual(main(["tag", "list", "--json"]), 0)
                     self.assertEqual(json.loads(project_b_tags.getvalue())["attached_tags"], [])
 
                     project_b_search = StringIO()
@@ -832,7 +832,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
 
                     project_b_status = StringIO()
                     with chdir(project_b), redirect_stdout(project_b_status):
-                        self.assertEqual(main(["project", "tags", "--json"]), 0)
+                        self.assertEqual(main(["tag", "list", "--json"]), 0)
                     project_b_status_data = json.loads(project_b_status.getvalue())
                     self.assertEqual(project_b_status_data["attached_tags"], ["gis"])
                     self.assertEqual(project_b_status_data["tag_summaries"][0]["available"], 1)
@@ -859,7 +859,6 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "setup", "--source", "collection", "--accept-low", "--json"]), 0)
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "tag", "create", "gis"]), 0)
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "tag", "add", "gis", "community/gis-domain"]), 0)
-                    self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "project", "attach-tag", "gis"]), 0)
 
                 project_tags = json.loads((project / ".skillager" / "tags.json").read_text(encoding="utf-8"))
                 self.assertEqual(project_tags["catalog_state_dir"], str(catalog_state.resolve()))
@@ -895,7 +894,6 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
                     self.assertEqual(main(["tag", "create", "gis"]), 0)
                     self.assertEqual(main(["tag", "add", "gis", "community/gis-domain"]), 0)
-                    self.assertEqual(main(["project", "attach-tag", "gis"]), 0)
                 (state / "status_scope.json").write_text(
                     json.dumps({"schema": "skillager.status-scope.v1", "selected_count": 49, "baseline": {}}),
                     encoding="utf-8",
@@ -1222,7 +1220,6 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--bulk-approve"]), 0)
                     self.assertEqual(main(["tag", "create", "gpu"]), 0)
                     self.assertEqual(main(["tag", "add", "gpu", "community/gpu-review"]), 0)
-                    self.assertEqual(main(["project", "attach-tag", "gpu"]), 0)
                 router_output = StringIO()
                 with redirect_stdout(router_output):
                     self.assertEqual(main(["expose", "--tag", "gpu", "--mode", "router", "--agent", "codex"]), 0)
@@ -1267,7 +1264,6 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
 
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["tag", "add", "gis", "vibespatial/gis-domain"]), 0)
-                    self.assertEqual(main(["project", "attach-tag", "gis"]), 0)
                     self.assertEqual(main(["expose", "--tag", "gis", "--mode", "router", "--agent", "codex"]), 0)
 
                 router = root / ".agents" / "skills" / "skillager-gis" / "SKILL.md"

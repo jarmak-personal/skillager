@@ -1116,7 +1116,6 @@ class SkillagerSetupTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "collection", "--accept-low", "--json"]), 0)
                     self.assertEqual(main(["tag", "create", "mapping"]), 0)
                     self.assertEqual(main(["tag", "add", "mapping", "community/gis-domain"]), 0)
-                    self.assertEqual(main(["project", "attach-tag", "mapping"]), 0)
                 self.assertEqual(main(["setup", "--audience", "other", "--no-packages"]), 0)
             text = stdout.getvalue()
             self.assertIn("No narrow native project skill candidates found", text)
@@ -1213,7 +1212,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 patch("pathlib.Path.home", return_value=root),
                 chdir(root),
             ):
-                self.assertEqual(main(["index", "--no-packages"]), 0)
+                build_index(state, include_packages=False)
                 self.assertEqual(main(["review", "approve", "project/alpha", "--project-only"]), 0)
                 self.assertEqual(main(["review", "pin", "project/gamma", "--project-only"]), 0)
                 self.assertEqual(main(["review", "block", "project/beta"]), 0)
@@ -1248,7 +1247,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 patch("pathlib.Path.home", return_value=root),
                 chdir(root),
             ):
-                self.assertEqual(main(["index"]), 0)
+                build_index(state)
                 self.assertEqual(main(["review", "approve", "demo-pkg/help"]), 0)
                 self.assertEqual(main(["review", "block", "demo-pkg/help"]), 0)
                 unblock_output = StringIO()
@@ -1275,7 +1274,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 chdir(root),
             ):
                 with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["index", "--no-packages"]), 0)
+                    build_index(state, include_packages=False)
                 error = StringIO()
                 with redirect_stderr(error):
                     self.assertEqual(main(["review", "--block-high"]), 2)
@@ -1304,7 +1303,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 chdir(root),
             ):
                 with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["index", "--no-packages"]), 0)
+                    build_index(state, include_packages=False)
                 trust_error = StringIO()
                 with redirect_stderr(trust_error):
                     self.assertEqual(main(["trust", "project/demo"]), 2)

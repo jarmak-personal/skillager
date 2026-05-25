@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from support import chdir
 from skillager.cli import main
+from skillager.index import build_index
 
 
 def write_skill(root: Path, body: str = "# Demo\n\nUse demo guidance.\n") -> None:
@@ -54,9 +55,17 @@ class SkillagerWorkingTests(unittest.TestCase):
         return by_id[skill_id]
 
     def indexed_skill(self, root: Path, state: Path, skill_id: str) -> dict[str, object]:
-        code, stdout, stderr = self.run_cli(["index", "--no-packages", "--json"], root=root, state=state)
-        self.assertEqual(code, 0, stderr)
-        by_id = {skill["id"]: skill for skill in json.loads(stdout)["skills"]}
+        env = {
+            "SKILLAGER_STATE_DIR": str(state),
+            "SKILLAGER_CATALOG_STATE_DIR": str(state),
+            "NO_COLOR": "1",
+        }
+        with (
+            patch.dict(os.environ, env),
+            patch("pathlib.Path.home", return_value=root),
+            chdir(root),
+        ):
+            by_id = {skill["id"]: skill for skill in build_index(state, include_packages=False)["skills"]}
         return by_id[skill_id]
 
     def test_working_clean_empty_project_can_proceed_without_agent(self) -> None:

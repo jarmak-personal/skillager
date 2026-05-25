@@ -121,7 +121,7 @@ Use the standalone linter before publishing package skills:
 
 `uvx --from skillager-linter skillager-lint .`
 
-It uses the same strict manifest loader and validator as `skillager lint`, but stays dependency-light and does not read trust state, activate skills, write exposure artifacts, or emit skill bodies. V1 validates the existing skill root contract: strict `skillager.yaml`, canonical `SKILL.md`, body-derived compatibility warnings, and current description-quality warnings.
+It uses the same strict manifest loader and validator as Skillager's runtime review path, but stays dependency-light and does not read trust state, activate skills, write exposure artifacts, or emit skill bodies. V1 validates the existing skill root contract: strict `skillager.yaml`, canonical `SKILL.md`, body-derived compatibility warnings, and current description-quality warnings.
 
 GitHub Actions example:
 
@@ -160,7 +160,7 @@ Skillager treats signatures and skill cards as release evidence, separate from a
 
 Skillager recognizes root-level card files named `skill-card.md`, `Skill Card.md`, `card.yaml`, `card.yml`, `SKILLCARD.yaml`, or `SKILLCARD.yml`. `SKILL.md` is never treated as a card because it is the reviewed instruction entrypoint.
 
-Use `skillager verify-signature <skill-id-or-path> --certificate-chain <pem>` when you want to verify a signed skill locally. Verification is read-only, does not cache `review_gates.signature`, and users still approve the skill through the normal setup/review flow.
+Use external signing tooling when you want to verify a signed skill locally. Verification is read-only from Skillager's perspective, does not cache `review_gates.signature`, and users still approve the skill through the normal setup/review flow.
 
 ## Compatibility Metadata
 
@@ -215,7 +215,7 @@ This distinction matters because setup asks the user what audience they want bef
 - Avoid shell execution unless the skill explicitly needs it.
 - Shell-command guidance is always scanned. Authors cannot suppress scanner findings from `skillager.yaml`.
 - Keep the `SKILL.md` heading and first paragraph accurate; Skillager uses them for reviewed metadata.
-- Validate manifests with `skillager-lint` or `skillager lint` before publishing.
+- Validate manifests with `skillager-lint` before publishing.
 
 ## Test Locally
 

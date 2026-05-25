@@ -123,12 +123,12 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                     self.assertEqual(main(["activate", "project/demo"]), 2)
                 self.assertIn("lint-blocked", activate_error.getvalue())
 
-                lint_output = StringIO()
-                with redirect_stdout(lint_output):
-                    self.assertEqual(main(["lint", "project/demo", "--json"]), 0)
-                lint_report = json.loads(lint_output.getvalue())[0]
+                review_output = StringIO()
+                with redirect_stdout(review_output):
+                    self.assertEqual(main(["review", "--include-lint-blocked", "--json"]), 0)
+                lint_report = json.loads(review_output.getvalue())["selected"][0]
                 self.assertEqual(lint_report["lint"]["status"], "blocked")
-                self.assertNotIn("hostile manifest bait", lint_output.getvalue())
+                self.assertNotIn("hostile manifest bait", review_output.getvalue())
 
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["review", "approve", "project/demo", "--override-lint", "--reason", "local test fixture"]), 0)
@@ -166,7 +166,7 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
             trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
             self.assertEqual(trust_log["skills"]["project/demo"]["lint_override"]["reason"], "known good")
 
-    def test_lint_output_sanitizes_author_controlled_manifest_keys(self) -> None:
+    def test_review_output_sanitizes_author_controlled_manifest_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -189,14 +189,14 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                 self.assertEqual(finding["detail"], "contains unknown manifest field")
                 self.assertEqual(finding["rule_key"], "unknown_key:v1")
 
-                lint_output = StringIO()
-                with redirect_stdout(lint_output):
-                    self.assertEqual(main(["lint", "project/demo", "--json"]), 0)
-                text = lint_output.getvalue()
+                review_output = StringIO()
+                with redirect_stdout(review_output):
+                    self.assertEqual(main(["review", "--include-lint-blocked", "--json"]), 0)
+                text = review_output.getvalue()
                 self.assertNotIn("reset; rm -rf /", text)
                 self.assertNotIn("hostile manifest bait", text)
 
-    def test_lint_output_sanitizes_strict_yaml_parse_errors(self) -> None:
+    def test_review_output_sanitizes_strict_yaml_parse_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -218,10 +218,10 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                 self.assertEqual(finding["field"], "skillager.yaml")
                 self.assertEqual(finding["detail"], "skillager.yaml failed strict manifest parsing")
 
-                lint_output = StringIO()
-                with redirect_stdout(lint_output):
-                    self.assertEqual(main(["lint", "project/demo", "--json"]), 0)
-                self.assertNotIn("reset; rm -rf /", lint_output.getvalue())
+                review_output = StringIO()
+                with redirect_stdout(review_output):
+                    self.assertEqual(main(["review", "--include-lint-blocked", "--json"]), 0)
+                self.assertNotIn("reset; rm -rf /", review_output.getvalue())
 
     def test_schema_loads_yaml_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -492,17 +492,19 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertTrue((skill_dir / "skillager.yaml").exists())
 
-    def test_manifest_init_cli_writes_sidecar(self) -> None:
+    def test_manifest_init_cli_is_removed_without_writing_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             skill_dir = root / "existing"
             skill_dir.mkdir()
             (skill_dir / "SKILL.md").write_text("# Existing Skill\n\nUse this existing skill.\n", encoding="utf-8")
             stdout = StringIO()
-            with redirect_stdout(stdout):
-                self.assertEqual(main(["manifest", "init", str(root)]), 0)
-            self.assertIn("local/existing: wrote", stdout.getvalue())
-            self.assertTrue((skill_dir / "skillager.yaml").exists())
+            stderr = StringIO()
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                self.assertEqual(main(["manifest", "init", str(root)]), 2)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("`manifest init` was removed", stderr.getvalue())
+            self.assertFalse((skill_dir / "skillager.yaml").exists())
 
     def test_explicit_agent_incompatibility_blocks_native_exposure_until_overridden(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

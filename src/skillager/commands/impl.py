@@ -157,6 +157,48 @@ def _removed_top_level_command(argv: list[str]) -> int | None:
             file=sys.stderr,
         )
         return 2
+    if command == "index":
+        print(
+            "skillager: error: `index` was removed. Discovery and indexing are internal to `skillager setup`, `skillager review`, and metadata commands.",
+            file=sys.stderr,
+        )
+        return 2
+    if command == "scan":
+        print(
+            "skillager: error: `scan` was removed. Static scanning runs during setup and review; use `skillager setup` or `skillager review --summary`.",
+            file=sys.stderr,
+        )
+        return 2
+    if command == "lint":
+        print(
+            "skillager: error: `lint` was removed. Manifest lint runs during setup and review; fix the source or use `skillager review approve <skill-id> --override-lint --reason <reason>` after review.",
+            file=sys.stderr,
+        )
+        return 2
+    if command == "new":
+        print(
+            "skillager: error: `new` was removed from the public CLI. Create native skill directories with external authoring tooling, then run `skillager setup`.",
+            file=sys.stderr,
+        )
+        return 2
+    if command == "manifest":
+        print(
+            "skillager: error: `manifest init` was removed from the public CLI. Skillager discovers SKILL.md-only directories; add skillager.yaml metadata manually when needed.",
+            file=sys.stderr,
+        )
+        return 2
+    if command == "state":
+        print(
+            "skillager: error: `state` was removed. Remove legacy project `.skillager` state after review, then rerun `skillager setup`; Skillager no longer migrates state in place.",
+            file=sys.stderr,
+        )
+        return 2
+    if command == "project":
+        print(
+            "skillager: error: `project` was removed; use `skillager tag list`, `skillager tag show <tag>`, and `skillager tag add/delete` for project tags.",
+            file=sys.stderr,
+        )
+        return 2
     return None
 
 
@@ -219,7 +261,7 @@ def build_parser() -> argparse.ArgumentParser:
               working is a pure-read readiness check and does not emit skill bodies.
               search/list/show without --content are safe metadata commands.
               setup/review approval actions change approval state and need user intent.
-              tag/project/expose may curate or expose only available skills; report changes.
+              tag/expose may curate or expose only available skills; report changes.
               activate/show --content reveal skill bodies and require prior approval.
             """
         ),
@@ -228,28 +270,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"skillager {__version__}")
     parser.add_argument("--state-dir", type=Path, help="Override Skillager state directory.")
     parser.add_argument("--catalog-state-dir", type=Path, help="Override reusable collection/tag catalog state directory.")
-    sub = parser.add_subparsers(required=True)
+    sub = parser.add_subparsers(required=True, metavar="<command>")
 
     add_setup_parser(sub)
     add_doctor_parser(sub)
     add_working_parser(sub)
     add_collection_parser(sub)
     add_tag_parser(sub)
-    add_project_parser(sub)
-    add_state_parser(sub)
-    add_new_parser(sub)
-
-    p = sub.add_parser(
-        "index",
-        help="Discover and index skills.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Discover skills and rebuild the local index. Prefer `setup` in a new environment.",
-        epilog="Examples:\n  skillager index\n  skillager index --no-packages\n  skillager index examples --no-packages --json",
-    )
-    p.add_argument("paths", nargs="*", type=Path, help="Optional skill roots or directories to scan instead of default discovery roots.")
-    p.add_argument("--no-packages", action="store_true", help="Skip installed package skill discovery.")
-    p.add_argument("--json", action="store_true", help="Emit index data as JSON.")
-    p.set_defaults(func=cmd_index)
 
     p = sub.add_parser(
         "list",
@@ -327,32 +354,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_activate)
 
     p = sub.add_parser(
-        "scan",
-        help="Scan one path or all indexed skills.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Run the static safety scanner over a file, skill directory, skill ID, or all indexed skills.",
-        epilog="Examples:\n  skillager scan fastapi/fastapi\n  skillager scan path/to/SKILL.md\n  skillager scan --all --json",
-    )
-    p.add_argument("target", nargs="?")
-    p.add_argument("--all", action="store_true", help="Scan all indexed skills.")
-    p.add_argument("--json", action="store_true", help="Emit scan findings as JSON.")
-    p.set_defaults(func=cmd_scan)
-
-    p = sub.add_parser(
-        "lint",
-        help="Show safe manifest lint findings.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Report Skillager manifest lint findings without printing skill bodies or raw manifest contents.",
-        epilog="Examples:\n  skillager lint\n  skillager lint project/demo\n  skillager lint --json",
-    )
-    p.add_argument("skill_id", nargs="?")
-    p.add_argument("--include-global", action="store_true", help="Include global native skills.")
-    p.add_argument("--json", action="store_true", help="Emit lint findings as JSON.")
-    p.set_defaults(func=cmd_lint)
-
-    p = sub.add_parser(
         "verify-signature",
-        help="Verify a skill's detached OMS signature.",
+        help=argparse.SUPPRESS,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Verify a skill directory with model_signing and a local certificate chain. This is read-only and does not approve the skill.",
         epilog=(
@@ -366,33 +369,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ignore-unsigned-files", "--ignore_unsigned_files", action="store_true", help="Permit extra unsigned files. Strict verification is the default.")
     p.add_argument("--json", action="store_true", help="Emit verification result as JSON.")
     p.set_defaults(func=cmd_verify_signature)
+    _hide_subparser_help(sub, "verify-signature")
 
     add_review_parser(sub)
     add_expose_parser(sub)
-    add_manifest_parser(sub)
 
     return parser
 
 
-def add_manifest_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    p = sub.add_parser(
-        "manifest",
-        help="Manage structured skillager.yaml metadata.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Manage structured skillager.yaml metadata. Skill identity and searchable prose stay derived from SKILL.md and path/source provenance.",
-    )
-    manifest_sub = p.add_subparsers(required=True)
-    init = manifest_sub.add_parser(
-        "init",
-        help="Create minimal skillager.yaml files for existing SKILL.md directories.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Generate minimal structured skillager.yaml metadata for existing skill directories.",
-        epilog="Examples:\n  skillager manifest init ~/.codex/skills\n  skillager manifest init ~/.claude/skills --dry-run --json",
-    )
-    init.add_argument("path", type=Path)
-    init.add_argument("--dry-run", action="store_true", help="Report sidecar files that would be written without writing them.")
-    init.add_argument("--json", action="store_true", help="Emit manifest initialization results as JSON.")
-    init.set_defaults(func=cmd_manifest_init)
+def _hide_subparser_help(sub: argparse._SubParsersAction[argparse.ArgumentParser], name: str) -> None:
+    sub._choices_actions = [action for action in sub._choices_actions if action.dest != name]
 
 
 def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -633,63 +619,6 @@ def add_tag_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> 
     show.set_defaults(func=cmd_tag_show)
 
 
-def add_project_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    p = sub.add_parser(
-        "project",
-        help="Manage project Skillager settings.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Inspect project-local tags. attach-tag/detach-tag are legacy compatibility wrappers for local tag existence/deletion.",
-        epilog=textwrap.dedent(
-            """\
-            Examples:
-              skillager project tags
-              skillager project detach-tag gis
-            """
-        ),
-    )
-    project_sub = p.add_subparsers(required=True)
-    attach = project_sub.add_parser("attach-tag")
-    attach.add_argument("tag")
-    attach.set_defaults(func=cmd_project_attach_tag)
-    detach = project_sub.add_parser("detach-tag")
-    detach.add_argument("tag")
-    detach.set_defaults(func=cmd_project_detach_tag)
-    tags = project_sub.add_parser("tags")
-    tags.add_argument("--json", action="store_true")
-    tags.set_defaults(func=cmd_project_tags)
-
-
-def add_state_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    p = sub.add_parser(
-        "state",
-        help="Manage Skillager local state.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Manage user-local Skillager state. Ordinary commands ignore legacy in-tree .skillager directories.",
-    )
-    state_sub = p.add_subparsers(required=True)
-    migrate = state_sub.add_parser("migrate", help="Import legacy project-local .skillager state after review.")
-    migrate.set_defaults(func=cmd_state_migrate)
-    import_global = state_sub.add_parser("import-global-approvals", help="Import legacy in-tree reusable approvals after explicit review.")
-    import_global.set_defaults(func=cmd_state_import_global_approvals)
-    migrate_tags = state_sub.add_parser("migrate-tags", help="Copy legacy global tag attachments into project-local tag files.")
-    migrate_tags.add_argument("--to", choices=["projects"], required=True)
-    migrate_tags.add_argument("--json", action="store_true")
-    migrate_tags.set_defaults(func=cmd_state_migrate_tags)
-
-
-def add_new_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    p = sub.add_parser(
-        "new",
-        help="Create a new authored native skill in this project.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Scaffold a project-local native skill and record authored metadata for fast review UX. This does not approve the skill.",
-        epilog="Examples:\n  skillager new gis-workflow\n  skillager new project/gis-workflow --agent claude",
-    )
-    p.add_argument("skill_id", help="Skill id or slug. The final path component becomes the native skill directory name.")
-    p.add_argument("--agent", choices=["codex", "claude"], default="codex", help="Native agent directory to create. Defaults to codex.")
-    p.set_defaults(func=cmd_new)
-
-
 def add_review_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "review",
@@ -819,7 +748,7 @@ def root(args: argparse.Namespace) -> Path:
         resolved = args.state_dir.resolve()
     else:
         resolved = state_root()
-        if os.environ.get("SKILLAGER_STATE_DIR") is None and getattr(args, "func", None) not in {cmd_state_migrate, cmd_state_import_global_approvals, cmd_state_migrate_tags}:
+        if os.environ.get("SKILLAGER_STATE_DIR") is None:
             _warn_legacy_project_state(resolved)
     setattr(args, "_skillager_state_root", resolved)
     return resolved
@@ -878,20 +807,45 @@ def _review_action_from_args(args: argparse.Namespace) -> str | None:
 
 
 def _warn_legacy_project_state(new_state_root: Path) -> None:
-    legacy = legacy_project_state_root()
-    if not legacy or not legacy.exists():
+    legacy_state = _legacy_project_state_report(new_state_root)
+    if not legacy_state.get("present"):
         return
-    try:
-        legacy_entries = [entry for entry in legacy.iterdir() if entry.name != "tags.json"]
-    except OSError:
-        legacy_entries = [legacy]
-    if not legacy_entries:
-        return
+    legacy = legacy_state["path"]
     print(
         f"skillager: ignoring legacy in-tree state at {legacy}; using {new_state_root}. "
-        "Run `skillager state migrate` to import reviewed project-local state.",
+        "Remove the legacy directory after review, then rerun `skillager setup`; Skillager no longer migrates legacy state in place.",
         file=sys.stderr,
     )
+
+
+def _legacy_project_state_report(new_state_root: Path, *, project_dir: Path | None = None) -> dict[str, Any]:
+    if os.environ.get("SKILLAGER_STATE_DIR") is not None:
+        return {"present": False}
+    legacy = legacy_project_state_root(project_dir)
+    if not legacy or not legacy.exists():
+        return {"present": False}
+    try:
+        if legacy.resolve() == new_state_root.resolve():
+            return {"present": False}
+    except OSError:
+        pass
+    entries = _legacy_project_state_entries(legacy)
+    if not entries:
+        return {"present": False}
+    return {
+        "present": True,
+        "path": str(legacy),
+        "entries": entries,
+        "action": "remove-legacy-state-and-rerun-setup",
+        "migration": "not-supported",
+    }
+
+
+def _legacy_project_state_entries(legacy: Path) -> list[str]:
+    try:
+        return sorted(entry.name for entry in legacy.iterdir() if entry.name != "tags.json")
+    except OSError:
+        return [legacy.name]
 
 
 def cmd_collection_add(args: argparse.Namespace) -> int:
@@ -1147,11 +1101,16 @@ def _select_sync_tags(data: dict[str, Any], tag: str | None) -> dict[str, dict[s
 
 def cmd_tag_list(args: argparse.Namespace) -> int:
     data = project_tags.load_tags(_current_project_dir())
+    tag_names = sorted(data.get("tags", {}))
     if args.json:
-        print(json.dumps(data, indent=2, sort_keys=True))
+        payload = dict(data)
+        payload["attached_tags"] = tag_names
+        payload["tag_summaries"] = [_tag_available_summary(summary) for summary in _tag_trust_summaries(root(args), catalog_root(args), tag_names)]
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        for tag, entry in sorted(data.get("tags", {}).items()):
-            print(f"{tag}\t{len(entry.get('skills') or [])} skill(s)")
+        for summary in _tag_trust_summaries(root(args), catalog_root(args), tag_names):
+            print(_tag_summary_line(summary))
+            _print_tag_review_warning(summary, indent="  ")
     return 0
 
 
@@ -1678,7 +1637,7 @@ def _print_no_manifest_skill_summary(summary: dict[str, Any]) -> None:
     print(
         "No-manifest skills discovered: "
         f"{count}{suffix}. "
-        "`skillager manifest init` is only needed if you want structured audience/activation metadata."
+        "Structured skillager.yaml metadata is optional; add it manually when you need audience or activation metadata."
     )
 
 
@@ -1904,6 +1863,7 @@ def _build_visible_skill_view(
         "tagging": tagging,
         "duplicate_content": duplicate_content_summary(skills),
         "readiness": readiness,
+        "legacy_state": _legacy_project_state_report(state_root, project_dir=project_dir),
     }
 
 
@@ -2297,6 +2257,7 @@ def _build_doctor_result(
 
 def _doctor_state(view: dict[str, Any]) -> dict[str, Any]:
     return {
+        "legacy_state": view.get("legacy_state") or {"present": False},
         "review": {
             "needed": len(view["review_needed"]),
             "ids": [skill["id"] for skill in view["review_needed"]],
@@ -2316,13 +2277,23 @@ def _doctor_state(view: dict[str, Any]) -> dict[str, Any]:
 
 
 def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, Any]:
+    legacy_state = view.get("legacy_state") or {}
+    if legacy_state.get("present"):
+        command, next_commands = _doctor_setup_next(agent)
+        return _doctor_issue(
+            "legacy-state-detected",
+            DOCTOR_EXIT_MANUAL_REPAIR,
+            f"Legacy in-tree state exists at {legacy_state.get('path')}. Remove that directory after review, then rerun setup. Skillager no longer migrates legacy state in place.",
+            command,
+            next_commands=next_commands,
+        )
     if view["lint_blocked"]:
         count = len(view["lint_blocked"])
         return _doctor_issue(
             "lint-blocked",
             DOCTOR_EXIT_LINT_BLOCKED,
             f"{count} skill(s) are lint-blocked. Fix the source or approve with an audited override.",
-            "skillager lint",
+            "skillager review --include-lint-blocked --summary",
         )
     if view["authored_unreviewed"]:
         count = len(view["authored_unreviewed"])
@@ -3383,7 +3354,7 @@ def _status_message(
     readiness: dict[str, Any] | None = None,
 ) -> str:
     if lint_blocked:
-        return f"Skillager: {len(lint_blocked)} skill(s) are lint-blocked. Run `skillager lint` and fix the source or approve with an audited override."
+        return f"Skillager: {len(lint_blocked)} skill(s) are lint-blocked. Inspect setup/review output, then fix the source or approve with an audited override."
     if migration_summary and migration_summary.get("pending"):
         totals = migration_summary.get("totals", {})
         return (
@@ -3441,7 +3412,7 @@ def _print_status(status: dict[str, Any]) -> None:
         print(f"  - authored pending owner review: {authored['count']}")
     print(f"  - pending owner review: {status['review_needed']}")
     if status.get("lint_blocked"):
-        print(f"  - lint blocked: {status['lint_blocked']} (run `skillager lint`)")
+        print(f"  - lint blocked: {status['lint_blocked']} (inspect setup/review output)")
     _print_duplicate_content_status(status.get("duplicate_content") or {}, indent="  - ")
     manifest_lint = status.get("manifest_lint") or {}
     if manifest_lint.get("warned"):
@@ -4274,7 +4245,9 @@ def cmd_activate(args: argparse.Namespace) -> int:
         include_lint_blocked=True,
     )
     if skill.get("trust") == "lint_blocked":
-        raise ValueError(f"skill is lint-blocked: {args.skill_id}; run skillager lint and fix the source or approve with --override-lint --reason")
+        raise ValueError(
+            f"skill is lint-blocked: {args.skill_id}; inspect setup/review output, then fix the source or approve with --override-lint --reason"
+        )
     if args.from_router:
         _validate_router_activation(root(args), catalog_root(args), args.from_router, skill)
     if args.from_stub:
