@@ -37,8 +37,16 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 output = StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                    self.assertEqual(main(["collection", "search", "community", "gis"]), 0)
-                self.assertIn("community/gis-domain", output.getvalue())
+                self.assertIn("community: indexed 1 skill(s)", output.getvalue())
+
+                collection_review = StringIO()
+                with redirect_stdout(collection_review):
+                    self.assertEqual(main(["review", "--collection", "community", "--json"]), 0)
+                collection_review_data = json.loads(collection_review.getvalue())
+                self.assertEqual([skill["id"] for skill in collection_review_data["selected"]], ["community/gis-domain"])
+                self.assertEqual(collection_review_data["selected"][0]["scan"]["risk"], "low")
+                self.assertEqual(collection_review_data["selected"][0]["lint"]["status"], "ok")
+                self.assertNotIn("# GIS Domain", collection_review.getvalue())
 
                 unattached = StringIO()
                 with redirect_stdout(unattached):
@@ -71,7 +79,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertEqual(review_data["summary"]["by_trust"], {"reviewed": 1})
 
                 with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 0)
+                    self.assertEqual(main(["tag", "add", "gis", "--from-collection", "community", "--sync"]), 0)
 
                 raw_collection_review = StringIO()
                 with redirect_stdout(raw_collection_review):
@@ -110,14 +118,6 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertNotIn("by_risk", inventory_data["counts"])
                 self.assertNotIn("risk", inventory_data["skills"][0])
 
-                scan_output = StringIO()
-                with redirect_stdout(scan_output):
-                    self.assertEqual(main(["collection", "show", "community/gis-domain", "--json"]), 0)
-                scan_data = json.loads(scan_output.getvalue())
-                self.assertEqual(scan_data["scan"]["risk"], "low")
-                self.assertEqual(scan_data["lint"]["status"], "ok")
-                self.assertNotIn("# GIS Domain", scan_output.getvalue())
-
                 collection_text = StringIO()
                 with redirect_stdout(collection_text):
                     self.assertEqual(main(["collection", "list"]), 0)
@@ -144,13 +144,6 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertNotIn("scan", show_data["skill"])
                 self.assertNotIn("lint", show_data["skill"])
 
-                collection_show = StringIO()
-                with redirect_stdout(collection_show):
-                    self.assertEqual(main(["collection", "show", "community/gis-domain", "--json"]), 0)
-                collection_data = json.loads(collection_show.getvalue())
-                self.assertNotIn("availability", collection_data)
-                self.assertNotIn("exposure", collection_data)
-
     def test_collection_lint_blocked_entries_are_diagnostic_only_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -175,29 +168,75 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
 
-                default_search = StringIO()
-                with redirect_stdout(default_search):
-                    self.assertEqual(main(["collection", "search", "community", "community/bad", "--json"]), 0)
-                self.assertEqual(json.loads(default_search.getvalue()), [])
-
-                hidden_show = StringIO()
-                with redirect_stderr(hidden_show):
-                    self.assertEqual(main(["collection", "show", "community/bad", "--json"]), 2)
+                default_review = StringIO()
+                with redirect_stdout(default_review):
+                    self.assertEqual(main(["review", "--collection", "community", "--json"]), 0)
+                default_data = json.loads(default_review.getvalue())
+                self.assertEqual([skill["id"] for skill in default_data["selected"]], ["community/gis-domain"])
 
                 diagnostic_show = StringIO()
                 with redirect_stdout(diagnostic_show):
-                    self.assertEqual(main(["collection", "show", "community/bad", "--include-lint-blocked", "--json"]), 0)
-                diagnostic = json.loads(diagnostic_show.getvalue())
+                    self.assertEqual(main(["review", "--collection", "community", "--include-lint-blocked", "--json"]), 0)
+                diagnostic_data = json.loads(diagnostic_show.getvalue())
+                diagnostic = next(skill for skill in diagnostic_data["selected"] if skill["id"] == "community/bad")
                 self.assertEqual(diagnostic["trust"], "lint_blocked")
                 self.assertNotIn("hostile collection bait", diagnostic_show.getvalue())
 
                 with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["collection", "enable", "community", "--tag", "all"]), 0)
+                    self.assertEqual(main(["setup", "--source", "collection", "--accept-low", "--json"]), 0)
+                    self.assertEqual(main(["tag", "add", "all", "--from-collection", "community", "--sync"]), 0)
                 tag_output = StringIO()
                 with redirect_stdout(tag_output):
                     self.assertEqual(main(["tag", "show", "all", "--json"]), 0)
                 tag_data = json.loads(tag_output.getvalue())
-                self.assertEqual([skill["id"] for skill in tag_data["skills"]], [])
+                self.assertEqual([skill["id"] for skill in tag_data["skills"]], ["community/gis-domain"])
+
+    def test_removed_collection_subcommands_return_replacement_guidance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            error = StringIO()
+            with (
+                redirect_stderr(error),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 2)
+            self.assertIn("`collection enable` was removed", error.getvalue())
+            self.assertIn("skillager tag add <tag> --from-collection <collection> --sync", error.getvalue())
+
+            help_output = StringIO()
+            with (
+                redirect_stdout(help_output),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+                self.assertRaises(SystemExit) as help_exit,
+            ):
+                main(["collection", "--help"])
+            self.assertEqual(help_exit.exception.code, 0)
+            self.assertNotIn("collection search", help_output.getvalue())
+            self.assertNotIn("collection show", help_output.getvalue())
+
+            for command, replacement, args in (
+                ("search", "skillager search <query>", ["collection", "search", "community", "gis"]),
+                ("show", "skillager show <skill-id>", ["collection", "show", "community/gis-domain"]),
+            ):
+                removed_error = StringIO()
+                with (
+                    redirect_stderr(removed_error),
+                    patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                    patch("pathlib.Path.home", return_value=root),
+                    chdir(root),
+                ):
+                    self.assertEqual(main(args), 2)
+                message = removed_error.getvalue()
+                self.assertIn(f"`collection {command}` was removed", message)
+                self.assertIn(replacement, message)
+                self.assertIn("skillager review --collection <name> --summary", message)
+                self.assertIn("skillager review --collection <name> --include-lint-blocked --json", message)
+                self.assertIn("skillager tag add <tag> --from-collection <collection> --sync", message)
 
     def test_tag_add_from_collection_and_sync(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -939,6 +978,8 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 working_data = json.loads(working_output.getvalue())
                 self.assertEqual(working_data["readiness"]["exposure"]["exposed"], 1)
                 self.assertEqual(working_data["readiness"]["exposure"]["router_tags"], 1)
+                self.assertEqual(working_data["readiness"]["exposure"]["exposed_router_tags"], ["gis"])
+                self.assertNotIn("materialized_router_tags", working_data["readiness"]["exposure"])
 
                 activate_output = StringIO()
                 with redirect_stdout(activate_output):
@@ -1300,7 +1341,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
-                    self.assertEqual(main(["collection", "enable", "community", "--tag", "all"]), 0)
+                    self.assertEqual(main(["tag", "add", "all", "--from-collection", "community", "--sync"]), 0)
                     self.assertEqual(main(["expose", "--tag", "all", "--mode", "router", "--agent", "codex"]), 0)
             router = root / ".agents" / "skills" / "skillager-all" / "SKILL.md"
             router_text = router.read_text(encoding="utf-8")

@@ -176,7 +176,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
             legacy = (
-                "Run `skillager working` at session start. Use only reviewed/materialized Skillager-managed skills; "
+                "Run `skillager working` at session start. Use only reviewed/exposed Skillager-managed skills; "
                 "ask the user to run `skillager doctor --agent codex` if review or repair is needed."
             )
             (root / "AGENTS.md").write_text(
@@ -484,7 +484,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             self.assertIn("source_type: skillager-stub", sidecar)
             data = json.loads(output.getvalue())
             self.assertEqual(data["skill"]["exposure"], "stub")
-            self.assertEqual(data["skill"]["materialized_targets"][0]["kind"], "stub")
+            self.assertEqual(data["skill"]["exposed_via"][0]["kind"], "stub")
             self.assertIn("# Demo Skill", activated.getvalue())
 
     def test_materialize_stub_uses_skill_id_for_generic_source_heading(self) -> None:
@@ -523,7 +523,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}), patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root), redirect_stdout(listing):
                 self.assertEqual(main(["list", "--no-packages", "--json", "--full-json"]), 0)
             skill = json.loads(listing.getvalue())[0]
-            self.assertEqual(skill["materialized_targets"][0]["status"], "existing")
+            self.assertEqual(skill["exposure_targets"][0]["exposure_status"], "existing")
             self.assertFalse((state / "native_inventory.json").exists())
 
     def test_materialize_copies_supporting_files(self) -> None:

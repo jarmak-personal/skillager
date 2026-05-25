@@ -21,7 +21,7 @@ Availability is the eligibility gate. Agent-facing Skillager commands only surfa
 
 ## Safe Metadata Commands
 
-These commands do not expose full skill bodies. In a project, normal `list`, `search`, and `show` use effective project inventory: project skills, package/environment skills, and attached collection-tag skills that are available to the current project. `list` hides global native skills by default; pass `--include-global` only when the user is asking about global inventory.
+These commands do not expose full skill bodies. In a project, normal `list`, `search`, and `show` use effective project inventory: project skills, package/environment skills, and reviewed collection skills that are available to the current project. `list` hides global native skills by default; pass `--include-global` only when the user is asking about global inventory.
 
 ```bash
 skillager working --agent codex --json
@@ -29,10 +29,11 @@ skillager list --summary-json --agent codex
 skillager show <skill-id> --json
 skillager search "<user goal>" --json
 skillager tag show <tag> --json
+skillager tag list --json
 ```
 
-Use `collection search/show` only for catalog management or debugging. For project work, prefer the normal project-aware commands above.
-`working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, and `search --json` are intentionally compact for agent use. Do not use `--full-json` during normal project work; reserve it for explicit user-directed Skillager diagnostics.
+Use `review --collection <name> --summary` or `review --collection <name> --json` only for owner-directed collection review/diagnostics. For project work, prefer the normal project-aware commands above.
+`working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, `tag list --json`, and `search --json` are intentionally compact for agent use. Do not use `--full-json` during normal project work; reserve it for explicit user-directed Skillager diagnostics.
 Project-aware JSON includes:
 
 - `availability`: where the skill comes from in this project context.
@@ -89,6 +90,7 @@ Add relevant available skills to a focused tag when a project or session theme e
 
 ```bash
 skillager tag add gis vibespatial/gis-domain vibespatial/dispatch-wiring
+skillager tag add workflows --from-collection community --sync
 ```
 
 Prefer router exposure for broad tags:
@@ -149,6 +151,11 @@ These commands curate or expose available skills. They are agent-managed after t
 
 ```bash
 skillager tag add <tag> <skill-id> [<skill-id> ...]
+skillager tag add <tag> --from-collection <collection> --sync
+skillager tag show <tag>
+skillager tag list
+skillager tag delete <tag>
+skillager tag sync --from <project> --to <project>
 skillager expose --tag <tag> --mode router --agent codex --scope project
 skillager expose <skill-id> <skill-id> --mode router --agent codex --scope project
 skillager expose <skill-id> --mode stub --agent codex --scope project

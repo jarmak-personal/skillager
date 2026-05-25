@@ -7,7 +7,8 @@
     "skillager list --summary-json --agent codex",
     "skillager search <query> --agent codex --json",
     "skillager show <skill-id> --json",
-    "skillager tag show <tag> --json"
+    "skillager tag show <tag> --json",
+    "skillager tag list --json"
   ],
   "deliberately_excluded": [
     "skillager doctor",

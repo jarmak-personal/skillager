@@ -35,7 +35,7 @@ Run `skillager doctor --agent codex` when the state seems off or the agent is st
 - `blocked`: hidden from normal search, activation, and exposure.
 - `lint_blocked`: manifest or structure failed a blocking lint rule; hidden from normal list/search/show/expose flows until fixed or explicitly overridden.
 
-Agent-facing commands hide `discovered` and `lint_blocked` skills from normal use. Use setup, review, doctor, or `collection show --include-lint-blocked` yourself when you want to inspect why a skill is not available.
+Agent-facing commands hide `discovered` and `lint_blocked` skills from normal use. Use setup, review, doctor, or `review --collection <name> --include-lint-blocked --json` yourself when you want to inspect why a skill is not available.
 
 For diagnostics, full JSON and review output split this into `approval` plus `review_gates`: scan risk, lint status, signature verification status, and availability reason. For example, an unreviewed low-risk signed skill may show `approval=unreviewed scan=low lint=ok signature=not_checked availability=blocked_until_review`.
 
@@ -53,7 +53,7 @@ For author and CI checks, use the standalone linter to inspect safe lint finding
 uvx --from skillager-linter skillager-lint .
 ```
 
-At runtime, setup/review diagnostics and `skillager collection show <skill-id> --include-lint-blocked` report finding codes, fields, and safe details. They do not print skill bodies or raw manifest contents. Fix lint-blocked manifests when possible. To approve one anyway, use an explicit audited override:
+At runtime, setup/review diagnostics and `skillager review --collection <name> --include-lint-blocked --json` report finding codes, fields, and safe details. They do not print skill bodies or raw manifest contents. Fix lint-blocked manifests when possible. To approve one anyway, use an explicit audited override:
 
 ```bash
 skillager review approve <skill-id> --override-lint --reason "Reviewed manifest and accepted the finding"
@@ -89,6 +89,11 @@ skillager review pin <skill-id> --project-only
 skillager review block <skill-id>
 skillager review unblock <skill-id>
 skillager tag add gis vibespatial/gis-domain
+skillager tag add workflows --from-collection community --sync
+skillager tag show workflows
+skillager tag list
+skillager tag delete workflows
+skillager tag sync --from ../project-a --to .
 skillager expose --tag gis --mode router --agent codex --scope project
 skillager expose <skill-id> <skill-id> --mode router --agent codex --scope project
 skillager expose <skill-id> --mode stub --agent codex --scope project
@@ -96,7 +101,7 @@ skillager expose <skill-id> --mode stub --agent codex --scope project
 
 Use a tag router for a named reusable group, or pass explicit skill IDs for a deterministic ad-hoc router without creating a tag. Router exposure writes compact available metadata only, not full skill bodies, and skips unavailable or incompatible members. The expose output and JSON give the router exposure id/slug; activate a listed skill with `skillager activate <skill-id> --from-router <router-slug>`.
 
-Use `--json` when another program needs stable output. `working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, and `search --json` are compact and available-only for agent use; pass `--full-json` for explicit user-directed Skillager diagnostics where available. Agents should use `working --agent <agent> --json`, `search --agent <agent> --json`, `list --summary-json --agent <agent>`, and project tag metadata to build their own candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `doctor --json` and `setup --summary-json` for owner-run diagnostics and setup automation.
+Use `--json` when another program needs stable output. `working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, `tag list --json`, and `search --json` are compact and available-only for agent use; pass `--full-json` for explicit user-directed Skillager diagnostics where available. Agents should use `working --agent <agent> --json`, `search --agent <agent> --json`, `list --summary-json --agent <agent>`, and project tag metadata to build their own candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `doctor --json` and `setup --summary-json` for owner-run diagnostics and setup automation.
 
 For a project-local automation smoke flow:
 
@@ -119,9 +124,9 @@ Use `skillager setup --fresh` to clear only project-local trust decisions for th
 
 `skillager list` shows the effective project inventory and hides global native skills unless you pass `--include-global`. Use `skillager list --no-packages` when you want local project, registered collection, and project-tag inventory without installed package skills. Use `skillager list --summary-json --agent codex` when an agent needs compact orientation: it includes counts, every listed skill ID, and duplicate native-variant hints. Use `skillager list --json --full-json` only for verbose Skillager diagnostics.
 
-Collection repositories are user-global catalog inventory. Ordinary `skillager setup` includes registered collection skills; `skillager setup --collection <name> --agent codex` narrows review to one collection. For a fully trusted collection, use `skillager setup --collection <name> --bulk-approve --agent codex`; `--yolo` is the optional alias. After review, available collection skills are searchable from any project using the same catalog. Use project-local tags only when you want task/project curation or router/stub exposure.
+Collection repositories are user-global catalog inventory for source administration, review, refresh, and debugging. Ordinary `skillager setup` includes registered collection skills; `skillager setup --collection <name> --agent codex` narrows review to one collection. For a fully trusted collection, use `skillager setup --collection <name> --bulk-approve --agent codex`; `--yolo` is the optional alias. After review, available collection skills are searchable from any project using the same catalog. Use project-local tags when you want task/project curation or router/stub exposure.
 
-Tags are project-local curation. Users can curate them manually, and agents can maintain them after setup by adding available skills that match the current project or task. `tag add` accepts available registered collection skill IDs and available IDs from the current project inventory, including skills from auto-discovered child repositories.
+Tags are project-local curation. Users can curate them manually, and agents can maintain them after setup by adding available skills that match the current project or task. `tag add` accepts available registered collection skill IDs and available IDs from the current project inventory, including skills from auto-discovered child repositories. Use `skillager tag add <tag> --from-collection <collection> --sync` to create or refresh a project tag from a reviewed collection; use `tag show`, `tag list`, `tag delete`, and `tag sync` for ongoing tag management.
 
 Setup and doctor repair keep a best-effort registry of known project paths in the user catalog. It is only for tag discovery/sync convenience; missing or stale entries do not affect normal project operation. Use `skillager tag sync --from <project> --to .` to copy tag curation explicitly between projects, or recreate older global tag attachments with `skillager tag add` after review.
 

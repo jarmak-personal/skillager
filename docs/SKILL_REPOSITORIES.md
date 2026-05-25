@@ -2,15 +2,14 @@
 
 Many users have repositories full of skills. Skillager treats those repositories as collections.
 
-Collections are user-global inventory. Project-local tags are optional curation for routers, stubs, and task-specific grouping.
+Collections are user-global source inventory for administration, review, refresh, and catalog debugging. Project-local tags are the project curation surface for routers, stubs, and task-specific grouping.
 
 ## Add A Skill Repository
 
 ```bash
 git clone <repo-url> ~/skills/community
 skillager collection add ~/skills/community --name community
-skillager collection search community gis
-skillager collection show community/gis-domain
+skillager review --collection community --summary
 ```
 
 Adding a collection does not expose skills to agents. It registers inventory only. Run setup once to review the collection; after approval, unchanged collection skills are searchable from any project that uses the same Skillager catalog.
@@ -27,7 +26,7 @@ Ordinary `skillager setup --agent <agent>` also includes registered collections.
 
 `setup --collection <name> --agent <agent>` reviews that registered collection and refreshes that agent's first-party working artifacts after approval. If review is complete but `working --agent <agent> --json` still reports missing or stale artifacts, run `skillager doctor --agent <agent> --fix`.
 
-Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager collection show <skill-id> --include-lint-blocked` to inspect them without printing hostile manifest contents. Repository authors can run `uvx --from skillager-linter skillager-lint .` in CI before publishing.
+Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager review --collection <name> --include-lint-blocked --json` to inspect them without printing hostile manifest contents. Repository authors can run `uvx --from skillager-linter skillager-lint .` in CI before publishing.
 
 ## Curate With Tags
 
@@ -36,16 +35,17 @@ After review, collection skills are already part of effective project inventory.
 ```bash
 skillager tag add gis community/gis-domain community/topology community/projections
 skillager tag add gis vibespatial/gis-domain
-skillager tag add all-community --from-collection community
 skillager tag add all-community --from-collection community --sync
-skillager collection enable community
+skillager tag show all-community
+skillager tag list
+skillager tag delete old-community
 skillager tag show gis
 skillager tag sync --from ../other-project --to .
 ```
 
-`collection enable <name>` is a convenience wrapper that creates or updates a project-local tag for the collection's available reviewed skills. Blocked, unreviewed, and lint-blocked skills are not added by the default enable flow.
+`tag add <tag> --from-collection <collection> --sync` creates or updates a project-local tag from that collection's available reviewed skills. Blocked, unreviewed, and lint-blocked skills are not added to the synced tag.
 
-Tags live in `<project>/.skillager/tags.json`. `tag add` accepts available registered collection skill IDs and available current project inventory IDs. This lets agents maintain useful project tags after setup while user-authority review stays in the global trust/catalog state.
+Tags live in `<project>/.skillager/tags.json`. `tag add` accepts available registered collection skill IDs and available current project inventory IDs. Use `tag show`, `tag list`, `tag delete`, and `tag sync` for project curation. This lets agents maintain useful project tags after setup while user-authority review stays in the global trust/catalog state.
 Tag show/search commands hide lint-blocked skills unless you pass `--include-lint-blocked` for diagnostics. That flag only changes read-only visibility; it never approves or exposes a skill.
 
 Project tags do not broadcast live across repositories. Use `tag sync --from <project> --to <project>` for an explicit copy, or `--to-all` to copy to known projects recorded by setup or doctor repair.
@@ -56,6 +56,7 @@ From the project directory:
 
 ```bash
 skillager tag add gis community/gis-domain
+skillager tag add workflows --from-collection community --sync
 skillager tag list
 ```
 
@@ -73,7 +74,7 @@ skillager show community/gis-domain --json
 skillager list --summary-json --agent codex
 ```
 
-`skillager collection search/show` remains useful for catalog management and debugging. Use `--include-lint-blocked` only when diagnosing rejected collection entries.
+Use `skillager review --collection <name> --summary` or `--json` for collection review and diagnostics. Use `--include-lint-blocked` only when diagnosing rejected collection entries.
 
 ## Router Mode
 

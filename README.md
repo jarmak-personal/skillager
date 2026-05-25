@@ -56,7 +56,7 @@ Exposure modes:
 
 Routers expose compact available metadata only, not full skill bodies. Unavailable or incompatible members are skipped. `expose` output and JSON include the router exposure id/slug; activate a listed skill with `skillager activate <skill-id> --from-router <router-slug>`.
 
-Metadata commands stay metadata-only. `doctor`, `working`, `list`, `search`, `show` without `--content`, `tag show`, and summary JSON outputs do not reveal full skill bodies.
+Metadata commands stay metadata-only. `doctor`, `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, and summary JSON outputs do not reveal full skill bodies.
 
 ## Daily Commands
 
@@ -65,7 +65,10 @@ Metadata commands stay metadata-only. `doctor`, `working`, `list`, `search`, `sh
 - Diagnose state: `skillager doctor --agent codex`
 - Repair first-party working artifacts: `skillager doctor --agent codex --fix`
 - Create or update a project tag: `skillager tag add spatial-python vibespatial/gis-domain`
+- Create or refresh a project tag from a collection: `skillager tag add workflows --from-collection workflows --sync`
+- List tags: `skillager tag list`
 - Inspect a tag: `skillager tag show spatial-python`
+- Delete a tag: `skillager tag delete spatial-python`
 - Expose a tag as one router skill: `skillager expose --tag spatial-python --mode router --agent codex --scope project`
 - Expose selected skills as one deterministic router without a tag: `skillager expose vibespatial/gis-domain vibespatial/dispatch-wiring --mode router --agent codex --scope project`
 - Expose one skill as a stub: `skillager expose vibespatial/gis-domain --mode stub --agent codex --scope project`
@@ -75,17 +78,19 @@ For agent permission prompts, Skillager ships example read-only allowlists in [`
 
 ## Collections
 
-Skill repositories, shared skills, any grouping of skills etc are collections to skillager. Collections are a global inventory; project-local tags are optional project-level curation.
+Skill repositories, shared skills, and other reusable skill roots are collections to Skillager. Collections are user-global source inventory for administration and review; project-local tags are the project curation surface.
 
 ```bash
 skillager collection add ~/skills/workflows --name workflows
 skillager setup --collection workflows --agent codex
 skillager search "release workflow" --agent codex --json  # Usually run by your agent
 ```
-For a fully trusted personal or company collection, use `skillager setup --collection workflows --bulk-approve --agent codex`; `--yolo` is the fun alias for the same bulk approval path. After review, collection skills are searchable from any project on your machine. Use project-local tags only when you want a curated group or router/stub exposure:
+For a fully trusted personal or company collection, use `skillager setup --collection workflows --bulk-approve --agent codex`; `--yolo` is the fun alias for the same bulk approval path. After review, collection skills are searchable from any project on your machine. Use project-local tags when you want a curated group or router/stub exposure:
 
 ```bash
-skillager tag add workflows --from-collection workflows
+skillager tag add workflows --from-collection workflows --sync
+skillager tag show workflows
+skillager tag list
 skillager expose --tag workflows --mode router --agent codex --scope project
 ```
 

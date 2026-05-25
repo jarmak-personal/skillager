@@ -5,9 +5,9 @@ description: "Run a repeatable black-box Skillager setup and working-readiness s
 
 # Simulate Skillager Setup
 
-Use when testing a new Skillager build end to end from a user's point of view, especially after changes to discovery, manifests, setup, working readiness, materialization, package handling, or collection handling.
+Use when testing a new Skillager build end to end from a user's point of view, especially after changes to discovery, manifests, setup, working readiness, exposure, package handling, or collection handling.
 
-The goal is a black-box workflow test. Do not inspect Skillager source while running the simulation. Use command output, generated files, and the materialized Skillager Working skill as evidence.
+The goal is a black-box workflow test. Do not inspect Skillager source while running the simulation. Use command output, generated files, and the exposed Skillager Working skill as evidence.
 
 Do not reveal the test harness to the product flow. The main session may know
 this is a black-box UX run; the worker should not be told. Any answers typed
@@ -77,7 +77,7 @@ skillager working --agent codex
 skillager working --agent codex --json
 ```
 
-6. From this point on, do not use this skill as product guidance. Follow only what Skillager exposed through setup output, generated project files, materialized skills, and working output.
+6. From this point on, do not use this skill as product guidance. Follow only what Skillager exposed through setup output, generated project files, exposed skills, and working output.
 
 Use this scripted user answer when Skillager or the agent workflow asks what the user plans to do:
 
@@ -85,7 +85,7 @@ Use this scripted user answer when Skillager or the agent workflow asks what the
 I am going to do large-scale GIS and spatial data work in Python, including workflows where vibespatial may be relevant.
 ```
 
-Run the commands that Skillager's own working output and materialized working skill lead you to run. If they do not make the next step discoverable, report that as a product issue instead of filling in missing process from prior knowledge.
+Run the commands that Skillager's own working output and exposed working skill lead you to run. If they do not make the next step discoverable, report that as a product issue instead of filling in missing process from prior knowledge.
 
 Only run `skillager manifest init` when explicitly creating metadata sidecars for existing skills. It is not the normal post-setup agent readiness command.
 
@@ -104,7 +104,7 @@ Include:
 - Which commands you chose after working readiness, and what product guidance caused you to choose them.
 - What approved inventory or search results were available, if Skillager guided you to inspect them.
 - Any candidate skills, groups, tags, or exposure choices Skillager led you to consider.
-- The tag/materialization command, if any, and the follow-up working result.
+- The tag/exposure command, if any, and the follow-up working result.
 - Any lint-blocked or scanner findings that affected the flow.
 - Whether the experience was good or bad, with concrete reasons.
 - Product changes you would make, ranked by impact.

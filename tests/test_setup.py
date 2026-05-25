@@ -202,7 +202,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertTrue(data["working_artifacts"]["performed"])
             self.assertTrue(data["working_artifacts"]["ready"])
             self.assertEqual(data["working_artifacts"]["agents"], ["codex"])
-            self.assertEqual(data["working_artifacts"]["summary"]["by_status"], {"materialized": 2})
+            self.assertEqual(data["working_artifacts"]["summary"]["by_status"], {"written": 2})
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
             status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
@@ -503,7 +503,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 chdir(project),
             ):
                 self.assertEqual(main(["setup", "--source", "project", "--fresh-project", "--accept-low", "--agent", "codex", "--no-packages"]), 0)
-            self.assertIn("skillager/working: materialized", output.getvalue())
+            self.assertIn("skillager/working: written", output.getvalue())
             self.assertTrue((project / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertTrue((project / "AGENTS.md").exists())
 
@@ -524,7 +524,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
                     self.assertEqual(main(["setup", "--source", "collection", "--accept-low"]), 0)
-                    self.assertEqual(main(["collection", "enable", "community"]), 0)
+                    self.assertEqual(main(["tag", "add", "community", "--from-collection", "community", "--sync"]), 0)
                 sessions = state / "sessions"
                 sessions.mkdir(parents=True)
                 (sessions / "sks_deadbeef.jsonl").write_text("{}\n", encoding="utf-8")
@@ -808,7 +808,7 @@ class SkillagerSetupTests(unittest.TestCase):
             text = stdout.getvalue()
             self.assertIn("project/api-example: skipped; remains unreviewed", text)
             self.assertIn("Review complete. Install Skillager working skill", text)
-            self.assertIn("skillager/working: materialized", text)
+            self.assertIn("skillager/working: written", text)
             self.assertIn("Skillager setup complete", text)
             self.assertIn("What you have", text)
             self.assertIn("Stub candidates", text)
