@@ -63,7 +63,10 @@ class SkillagerCoreTests(unittest.TestCase):
     def test_top_level_help_points_agents_to_agentic_setup_flow(self) -> None:
         help_text = build_parser().format_help()
         self.assertIn("skillager working", help_text)
-        self.assertIn("skillager handoff", help_text)
+        self.assertIn("skillager doctor", help_text)
+        self.assertNotIn("skillager " + "handoff", help_text)
+        self.assertNotIn("skillager " + "status", help_text)
+        self.assertNotIn("skillager " + "bootstrap", help_text)
         self.assertIn("Continue silently unless the task may benefit from a skill", help_text)
         self.assertIn("Tag available skills and expose a narrow router, stub, native skill, or no new exposure", help_text)
         self.assertIn("Do not activate or expose unavailable skills", help_text)
@@ -115,15 +118,17 @@ class SkillagerCoreTests(unittest.TestCase):
 
     def test_working_skill_has_session_query_cadence(self) -> None:
         text = render_working_skill("codex")
-        self.assertIn("Run `skillager working --agent codex` after context resets", text)
+        self.assertIn("Run `skillager working --agent codex --json` after context resets", text)
         self.assertIn("Availability is the eligibility gate", text)
         self.assertNotIn("skillager list --json", text)
         self.assertIn("ask the user to run `skillager doctor --agent codex`", text)
-        self.assertIn("Re-run `skillager working --agent codex` after repairs", text)
+        self.assertIn("Re-run `skillager working --agent codex --json` after repairs", text)
         self.assertIn("Do not search Skillager on every user message", text)
         self.assertIn("You are unsure how to approach the task", text)
         self.assertIn("until the task changes", text)
-        self.assertIn("Use `skillager handoff --agent codex` only after setup", text)
+        self.assertNotIn("skillager " + "handoff", text)
+        self.assertNotIn("skillager " + "status", text)
+        self.assertNotIn("skillager " + "bootstrap", text)
         self.assertNotIn("lookback", text.lower())
 
     def test_working_skill_has_exposure_signal_hierarchy(self) -> None:
@@ -155,7 +160,8 @@ class SkillagerCoreTests(unittest.TestCase):
     def test_working_skill_preview_defaults_to_codex(self) -> None:
         text = render_working_skill()
         self.assertIn("skillager working --agent codex", text)
-        self.assertIn("skillager handoff --agent codex", text)
+        self.assertIn("skillager doctor --agent codex", text)
+        self.assertNotIn("skillager " + "handoff", text)
         self.assertNotIn("--agent agent", text)
 
     def test_markerless_directory_is_project_root(self) -> None:
@@ -204,10 +210,10 @@ class SkillagerCoreTests(unittest.TestCase):
                 patch("pathlib.Path.home", return_value=home),
                 chdir(project),
             ):
-                self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
+                self.assertEqual(main(["doctor", "--no-packages", "--json"]), 10)
             data = json.loads(stdout.getvalue())
-            self.assertEqual(data["pending_owner_review"], 1)
-            self.assertEqual(data["available"], 0)
+            self.assertEqual(data["state"]["review"]["needed"], 1)
+            self.assertEqual(data["readiness"]["exposure"]["approved"], 0)
             self.assertIn("ignoring legacy in-tree state", stderr.getvalue())
 
     def test_state_migrate_refuses_temp_project_roots(self) -> None:
@@ -245,24 +251,24 @@ class SkillagerCoreTests(unittest.TestCase):
                 self.assertTrue((project / ".agents" / "skills" / "gis-workflow" / "SKILL.md").exists())
                 self.assertIn("Fast approval after review: skillager review approve project/gis-workflow", created.getvalue())
 
-                status = StringIO()
-                with redirect_stdout(status):
-                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-                data = json.loads(status.getvalue())
-                self.assertEqual(data["authored_pending_owner_review"], 1)
+                doctor = StringIO()
+                with redirect_stdout(doctor):
+                    self.assertEqual(main(["doctor", "--no-packages", "--json"]), 10)
+                data = json.loads(doctor.getvalue())
+                self.assertEqual(data["state"]["authored_unreviewed"]["count"], 1)
 
                 activated = StringIO()
                 with redirect_stdout(activated):
                     self.assertEqual(main(["activate", "project/gis-workflow", "--no-session-record"]), 2)
                 self.assertIn("skillager review approve project/gis-workflow", stderr.getvalue())
 
-                handoff = StringIO()
-                with redirect_stdout(handoff):
-                    self.assertEqual(main(["handoff", "--agent", "codex", "--json"]), 0)
-                handoff_data = json.loads(handoff.getvalue())
-                self.assertEqual(handoff_data["status"], "setup-needed")
-                self.assertEqual(handoff_data["state"]["setup"]["pending_owner_review"], 1)
-                self.assertNotIn("authored_unreviewed", handoff_data["state"])
+                working = StringIO()
+                with redirect_stdout(working):
+                    self.assertEqual(main(["working", "--agent", "codex", "--json"]), 0)
+                working_data = json.loads(working.getvalue())
+                self.assertEqual(working_data["status"], "authored-review-needed")
+                self.assertEqual(working_data["pending_owner_review_count"], 1)
+                self.assertNotIn("authored_unreviewed", working_data)
 
     def test_authored_high_risk_refusal_uses_review_hint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -284,7 +290,7 @@ class SkillagerCoreTests(unittest.TestCase):
                     encoding="utf-8",
                 )
                 with redirect_stdout(StringIO()):
-                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
+                    self.assertEqual(main(["doctor", "--no-packages", "--json"]), 10)
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["activate", "project/risky", "--no-session-record"]), 2)
             text = stderr.getvalue()
@@ -388,12 +394,12 @@ class SkillagerCoreTests(unittest.TestCase):
                 patch("pathlib.Path.home", return_value=root),
                 chdir(root),
             ):
-                self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
+                self.assertEqual(main(["working", "--json"]), 0)
                 self.assertEqual(main(["activate", "project/manual-risk", "--no-session-record"]), 2)
             data = json.loads(output.getvalue())
-            self.assertTrue(data["needs_setup"])
-            self.assertEqual(data["available"], 0)
-            self.assertEqual(data["pending_owner_review"], 1)
+            self.assertFalse(data["can_proceed"])
+            self.assertEqual(data["readiness"]["exposure"]["approved"], 0)
+            self.assertEqual(data["pending_owner_review_count"], 1)
             self.assertNotIn("user_installed", data)
             skill = load_index(state)["skills"][0]
             self.assertEqual(skill["trust"], "discovered")

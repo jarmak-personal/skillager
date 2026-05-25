@@ -25,7 +25,7 @@ skillager setup --collection community --agent codex
 
 Ordinary `skillager setup --agent <agent>` also includes registered collections. For fully trusted personal or company repositories, `skillager setup --collection community --bulk-approve --agent codex` is the fast path; `--yolo` is the fun alias for the same bulk approval path. Bulk approval reviews selected lint-blocked skills with an audited shortcut override. For untrusted repositories, use the normal review flow.
 
-`setup --collection <name> --agent <agent>` reviews that registered collection and refreshes that agent's first-party working artifacts after approval. If review is complete but status still reports missing or stale artifacts, run `skillager doctor --agent <agent>` for the exact repair command.
+`setup --collection <name> --agent <agent>` reviews that registered collection and refreshes that agent's first-party working artifacts after approval. If review is complete but `working --agent <agent> --json` still reports missing or stale artifacts, run `skillager doctor --agent <agent> --fix`.
 
 Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager lint` or `skillager collection show <skill-id> --include-lint-blocked` to inspect them without printing hostile manifest contents.
 
@@ -49,7 +49,7 @@ skillager tag sync --from ../other-project --to .
 Tags live in `<project>/.skillager/tags.json`. `tag add` accepts available registered collection skill IDs and available current project inventory IDs. This lets agents maintain useful project tags after setup while user-authority review stays in the global trust/catalog state.
 Tag show/search commands hide lint-blocked skills unless you pass `--include-lint-blocked` for diagnostics. That flag only changes read-only visibility; it never approves or exposes a skill.
 
-Project tags do not broadcast live across repositories. Use `tag sync --from <project> --to <project>` for an explicit copy, or `--to-all` to copy to known projects recorded by setup/bootstrap.
+Project tags do not broadcast live across repositories. Use `tag sync --from <project> --to <project>` for an explicit copy, or `--to-all` to copy to known projects recorded by setup or doctor repair.
 
 ## Project Tags
 
@@ -120,7 +120,7 @@ Router and stub skills include compatibility notes when Skillager sees strong ha
 cd ~/skills/community
 git pull
 skillager collection refresh community
-skillager status --all
+skillager doctor --include-global
 ```
 
 Reviewed git-backed collection skills are approved by logical source and content hash, so the same unchanged skill can appear in another clone or project without another approval prompt. Changed skill content gets a new content hash and must be reviewed again before activation. Use `--project-only` with `setup`, `review approve`, or `review pin` when a decision should not be reusable.

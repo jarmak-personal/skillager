@@ -983,7 +983,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             self.assertEqual(results[0]["id"], "project/mapping")
             self.assertEqual(results[0]["exposure"], "native")
 
-    def test_status_reports_package_duplicate_of_reviewed_project_content(self) -> None:
+    def test_doctor_reports_package_duplicate_of_reviewed_project_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -1004,15 +1004,15 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages", "--summary-json"]), 0)
                 json_output = StringIO()
                 with redirect_stdout(json_output):
-                    self.assertEqual(main(["status", "--json"]), 0)
-                human_output = StringIO()
-                with redirect_stdout(human_output):
-                    self.assertEqual(main(["status"]), 0)
+                    self.assertEqual(main(["doctor", "--json"]), 10)
 
             payload = json.loads(json_output.getvalue())
-            self.assertNotIn("duplicate_content", payload)
+            duplicate_content = payload["state"]["duplicate_content"]
+            self.assertEqual(payload["state"]["review"]["needed"], 1)
+            self.assertEqual(duplicate_content["approved_overlap_groups"], 1)
+            self.assertEqual(duplicate_content["source_key_approval_required"], 1)
+            self.assertEqual(duplicate_content["review_needed"], 1)
             self.assertNotIn("Use GIS domain concepts", json_output.getvalue())
-            self.assertIn("duplicate approved content", human_output.getvalue())
 
     def test_changed_package_content_still_requires_review_without_duplicate_hint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1034,11 +1034,14 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages", "--summary-json"]), 0)
                 output = StringIO()
                 with redirect_stdout(output):
-                    self.assertEqual(main(["status", "--json"]), 0)
+                    self.assertEqual(main(["doctor", "--json"]), 10)
 
             payload = json.loads(output.getvalue())
-            self.assertEqual(payload["pending_owner_review"], 1)
-            self.assertNotIn("duplicate_content", payload)
+            duplicate_content = payload["state"]["duplicate_content"]
+            self.assertEqual(payload["state"]["review"]["needed"], 1)
+            self.assertEqual(duplicate_content["approved_overlap_groups"], 0)
+            self.assertEqual(duplicate_content["source_key_approval_required"], 0)
+            self.assertEqual(duplicate_content["review_needed"], 0)
 
     def test_review_output_explains_source_key_duplicate_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

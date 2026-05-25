@@ -20,11 +20,11 @@ uv tool install skillager
 3. Run `skillager setup --agent [your agent]` in your project dir
    - Installation of skillager is global, setup is run per-project
    - Work through any required approvals etc. (don't blindly trust skills from sources you don't know.)
-4. Open your agent of choice and tell them to run `skillager handoff --agent [your agent]`
+4. Open your agent of choice and tell them to run `skillager working --agent [your agent] --json`
 
 `setup` automatically discovers project skills, package-provided skills from Python environments, project `node_modules`, and `Cargo.lock`-selected Cargo crates, Python environment skills from project virtualenv or conda environments, collections, and native agent skills. It scans them and only marks content available to your agent after user approval. Skillager is meant to be installed once as a user tool; it does not need to live inside every project environment.
 
-Skillager writes a small project note in `AGENTS/CLAUDE.MD` so the agent knows to run `skillager working`, use metadata commands, and ask you to run setup or bootstrap when user-authority review is needed.
+Skillager writes a small project note in `AGENTS/CLAUDE.MD` so the agent knows to run `skillager working`, use metadata commands, and ask you to run setup or doctor when user-authority review or repair is needed.
 
 
 > [!IMPORTANT]
@@ -56,13 +56,14 @@ Exposure modes:
 
 Routers expose compact available metadata only, not full skill bodies. Unavailable or incompatible members are skipped. `expose` output and JSON include the router exposure id/slug; activate a listed skill with `skillager activate <skill-id> --from-router <router-slug>`.
 
-Metadata commands stay metadata-only. `status`, `list`, `search`, `show` without `--content`, `handoff`, `lint`, and summary JSON outputs do not reveal full skill bodies.
+Metadata commands stay metadata-only. `doctor`, `working`, `list`, `search`, `show` without `--content`, `lint`, and summary JSON outputs do not reveal full skill bodies.
 
 ## Daily Commands
 
 - Review or refresh approvals: `skillager setup --agent codex`
-- Repair first-party working artifacts: `skillager bootstrap --agent codex`
+- Agent readiness preflight: `skillager working --agent codex --json`
 - Diagnose state: `skillager doctor --agent codex`
+- Repair first-party working artifacts: `skillager doctor --agent codex --fix`
 - Create a project tag: `skillager tag create spatial-python`
 - Add a skill to a tag: `skillager tag add spatial-python vibespatial/gis-domain`
 - Inspect a tag: `skillager tag show spatial-python`

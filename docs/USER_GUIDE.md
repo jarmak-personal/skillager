@@ -5,7 +5,7 @@ Skillager is a CLI gate between discovered skills and agent-native skill directo
 The normal loop is:
 
 ```text
-setup --agent <agent> -> restart agent -> working -> describe goal
+setup --agent <agent> -> restart agent -> working --agent <agent> --json -> describe goal
 ```
 
 ## First Run In A Project
@@ -16,15 +16,15 @@ Run this from the directory where you will start Codex or Claude:
 skillager setup --agent codex
 ```
 
-Use `--agent claude` instead for Claude projects. `setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything. Audience scope uses only declared manifest metadata; skills without it are grouped as "everything else." When setup applies review changes with `--agent` or `--all-agents`, it also refreshes the first-party working artifacts unless `--no-bootstrap` is passed.
+Use `--agent claude` instead for Claude projects. `setup` is the user approval flow. It discovers skills, asks for audience scope when needed, scans selected skills, and prompts before approving anything. Audience scope uses only declared manifest metadata; skills without it are grouped as "everything else." When setup applies review changes with `--agent` or `--all-agents`, it also refreshes the first-party working artifacts unless artifact refresh is explicitly disabled.
 
 Install Skillager as a global user tool with `uv tool install skillager` or `pipx install skillager`. It scans the current project's `.venv`, `venv`, `.conda`, project-local active conda environments, top-level `node_modules`, and `Cargo.lock`-selected Cargo crates for installed package skills, but ordinary projects do not need Skillager installed inside their own Python, JavaScript, or Rust environment.
 
-At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also expose a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working` after context resets and can use available metadata to add useful skills to project-local tags and expose narrow native skills, stubs, a compact router skill for a tag or explicit skill set, or nothing. Run `skillager handoff` when you want explicit post-setup curation guidance.
+At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also expose a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working --agent <agent> --json` after context resets and can use available metadata to add useful skills to project-local tags and expose narrow native skills, stubs, a compact router skill for a tag or explicit skill set, or nothing.
 
 Setup does not expose every approved skill by default. Approval makes a skill available for consideration; tagging and exposure are reversible project ergonomics based on what you are doing.
 
-Run `skillager doctor --agent codex` when the state seems off or the agent is stuck. `doctor` does not approve skills or expose third-party skills; it reports the exact setup, bootstrap, lint, or migration command to run. Use `skillager status` when you want a broader metadata report. Both commands avoid printing skill bodies.
+Run `skillager doctor --agent codex` when the state seems off or the agent is stuck. Use `skillager doctor --agent codex --fix` to repair first-party working artifacts and project notes. `doctor` does not approve skills or expose third-party skills; it reports the exact setup, repair, lint, or migration action to run. Use `skillager doctor --json` when you want a broader machine-readable diagnostic report. These commands avoid printing skill bodies.
 
 ## Trust States
 
@@ -66,15 +66,16 @@ The override is tied to the current content hash and finding identities. Content
 ## Useful Commands
 
 ```bash
-skillager status
+skillager doctor
+skillager working --agent codex --json
 skillager setup --agent codex
 skillager setup --fresh
 skillager setup --fresh-project --agent codex
 skillager setup --details
 skillager setup --summary-json
 skillager setup --source project --accept-low --agent codex --summary-json
-skillager bootstrap --agent codex
 skillager doctor --agent codex
+skillager doctor --agent codex --fix
 skillager list --summary-json --agent codex
 skillager search "spatial workflow" --agent codex --json
 skillager setup --collection workflows --agent codex
@@ -101,18 +102,18 @@ skillager expose <skill-id> --mode stub --agent codex --scope project
 
 Use a tag router for a named reusable group, or pass explicit skill IDs for a deterministic ad-hoc router without creating a tag. Router exposure writes compact available metadata only, not full skill bodies, and skips unavailable or incompatible members. The expose output and JSON give the router exposure id/slug; activate a listed skill with `skillager activate <skill-id> --from-router <router-slug>`.
 
-Use `--json` when another program needs stable output. `status --json`, `handoff --json`, `list --json`, `show --json`, `tag show --json`, and `search --json` are compact and available-only for agent use; pass `--full-json` for explicit user-directed diagnostics where available. Agents should use `search --agent <agent> --json`, `list --summary-json --agent <agent>`, and project tag metadata to build their own candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `doctor --json` and `setup --summary-json` for owner-run diagnostics and setup automation.
+Use `--json` when another program needs stable output. `working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, and `search --json` are compact and available-only for agent use; pass `--full-json` for explicit user-directed Skillager diagnostics where available. Agents should use `working --agent <agent> --json`, `search --agent <agent> --json`, `list --summary-json --agent <agent>`, and project tag metadata to build their own candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `doctor --json` and `setup --summary-json` for owner-run diagnostics and setup automation.
 
 For a project-local automation smoke flow:
 
 <!-- skillager-test fixture=basic_project -->
 ```bash
-skillager status --no-packages --json
+skillager working --agent codex --json
 skillager setup --source project --accept-low --agent codex --no-packages --summary-json
 skillager search "spatial" --json
 ```
 
-The setup summary JSON includes a compact `bootstrap` object when setup attempted or skipped first-party working artifact refresh. Automation can check `bootstrap.handoff_ready` and follow `bootstrap.next_commands` without parsing human text.
+The setup summary JSON includes compact first-party working artifact details when setup attempted or skipped artifact refresh. Automation should use `skillager working --agent <agent> --json` as the agent readiness contract and `skillager doctor --agent <agent> --json` for owner diagnostics.
 
 Skillager does not require git. In a plain directory, it treats the current directory as the project root. Project state is user-local at `${XDG_STATE_HOME:-~/.local/state}/skillager/projects/<sha256(project_path)>/`, or `SKILLAGER_STATE_DIR` when explicitly set. Reusable catalog state is separate at `${XDG_CONFIG_HOME:-~/.config}/skillager/`, or `SKILLAGER_CATALOG_STATE_DIR` / `--catalog-state-dir` when explicitly set.
 
@@ -128,11 +129,11 @@ Collection repositories are user-global catalog inventory. Ordinary `skillager s
 
 Tags are project-local curation. Users can curate them manually, and agents can maintain them after setup by adding available skills that match the current project or task. `tag add` accepts available registered collection skill IDs and available IDs from the current project inventory, including skills from auto-discovered child repositories.
 
-Setup and bootstrap keep a best-effort registry of known project paths in the user catalog. It is only for tag discovery/sync convenience; missing or stale entries do not affect normal project operation. Use `skillager tag sync --from <project> --to .` to copy tag curation explicitly between projects, or `skillager state migrate-tags --to projects` once when migrating older global tag attachments.
+Setup and doctor repair keep a best-effort registry of known project paths in the user catalog. It is only for tag discovery/sync convenience; missing or stale entries do not affect normal project operation. Use `skillager tag sync --from <project> --to .` to copy tag curation explicitly between projects, or `skillager state migrate-tags --to projects` once when migrating older global tag attachments.
 
-`skillager status` is a pure-read metadata command. It reports cached Skillager update information when present, but it does not contact PyPI or write update-check cache files.
+`skillager doctor` is the human diagnostic command. It reports cached Skillager update information when present, but it does not contact PyPI or write update-check cache files unless the selected diagnostic path explicitly says it will.
 
-Use `skillager bootstrap --agent <agent>` when review is already complete but working artifacts are missing or stale. Use `skillager expose` directly when you already know a reviewed skill or tag should be exposed to the agent. Normal exposure uses explicit skill IDs or `--tag`; owner/admin bulk exposure can use `--all-reviewed`. `expose` does not install or repair Skillager Working or project working notes.
+Use `skillager doctor --agent <agent> --fix` when review is already complete but working artifacts are missing or stale. Use `skillager expose` directly when you already know a reviewed skill or tag should be exposed to the agent. Normal exposure uses explicit skill IDs or `--tag`; owner/admin bulk exposure can use `--all-reviewed`. `expose` does not install or repair Skillager Working or project working notes.
 
 Use `--mode stub` for skills you want visible by name without loading the full skill body into every session. A stub contains only the skill summary and an activation command; the full body still comes through Skillager's approval gate. After setup, Skillager prints numbered available-but-hidden stub candidates so you can say “please stub 1, 5, 8.”
 

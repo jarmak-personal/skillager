@@ -17,6 +17,27 @@ from skillager.trust import content_hash, set_trust
 
 class SkillagerDoctorTests(unittest.TestCase):
 
+    def test_doctor_clean_empty_project_without_agent_is_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["doctor", "--no-packages", "--json"]), 0)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["status"], "ready")
+            self.assertEqual(data["exit_code"], 0)
+            self.assertTrue(data["readiness"]["ready"])
+            self.assertTrue(data["readiness"]["can_proceed"])
+            self.assertTrue(data["readiness"]["artifacts_ready"])
+            self.assertIsNone(data["readiness"]["reason_code"])
+
     def test_doctor_clean_project_exits_zero(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -40,7 +61,7 @@ class SkillagerDoctorTests(unittest.TestCase):
             self.assertEqual(data["exit_code"], 0)
             self.assertTrue(data["readiness"]["ready"])
             self.assertFalse(fix_data["fix"]["applied"])
-            self.assertEqual(fix_data["fix"]["reason"], "selected next action is not a first-party bootstrap repair")
+            self.assertEqual(fix_data["fix"]["reason"], "selected next action is not a first-party working artifact repair")
             self.assertIsNone(fix_data["fix"]["reason_code"])
 
     def test_doctor_agent_required_lists_runnable_agent_choices(self) -> None:
@@ -61,18 +82,12 @@ class SkillagerDoctorTests(unittest.TestCase):
                 output = StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(main(["doctor", "--no-packages", "--json"]), 11)
-                status_output = StringIO()
-                with redirect_stdout(status_output):
-                    self.assertEqual(main(["status", "--no-packages"]), 0)
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "agent-required")
             self.assertIsNone(data["next"]["command"])
             self.assertEqual(data["next"]["next_commands"], ["skillager doctor --agent codex", "skillager doctor --agent claude"])
             self.assertNotIn("<codex|claude>", json.dumps(data["next"]))
-            status_text = status_output.getvalue()
-            self.assertIn("skillager status --agent codex", status_text)
-            self.assertIn("skillager status --agent claude", status_text)
-            self.assertNotIn("<codex|claude>", status_text)
+            self.assertNotIn("handoff", json.dumps(data["readiness"]))
 
     def test_doctor_unreviewed_skill_exits_ten_and_suggests_setup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,7 +159,7 @@ class SkillagerDoctorTests(unittest.TestCase):
             self.assertEqual(data["next"]["next_commands"], ["skillager setup --agent codex", "skillager setup --agent claude"])
             self.assertNotIn("skillager setup\"", json.dumps(data["next"]))
 
-    def test_doctor_missing_working_skill_exits_eleven_and_suggests_bootstrap(self) -> None:
+    def test_doctor_missing_working_skill_exits_eleven_and_suggests_fix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -164,8 +179,10 @@ class SkillagerDoctorTests(unittest.TestCase):
                     self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--json"]), 11)
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "artifact-attention-needed")
-            self.assertEqual(data["next"]["command"], "skillager bootstrap --agent codex")
-            self.assertEqual(data["readiness"]["handoff"]["reason_code"], "working_missing")
+            self.assertEqual(data["next"]["command"], "skillager doctor --agent codex --fix")
+            self.assertEqual(data["readiness"]["artifacts"]["reason_code"], "working_missing")
+            self.assertFalse(data["readiness"]["artifacts_ready"])
+            self.assertNotIn("handoff", json.dumps(data["readiness"]))
 
     def test_doctor_does_not_write_session_events(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -207,7 +224,7 @@ class SkillagerDoctorTests(unittest.TestCase):
                     self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--no-session-record", "--json"]), 10)
             self.assertFalse((state / "sessions").exists())
 
-    def test_doctor_fix_repairs_first_party_bootstrap_artifacts(self) -> None:
+    def test_doctor_fix_repairs_first_party_working_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -262,7 +279,7 @@ class SkillagerDoctorTests(unittest.TestCase):
                     self.assertEqual(main(["doctor", "--no-packages", "--fix", "--json"]), 11)
             data = json.loads(output.getvalue())
             self.assertEqual(data["agent"], "codex")
-            self.assertEqual(data["next"]["command"], "skillager bootstrap --agent codex")
+            self.assertEqual(data["next"]["command"], "skillager doctor --agent codex --fix")
             self.assertFalse(data["fix"]["applied"])
             self.assertEqual(data["fix"]["reason"], "pass --agent to apply mutating repairs")
             self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
@@ -283,13 +300,9 @@ class SkillagerDoctorTests(unittest.TestCase):
                 output = StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--fix", "--json"]), 10)
-                status_output = StringIO()
-                with redirect_stdout(status_output):
-                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
             data = json.loads(output.getvalue())
-            status = json.loads(status_output.getvalue())
             self.assertFalse(data["fix"]["applied"])
-            self.assertEqual(status["pending_owner_review"], 1)
+            self.assertEqual(data["state"]["review"]["needed"], 1)
             self.assertFalse((root / ".agents" / "skills" / "project-demo" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
 
@@ -368,7 +381,7 @@ class SkillagerDoctorTests(unittest.TestCase):
                     self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--json"]), 13)
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "migration-review-needed")
-            self.assertEqual(data["next"]["command"], "skillager status --migration-details")
+            self.assertEqual(data["next"]["command"], "skillager doctor --migration-details")
 
     def test_doctor_migration_ack_exits_thirteen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -410,7 +423,7 @@ class SkillagerDoctorTests(unittest.TestCase):
                     self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--json"]), 13)
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "migration-ack-needed")
-            self.assertEqual(data["next"]["command"], "skillager status --ack-migration")
+            self.assertEqual(data["next"]["command"], "skillager doctor --ack-migration")
 
     def test_doctor_reports_unmanaged_working_skill_as_manual_repair(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -434,10 +447,36 @@ class SkillagerDoctorTests(unittest.TestCase):
             fix_data = json.loads(fix_output.getvalue())
             self.assertEqual(data["status"], "manual-artifact-repair-needed")
             self.assertIsNone(data["next"]["command"])
-            self.assertEqual(data["readiness"]["handoff"]["reason_code"], "working_unmanaged")
+            self.assertEqual(data["readiness"]["artifacts"]["reason_code"], "working_unmanaged")
             self.assertFalse(fix_data["fix"]["applied"])
-            self.assertEqual(fix_data["fix"]["reason"], "selected next action is not a first-party bootstrap repair")
+            self.assertEqual(fix_data["fix"]["reason"], "selected next action is not a first-party working artifact repair")
             self.assertEqual(fix_data["fix"]["reason_code"], "working_unmanaged")
+
+    def test_doctor_fix_does_not_overwrite_customized_working_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            target = root / ".agents" / "skills" / "skillager-working"
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                materialize_working_skill(agents=["codex"], project_dir=root)
+                with (target / "SKILL.md").open("a", encoding="utf-8") as handle:
+                    handle.write("\n# Local customization\n")
+                before = (target / "SKILL.md").read_text(encoding="utf-8")
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["doctor", "--agent", "codex", "--no-packages", "--fix", "--json"]), 14)
+                after = (target / "SKILL.md").read_text(encoding="utf-8")
+
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["status"], "manual-artifact-repair-needed")
+            self.assertFalse(data["fix"]["applied"])
+            self.assertEqual(data["fix"]["reason_code"], "working_local_customization")
+            self.assertEqual(after, before)
 
 
 if __name__ == "__main__":

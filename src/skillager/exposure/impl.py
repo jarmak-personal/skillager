@@ -20,7 +20,7 @@ WORKING_SKILL_ID = "skillager/working"
 WORKING_REASON_LOCAL_CUSTOMIZATION = "target has local customizations"
 WORKING_REASON_UNMANAGED = "target exists without Skillager provenance"
 AGENT_NOTE = (
-    "Run `skillager working` after context resets or resumed sessions. It is a quiet readiness check; use only available/exposed "
+    "Run `skillager working --agent <agent> --json` after context resets or resumed sessions. It is the quiet readiness check; use only available/exposed "
     "Skillager-managed skills, ask before setup or approval changes, ask the user to run `skillager doctor --agent <agent>` if state seems off, "
     "and report curation/exposure changes."
 )
@@ -278,11 +278,11 @@ Availability is the eligibility gate. If a skill appears in normal Skillager lis
 
 ## Session Start
 
-1. Run `skillager working --agent {agent}` after context resets or resumed sessions.
-2. If it prints nothing, continue with the user's request. Do not mention Skillager unless the task needs a skill, review, curation, exposure, activation, or repair.
+1. Run `skillager working --agent {agent} --json` after context resets or resumed sessions.
+2. If readiness needs no user action, continue with the user's request. Do not mention Skillager unless the task needs a skill, review, curation, exposure, activation, or repair.
 3. External package, environment, collection, and global skills require owner review before body access or activation.
-4. Use `skillager handoff --agent {agent}` only after setup or when the user explicitly wants curation/onboarding guidance.
-5. If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent {agent}` in their terminal. Re-run `skillager working --agent {agent}` after repairs if readiness changes.
+4. If Skillager reports unavailable or newly discovered skills, ask the user to run setup or review before using them.
+5. If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent {agent}` in their terminal, or `skillager doctor --agent {agent} --fix` for first-party working artifact repair. Re-run `skillager working --agent {agent} --json` after repairs if readiness changes.
 
 ## Query Cadence
 
@@ -302,8 +302,6 @@ These commands are safe because they do not reveal full skill bodies:
 
 ```bash
 skillager working --agent {agent} --json
-skillager handoff --agent {agent} --json
-skillager status --json
 skillager list --summary-json --agent {agent}
 skillager search "<user goal>" --agent {agent} --json
 skillager show <skill-id> --json

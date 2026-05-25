@@ -227,4 +227,4 @@ skillager review --package your-package --summary
 skillager expose <your-package-skill-id> --agent codex --scope project
 ```
 
-Interactive setup installs Skillager's bootstrap skill and may optionally expose a narrow native set. Use the explicit `expose` command when testing that a package-provided skill copies correctly with its supporting files.
+Interactive setup installs Skillager's working readiness skill and may optionally expose a narrow native set. Use the explicit `expose` command when testing that a package-provided skill copies correctly with its supporting files.

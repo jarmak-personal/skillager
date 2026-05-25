@@ -3,8 +3,7 @@
   "agent": "claude",
   "purpose": "Recommended metadata-only Skillager commands for Claude permission allowlists.",
   "read_only_commands": [
-    "skillager status --json",
-    "skillager handoff --agent claude --json",
+    "skillager working --agent claude --json",
     "skillager list --summary-json --agent claude",
     "skillager search <query> --agent claude --json",
     "skillager show <skill-id> --json",

@@ -59,6 +59,23 @@ class SkillagerWorkingTests(unittest.TestCase):
         by_id = {skill["id"]: skill for skill in json.loads(stdout)["skills"]}
         return by_id[skill_id]
 
+    def test_working_clean_empty_project_can_proceed_without_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+
+            code, stdout, stderr = self.run_cli(["working", "--json"], root=root, state=state)
+
+            self.assertEqual(code, 0, stderr)
+            data = json.loads(stdout)
+            self.assertEqual(data["status"], "ready")
+            self.assertTrue(data["can_proceed"])
+            self.assertTrue(data["readiness"]["ready"])
+            self.assertTrue(data["readiness"]["can_proceed"])
+            self.assertTrue(data["readiness"]["artifacts_ready"])
+            self.assertIsNone(data["readiness"]["reason_code"])
+            self.assertEqual(data["readiness"]["exposure"]["approved"], 0)
+
     def test_working_does_not_auto_approve_project_skill_before_setup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -69,8 +86,15 @@ class SkillagerWorkingTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
+            self.assertEqual(data["status"], "review-needed")
+            self.assertFalse(data["can_proceed"])
             self.assertFalse(data["setup_complete"])
             self.assertEqual(data["auto_approved_project_count"], 0)
+            self.assertEqual(data["pending_owner_review_count"], 1)
+            self.assertFalse(data["readiness"]["review_ready"])
+            self.assertTrue(data["readiness"]["artifacts_ready"])
+            self.assertEqual(data["readiness"]["reason_code"], "review_needed")
+            self.assertNotIn("handoff", json.dumps(data["readiness"]))
             self.assertEqual(self.indexed_skill(root, state, "project/local-tool")["trust"], "discovered")
 
     def test_working_does_not_auto_approve_project_native_skill_after_setup(self) -> None:
@@ -99,6 +123,8 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
             self.assertEqual(data["agent"], "claude")
+            self.assertEqual(data["readiness"]["artifacts"]["command"], "skillager doctor --agent claude --fix")
+            self.assertEqual(data["next"]["command"], "skillager setup --agent claude")
             self.assertEqual(data["auto_approved_project_count"], 0)
             self.assertEqual(data["auto_approved_project_skills"], [])
             self.assertEqual(self.indexed_skill(root, state, "project/claude-tool")["trust"], "discovered")
@@ -148,6 +174,7 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.assertEqual(data["new_external_review_count"], 0)
             self.assertEqual(data["pending_external_review_count"], 1)
             self.assertEqual(data["pending_external_review"][0]["id"], "community/external-tool")
+            self.assertEqual(data["pending_owner_review_count"], 1)
 
 
 if __name__ == "__main__":

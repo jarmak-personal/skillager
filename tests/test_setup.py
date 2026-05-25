@@ -181,7 +181,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(trust_by_id["project/safe"], "reviewed")
             self.assertEqual(trust_by_id["project/risky"], "discovered")
 
-    def test_setup_accept_low_with_agent_bootstraps_handoff_artifacts(self) -> None:
+    def test_setup_accept_low_with_agent_writes_working_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -199,10 +199,10 @@ class SkillagerSetupTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-packages", "--summary-json"]), 0)
             data = json.loads(output.getvalue())
             self.assertEqual(data["approved"], 1)
-            self.assertTrue(data["bootstrap"]["performed"])
-            self.assertTrue(data["bootstrap"]["handoff_ready"])
-            self.assertEqual(data["bootstrap"]["agents"], ["codex"])
-            self.assertEqual(data["bootstrap"]["summary"]["by_status"], {"materialized": 2})
+            self.assertTrue(data["working_artifacts"]["performed"])
+            self.assertTrue(data["working_artifacts"]["ready"])
+            self.assertEqual(data["working_artifacts"]["agents"], ["codex"])
+            self.assertEqual(data["working_artifacts"]["summary"]["by_status"], {"materialized": 2})
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
             status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
@@ -213,15 +213,15 @@ class SkillagerSetupTests(unittest.TestCase):
                 patch("pathlib.Path.home", return_value=root),
                 chdir(root),
             ):
-                status_output = StringIO()
-                with redirect_stdout(status_output):
-                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-            status = json.loads(status_output.getvalue())
-            self.assertEqual(status["agent"], "codex")
-            self.assertEqual(status["agent_source"], "saved_setup_scope")
-            self.assertTrue(status["readiness"]["handoff_ready"])
+                working_output = StringIO()
+                with redirect_stdout(working_output):
+                    self.assertEqual(main(["working", "--agent", "codex", "--json"]), 0)
+            working = json.loads(working_output.getvalue())
+            self.assertEqual(working["agent"], "codex")
+            self.assertTrue(working["readiness"]["ready"])
+            self.assertTrue(working["readiness"]["artifacts_ready"])
 
-    def test_setup_from_subdirectory_bootstraps_project_root(self) -> None:
+    def test_setup_from_subdirectory_writes_project_root_working_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "project"
             subdir = root / "nested"
@@ -243,7 +243,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertFalse((subdir / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertFalse((subdir / "AGENTS.md").exists())
 
-    def test_setup_accept_low_no_bootstrap_reports_handoff_not_ready(self) -> None:
+    def test_setup_accept_low_no_bootstrap_reports_working_artifacts_not_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -261,11 +261,11 @@ class SkillagerSetupTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages", "--summary-json"]), 0)
             data = json.loads(output.getvalue())
             self.assertEqual(data["approved"], 1)
-            self.assertFalse(data["bootstrap"]["performed"])
-            self.assertEqual(data["bootstrap"]["reason"], "disabled by --no-bootstrap")
-            self.assertEqual(data["bootstrap"]["reason_code"], "bootstrap_disabled")
-            self.assertFalse(data["bootstrap"]["handoff_ready"])
-            self.assertEqual(data["bootstrap"]["next_commands"], ["skillager bootstrap --agent codex"])
+            self.assertFalse(data["working_artifacts"]["performed"])
+            self.assertEqual(data["working_artifacts"]["reason"], "working artifact refresh disabled")
+            self.assertEqual(data["working_artifacts"]["reason_code"], "working_artifacts_disabled")
+            self.assertFalse(data["working_artifacts"]["ready"])
+            self.assertEqual(data["working_artifacts"]["next_commands"], ["skillager doctor --agent codex --fix"])
             self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertFalse((root / "AGENTS.md").exists())
             status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
@@ -289,12 +289,12 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages"]), 0)
             text = output.getvalue()
-            self.assertIn("Working artifacts not ready: run skillager bootstrap --agent codex", text)
+            self.assertIn("Working artifacts not ready: run skillager doctor --agent codex --fix", text)
             self.assertNotIn("Next step: tell your agent what you plan to do", text)
             status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
             self.assertEqual(status_scope["agents"], ["codex"])
 
-    def test_setup_accept_low_without_agent_does_not_silently_bootstrap_codex(self) -> None:
+    def test_setup_accept_low_without_agent_does_not_silently_write_codex_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -312,13 +312,13 @@ class SkillagerSetupTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages", "--summary-json"]), 0)
             data = json.loads(output.getvalue())
             self.assertEqual(data["approved"], 1)
-            self.assertFalse(data["bootstrap"]["performed"])
-            self.assertEqual(data["bootstrap"]["reason"], "agent not specified")
-            self.assertEqual(data["bootstrap"]["reason_code"], "agent_not_specified")
-            self.assertEqual(data["bootstrap"]["next_commands"], ["skillager bootstrap --agent codex", "skillager bootstrap --agent claude"])
+            self.assertFalse(data["working_artifacts"]["performed"])
+            self.assertEqual(data["working_artifacts"]["reason"], "agent not specified")
+            self.assertEqual(data["working_artifacts"]["reason_code"], "agent_not_specified")
+            self.assertEqual(data["working_artifacts"]["next_commands"], ["skillager doctor --agent codex --fix", "skillager doctor --agent claude --fix"])
             self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
 
-    def test_setup_all_agents_bootstraps_both_handoff_targets(self) -> None:
+    def test_setup_all_agents_writes_both_working_artifact_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -335,8 +335,8 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--all-agents", "--no-packages", "--summary-json"]), 0)
             data = json.loads(output.getvalue())
-            self.assertTrue(data["bootstrap"]["handoff_ready"])
-            self.assertEqual(data["bootstrap"]["agents"], ["codex", "claude"])
+            self.assertTrue(data["working_artifacts"]["ready"])
+            self.assertEqual(data["working_artifacts"]["agents"], ["codex", "claude"])
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
@@ -380,12 +380,14 @@ class SkillagerSetupTests(unittest.TestCase):
                     self.assertEqual(main(["expose", "path/gis-domain", "--mode", "stub", "--agent", "codex"]), 0)
                 self.assertTrue((project / ".agents" / "skills" / "path-gis-domain" / "SKILL.md").exists())
 
-                status = StringIO()
-                with redirect_stdout(status):
-                    self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-                status_data = json.loads(status.getvalue())
-                self.assertEqual(status_data["available"], 1)
-                self.assertEqual(status_data["setup_scope_count"], 1)
+                listed = StringIO()
+                with redirect_stdout(listed):
+                    self.assertEqual(main(["list", "--no-packages", "--summary-json"]), 0)
+                inventory = json.loads(listed.getvalue())
+                self.assertEqual(inventory["total"], 1)
+                self.assertEqual(inventory["source_entry_count"], 1)
+                status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
+                self.assertEqual(status_scope["selected_count"], 1)
 
     def test_setup_discovers_child_skill_repos_without_project_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -406,22 +408,20 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(data["selected"], 1)
             self.assertEqual(data["approved"], 1)
             self.assertEqual(data["selected_ids"], ["vibespatial/gis-domain"])
-            status = StringIO()
+            listed = StringIO()
             with (
-                redirect_stdout(status),
+                redirect_stdout(listed),
                 patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
                 patch("pathlib.Path.home", return_value=root),
                 chdir(root),
             ):
-                self.assertEqual(main(["status", "--no-packages", "--json"]), 0)
-            status_data = json.loads(status.getvalue())
-            self.assertEqual(status_data["collections"]["count"], 0)
-            self.assertEqual(status_data["collection_inventory"]["count"], 1)
-            self.assertEqual(status_data["collection_inventory"]["items"][0]["name"], "vibespatial")
-            self.assertEqual(status_data["collection_inventory"]["available"], 1)
-            self.assertNotIn("manifest_lint", status_data)
-            self.assertNotIn("scan", status_data)
-            self.assertNotIn("by_risk", status_data["summary"])
+                self.assertEqual(main(["list", "--no-packages", "--summary-json"]), 0)
+            inventory = json.loads(listed.getvalue())
+            self.assertEqual(inventory["total"], 1)
+            self.assertEqual(inventory["source_entry_count"], 1)
+            self.assertEqual(inventory["sources"], [{"source": "vibespatial", "count": 1, "ids": ["vibespatial/gis-domain"]}])
+            self.assertNotIn("manifest_lint", inventory)
+            self.assertNotIn("scan", inventory)
 
     def test_interactive_setup_writes_reusable_approvals_and_fresh_project_retains_them(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -468,7 +468,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(reset_data["approved"], 1)
             self.assertEqual(reset_data["fresh_project_reset"]["retained_global_state"]["global_approvals"], 1)
 
-    def test_setup_with_agent_bootstraps_when_reusable_approval_already_applies(self) -> None:
+    def test_setup_with_agent_writes_working_artifacts_when_reusable_approval_already_applies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / "project-state"
@@ -893,7 +893,7 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["setup", "--audience", "other", "--no-packages", "--agent", "codex", "--no-bootstrap"]), 0)
             text = stdout.getvalue()
-            self.assertIn("Working artifacts not ready: run skillager bootstrap --agent codex", text)
+            self.assertIn("Working artifacts not ready: run skillager doctor --agent codex --fix", text)
             self.assertIn("Native skill selection", text)
             self.assertIn("project/gis-domain: exposed", text)
             self.assertIn("Skillager-managed native skills from the native skill directory", text)

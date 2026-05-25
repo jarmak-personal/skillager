@@ -176,8 +176,8 @@ class SkillagerMaterializeTests(unittest.TestCase):
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
             legacy = (
-                "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
-                "ask the user to run `skillager setup` if review is needed."
+                "Run `skillager working` at session start. Use only reviewed/materialized Skillager-managed skills; "
+                "ask the user to run `skillager doctor --agent codex` if review or repair is needed."
             )
             (root / "AGENTS.md").write_text(
                 f"Existing project notes.\n## Skillager \n\n{legacy}\nOther notes stay.\n",
@@ -188,8 +188,11 @@ class SkillagerMaterializeTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
                     self.assertEqual(main(["expose", "project/demo", "--agent", "codex"]), 0)
             text = (root / "AGENTS.md").read_text(encoding="utf-8")
-            self.assertIn("skillager status", text)
-            self.assertNotIn("skillager handoff", text)
+            self.assertIn("skillager working", text)
+            self.assertIn("skillager doctor --agent codex", text)
+            self.assertNotIn("handoff", text)
+            self.assertNotIn("status", text)
+            self.assertNotIn("bootstrap", text)
             self.assertIn("Other notes stay.", text)
 
     def test_materialize_all_reviewed_materializes_selected_filter_scope(self) -> None:

@@ -3,8 +3,7 @@
   "agent": "codex",
   "purpose": "Recommended metadata-only Skillager commands for Codex permission allowlists.",
   "read_only_commands": [
-    "skillager status --json",
-    "skillager handoff --agent codex --json",
+    "skillager working --agent codex --json",
     "skillager list --summary-json --agent codex",
     "skillager search <query> --agent codex --json",
     "skillager show <skill-id> --json",

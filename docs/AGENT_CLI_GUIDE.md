@@ -2,14 +2,13 @@
 
 This document is for coding agents reading a project that uses Skillager.
 
-Projects may expose a first-party `skillager-working` skill. Treat it as the bootstrap workflow for Skillager-managed projects: run `skillager working` after context resets, stay silent on normal success, then curate available skills only when the user's task calls for a narrow router, stub, or native skill.
+Projects may expose a first-party `skillager-working` skill. Treat `skillager working --agent <agent> --json` as the readiness contract for Skillager-managed projects: run it after context resets, keep no-action readiness out of the user conversation, then curate available skills only when the user's task calls for a narrow router, stub, or native skill.
 
 Availability is the eligibility gate. Agent-facing Skillager commands only surface skills the owner has made available. Choose among them by task relevance; do not ask for or reason about scanner, review, or trust diagnostics unless the user is explicitly doing Skillager administration.
 
 ## Rules
 
-- Start resumed work with `skillager working`; it is silent unless external skills newly need review.
-- Use `skillager handoff` only for explicit post-setup curation/onboarding.
+- Start resumed work with `skillager working --agent <agent> --json`; only mention it when readiness requires user action or the task calls for Skillager curation.
 - If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent <agent>` before guessing. Re-run working after repairs if readiness changes.
 - Do not run `skillager setup` or `skillager review ...` unless the user asked for setup or approval changes.
 - Do not run `skillager expose` until you have asked what the user plans to do and can justify the narrow router, stub, or native exposure.
@@ -25,9 +24,7 @@ Availability is the eligibility gate. Agent-facing Skillager commands only surfa
 These commands do not expose full skill bodies. In a project, normal `list`, `search`, and `show` use effective project inventory: project skills, package/environment skills, and attached collection-tag skills that are available to the current project. `list` hides global native skills by default; pass `--include-global` only when the user is asking about global inventory.
 
 ```bash
-skillager handoff --json
-skillager working --json
-skillager status --json
+skillager working --agent codex --json
 skillager list --summary-json --agent codex
 skillager show <skill-id> --json
 skillager search "<user goal>" --json
@@ -35,7 +32,7 @@ skillager tag show <tag> --json
 ```
 
 Use `collection search/show` only for catalog management or debugging. For project work, prefer the normal project-aware commands above.
-`working --json`, `handoff --json`, `status --json`, `list --json`, `show --json`, `tag show --json`, and `search --json` are intentionally compact for agent use. Do not use `--full-json` during normal project work; reserve it for explicit user-directed Skillager diagnostics.
+`working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, and `search --json` are intentionally compact for agent use. Do not use `--full-json` during normal project work; reserve it for explicit user-directed Skillager diagnostics.
 Project-aware JSON includes:
 
 - `availability`: where the skill comes from in this project context.
@@ -77,7 +74,7 @@ skillager expose <skill-id> --agent codex --allow-incompatible
 
 ## Agentic Setup Flow
 
-After setup, Skillager installs or refreshes the `skillager-working` bootstrap skill for the chosen agent. The user may also have exposed a small always-relevant native set during setup. In the next agent session, run `skillager working`; then use available metadata and the user's goal to curate tags and decide whether to expose:
+After setup, Skillager installs or refreshes the `skillager-working` readiness skill for the chosen agent. The user may also have exposed a small always-relevant native set during setup. In the next agent session, run `skillager working --agent <agent> --json`; then use available metadata and the user's goal to curate tags and decide whether to expose:
 
 - a narrow native skill for a specific recurring workflow
 - a stub for an available command the user wants easy access to by name
@@ -182,7 +179,7 @@ skillager activate <skill-id> --from-router <router-slug>
 
 This command refuses skills outside the router and skills that are not available.
 
-## If Status Reports New Skills
+## If Working Reports New Skills
 
 Tell the user exactly what happened and ask them to run setup:
 
@@ -192,4 +189,4 @@ Skillager reports new or changed skills. Please run `skillager setup` from this 
 
 When you know your agent target, prefer `skillager setup --agent codex` or `skillager setup --agent claude` so setup can refresh the first-party working artifacts after review.
 
-If handoff or status reports skills pending owner review, tell the user that Skillager has additional skills which are not available yet and ask them to run setup.
+If working reports skills pending owner review, tell the user that Skillager has additional skills which are not available yet and ask them to run setup. If readiness looks broken or stale, ask them to run `skillager doctor --agent <agent> --fix`.
