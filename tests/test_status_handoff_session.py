@@ -14,7 +14,7 @@ from skillager.cli import main
 
 class SkillagerRemovedReadinessCommandTests(unittest.TestCase):
 
-    def run_removed(self, command: str, *args: str) -> tuple[int, str, str, Path]:
+    def run_removed_invalid_choice(self, command: str, *args: str) -> tuple[int, str, str, Path]:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         root = Path(tmp.name)
@@ -28,26 +28,24 @@ class SkillagerRemovedReadinessCommandTests(unittest.TestCase):
             redirect_stdout(stdout),
             redirect_stderr(stderr),
         ):
-            code = main([command, *args])
-        return code, stdout.getvalue(), stderr.getvalue(), root
+            with self.assertRaises(SystemExit) as caught:
+                main([command, *args])
+        return int(caught.exception.code), stdout.getvalue(), stderr.getvalue(), root
 
-    def test_status_is_removed_with_agent_and_human_replacements(self) -> None:
-        code, stdout, stderr, root = self.run_removed("status", "--json")
+    def test_status_is_invalid_choice_and_does_not_mutate(self) -> None:
+        code, stdout, stderr, root = self.run_removed_invalid_choice("status", "--json")
 
         self.assertEqual(code, 2)
         self.assertEqual(stdout, "")
-        self.assertIn("skillager working --json", stderr)
-        self.assertIn("skillager doctor --agent <agent>", stderr)
-        self.assertIn("skillager doctor --json", stderr)
+        self.assertIn("invalid choice: 'status'", stderr)
         self.assertFalse((root / ".skillager").exists())
 
-    def test_handoff_is_removed_with_working_and_doctor_replacements(self) -> None:
-        code, stdout, stderr, root = self.run_removed("handoff", "--agent", "codex")
+    def test_handoff_is_invalid_choice_and_does_not_mutate(self) -> None:
+        code, stdout, stderr, root = self.run_removed_invalid_choice("handoff", "--agent", "codex")
 
         self.assertEqual(code, 2)
         self.assertEqual(stdout, "")
-        self.assertIn("skillager working", stderr)
-        self.assertIn("skillager doctor --agent <agent>", stderr)
+        self.assertIn("invalid choice: 'handoff'", stderr)
         self.assertFalse((root / ".skillager").exists())
 
     def test_removed_commands_do_not_appear_in_top_level_help(self) -> None:
@@ -62,22 +60,22 @@ class SkillagerRemovedReadinessCommandTests(unittest.TestCase):
             self.assertNotRegex(help_text, rf"\n\s+{command}\s")
         self.assertNotIn("verify-signature", help_text)
 
-    def test_phase_four_removed_commands_have_replacement_errors_and_do_not_mutate(self) -> None:
+    def test_phase_four_removed_commands_are_invalid_choices_and_do_not_mutate(self) -> None:
         cases = [
-            ("index", ("--no-packages",), "internal to `skillager setup`"),
-            ("scan", ("--all",), "Static scanning runs during setup"),
-            ("lint", ("--json",), "Manifest lint runs during setup"),
-            ("new", ("demo",), "external authoring tooling"),
-            ("manifest", ("init", "."), "SKILL.md-only"),
-            ("state", ("migrate",), "no longer migrates state in place"),
-            ("project", ("tags", "--json"), "skillager tag list"),
+            ("index", ("--no-packages",)),
+            ("scan", ("--all",)),
+            ("lint", ("--json",)),
+            ("new", ("demo",)),
+            ("manifest", ("init", ".")),
+            ("state", ("migrate",)),
+            ("project", ("tags", "--json")),
         ]
-        for command, args, expected in cases:
+        for command, args in cases:
             with self.subTest(command=command):
-                code, stdout, stderr, root = self.run_removed(command, *args)
+                code, stdout, stderr, root = self.run_removed_invalid_choice(command, *args)
                 self.assertEqual(code, 2)
                 self.assertEqual(stdout, "")
-                self.assertIn(expected, stderr)
+                self.assertIn(f"invalid choice: '{command}'", stderr)
                 self.assertFalse((root / ".skillager").exists())
 
     def test_setup_help_does_not_advertise_removed_readiness_workflow(self) -> None:

@@ -124,138 +124,8 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _removed_top_level_command(argv: list[str]) -> int | None:
-    tokens = _positional_tokens(argv)
-    if len(tokens) >= 2 and tokens[0] == "collection" and tokens[1] == "enable":
-        print(
-            "skillager: error: `collection enable` was removed; use `skillager tag add <tag> --from-collection <collection> --sync`.",
-            file=sys.stderr,
-        )
-        return 2
-    if len(tokens) >= 2 and tokens[0] == "collection" and tokens[1] in {"search", "show"}:
-        _print_removed_collection_inventory_command(tokens[1])
-        return 2
-    command = _first_top_level_command(argv)
-    if command == "trust":
-        print(
-            "skillager: error: top-level `trust` was removed; use `skillager review approve <skill-id>` or `skillager review pin <skill-id>`.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "block":
-        print(
-            "skillager: error: top-level `block` was removed; use `skillager review block <skill-id>`.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "status":
-        print(
-            "skillager: error: `status` was removed. Agents should use `skillager working --json`; humans should use `skillager doctor --agent <agent>` or `skillager doctor --json`.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "handoff":
-        print(
-            "skillager: error: `handoff` was removed. Agents should use `skillager working`; humans should use `skillager doctor --agent <agent>`.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "bootstrap":
-        print(
-            "skillager: error: `bootstrap` was removed; use `skillager doctor --agent <agent> --fix` to repair first-party working artifacts.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "index":
-        print(
-            "skillager: error: `index` was removed. Discovery and indexing are internal to `skillager setup`, `skillager review`, and metadata commands.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "scan":
-        print(
-            "skillager: error: `scan` was removed. Static scanning runs during setup and review; use `skillager setup` or `skillager review --summary`.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "lint":
-        print(
-            "skillager: error: `lint` was removed. Manifest lint runs during setup and review; fix the source or use `skillager review approve <skill-id> --override-lint --reason <reason>` after review.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "new":
-        print(
-            "skillager: error: `new` was removed from the public CLI. Create native skill directories with external authoring tooling, then run `skillager setup`.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "manifest":
-        print(
-            "skillager: error: `manifest init` was removed from the public CLI. Skillager discovers SKILL.md-only directories; add skillager.yaml metadata manually when needed.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "state":
-        print(
-            "skillager: error: `state` was removed. Remove legacy project `.skillager` state after review, then rerun `skillager setup`; Skillager no longer migrates state in place.",
-            file=sys.stderr,
-        )
-        return 2
-    if command == "project":
-        print(
-            "skillager: error: `project` was removed; use `skillager tag list`, `skillager tag show <tag>`, and `skillager tag add/delete` for project tags.",
-            file=sys.stderr,
-        )
-        return 2
-    return None
-
-
-def _print_removed_collection_inventory_command(command: str) -> None:
-    replacement = "skillager search <query>" if command == "search" else "skillager show <skill-id>"
-    print(
-        (
-            f"skillager: error: `collection {command}` was removed. "
-            f"For project/task inventory, run setup/review first and use normal `{replacement}`. "
-            "For collection review/diagnostics, use `skillager review --collection <name> --summary` "
-            "or `skillager review --collection <name> --json`; for lint-blocked diagnosis, use "
-            "`skillager review --collection <name> --include-lint-blocked --json`. "
-            "Project curation remains `skillager tag add <tag> --from-collection <collection> --sync`."
-        ),
-        file=sys.stderr,
-    )
-
-
-def _first_top_level_command(argv: list[str]) -> str | None:
-    tokens = _positional_tokens(argv)
-    return tokens[0] if tokens else None
-
-
-def _positional_tokens(argv: list[str]) -> list[str]:
-    value_options = {"--state-dir", "--catalog-state-dir"}
-    index = 0
-    tokens: list[str] = []
-    while index < len(argv):
-        token = argv[index]
-        if token in value_options:
-            index += 2
-            continue
-        if any(token.startswith(f"{option}=") for option in value_options):
-            index += 1
-            continue
-        if token.startswith("-"):
-            index += 1
-            continue
-        tokens.append(token)
-        index += 1
-    return tokens
-
-
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    removed_command = _removed_top_level_command(argv)
-    if removed_command is not None:
-        return removed_command
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -657,7 +527,12 @@ def add_review_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             """
         ),
     )
-    p.add_argument("skill_ids", nargs="*")
+    p.add_argument(
+        "skill_ids",
+        nargs="*",
+        metavar="{approve,pin,block,unblock|skill-id}",
+        help="Optional action verb (approve, pin, block, unblock) followed by skill IDs; omit for metadata-only review.",
+    )
     add_review_filters(p)
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills in review. Defaults to local/environment/package skills only.")
     add_review_actions(p)
@@ -712,11 +587,16 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         default=None,
         help="native copies each skill; stub writes tiny activation handles; router creates one router skill for --tag or explicit skill IDs.",
     )
-    p.add_argument("--agent", action="append", choices=["codex", "claude"], help="Agent target. Repeat to target multiple agents. Defaults to codex.")
+    p.add_argument(
+        "--agent",
+        action="append",
+        choices=["codex", "claude"],
+        help="Agent target. Repeat to target multiple agents. Defaults to the detected or saved setup agent when unambiguous.",
+    )
     p.add_argument("--all-agents", action="store_true", help="Target both codex and claude.")
     p.add_argument("--scope", choices=["project", "global"], default="project", help="Expose into project .agents or global agent skill directory.")
     p.add_argument("--include-unreviewed", action="store_true", help="Allow discovered skills to be exposed.")
-    p.add_argument("--all-reviewed", action="store_true", help="Expose every available skill selected by filters. Owner/admin only; prefer explicit IDs, tags, or routers.")
+    p.add_argument("--all-reviewed", action="store_true", help="Expose every available skill selected by filters for supported non-native modes. Owner/admin only; prefer explicit IDs, tags, or routers.")
     p.add_argument("--allow-incompatible", action="store_true", help="Allow native/stub exposure even when skill metadata explicitly excludes the selected agent.")
     p.add_argument("--list", action="store_true", dest="list_exposures", help="List Skillager-managed exposed targets for the selected agent/scope.")
     p.add_argument("--remove", metavar="EXPOSURE_ID", help="Remove one Skillager-managed exposed target by exposure id.")
@@ -2634,17 +2514,40 @@ def _status_agent(args: argparse.Namespace, state_root: Path) -> tuple[str | Non
 
 
 def _saved_status_scope_agent(state_root: Path) -> str | None:
-    scope = _load_status_scope(state_root) or {}
-    agents = sorted(
-        {
-            agent
-            for agent in (scope.get("agents") or [])
-            if agent in {"codex", "claude"}
-        }
-    )
+    agents = _saved_status_scope_agents(state_root)
     if len(agents) == 1:
         return agents[0]
     return None
+
+
+def _saved_status_scope_agents(state_root: Path) -> list[str]:
+    scope = _load_status_scope(state_root) or {}
+    saved = {agent for agent in (scope.get("agents") or []) if agent in {"codex", "claude"}}
+    return [agent for agent in ("codex", "claude") if agent in saved]
+
+
+def _dedupe_agents(agents: list[str]) -> list[str]:
+    return list(dict.fromkeys(agents))
+
+
+def _resolve_expose_agents(args: argparse.Namespace, state_root: Path, *, mutating: bool) -> list[str]:
+    if args.all_agents:
+        return ["codex", "claude"]
+    if args.agent:
+        return _dedupe_agents(args.agent)
+    detected = _detect_agent_optional()
+    if detected:
+        return [detected]
+    saved = _saved_status_scope_agents(state_root)
+    if len(saved) == 1:
+        return saved
+    if not mutating:
+        return saved or ["codex", "claude"]
+    if saved:
+        raise ValueError(
+            "exposure target agent is ambiguous from saved setup state; pass --agent codex, --agent claude, or --all-agents"
+        )
+    raise ValueError("exposure target agent is unavailable; pass --agent codex or --agent claude")
 
 
 def _handoff_artifacts(project_dir: Path, *, agent: str) -> dict[str, Any]:
@@ -4907,7 +4810,7 @@ def cmd_expose(args: argparse.Namespace) -> int:
     if mode == "router" and not (args.tag or args.skill_ids):
         raise ValueError("--mode router requires --tag or explicit skill IDs")
     _require_expose_selection(args)
-    agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
+    agents = _resolve_expose_agents(args, root(args), mutating=not args.dry_run)
     agent_notes_ready_before = _agent_notes_ready(Path.cwd(), agents=agents) if args.scope == "project" else False
     materialized_targets_before = _materialized_target_paths(Path.cwd(), agents=agents) if args.scope == "project" else set()
     if mode == "router":
@@ -5086,7 +4989,7 @@ def _require_expose_management_only(args: argparse.Namespace, flag: str) -> None
 
 
 def _cmd_expose_list(args: argparse.Namespace) -> int:
-    agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
+    agents = _resolve_expose_agents(args, root(args), mutating=False)
     records = _exposure_records(_current_project_dir(), agents=agents, scope=args.scope)
     if args.json:
         print(json.dumps({"schema": "skillager.exposures.v1", "exposures": records}, indent=2, sort_keys=True))
@@ -5100,7 +5003,7 @@ def _cmd_expose_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_expose_remove(args: argparse.Namespace) -> int:
-    agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
+    agents = _resolve_expose_agents(args, root(args), mutating=not args.dry_run)
     records = _exposure_records(_current_project_dir(), agents=agents, scope=args.scope)
     matches = [item for item in records if _exposure_record_matches(item, args.remove)]
     if not matches:
@@ -5220,6 +5123,8 @@ def _require_expose_selection(args: argparse.Namespace) -> None:
             raise ValueError("--all-reviewed cannot be combined with --include-unreviewed")
         if args.all_reviewed and args.mode is None:
             raise ValueError("--all-reviewed requires explicit --mode")
+        if args.all_reviewed and args.mode == "native":
+            raise ValueError("--all-reviewed cannot be used with --mode native; use explicit skill IDs, --tag, --mode stub, or a router selection")
         return
     raise ValueError(
         "expose requires explicit skill IDs, --tag, or --all-reviewed. "

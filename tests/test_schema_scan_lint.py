@@ -115,8 +115,10 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
 
                 trust_error = StringIO()
                 with redirect_stderr(trust_error):
-                    self.assertEqual(main(["trust", "project/demo"]), 2)
-                self.assertIn("review approve", trust_error.getvalue())
+                    with self.assertRaises(SystemExit) as cm:
+                        main(["trust", "project/demo"])
+                self.assertEqual(cm.exception.code, 2)
+                self.assertIn("invalid choice: 'trust'", trust_error.getvalue())
 
                 activate_error = StringIO()
                 with redirect_stderr(activate_error):
@@ -501,9 +503,11 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
             stdout = StringIO()
             stderr = StringIO()
             with redirect_stdout(stdout), redirect_stderr(stderr):
-                self.assertEqual(main(["manifest", "init", str(root)]), 2)
+                with self.assertRaises(SystemExit) as cm:
+                    main(["manifest", "init", str(root)])
+            self.assertEqual(cm.exception.code, 2)
             self.assertEqual(stdout.getvalue(), "")
-            self.assertIn("`manifest init` was removed", stderr.getvalue())
+            self.assertIn("invalid choice: 'manifest'", stderr.getvalue())
             self.assertFalse((skill_dir / "skillager.yaml").exists())
 
     def test_explicit_agent_incompatibility_blocks_native_exposure_until_overridden(self) -> None:

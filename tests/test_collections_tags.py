@@ -191,7 +191,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 tag_data = json.loads(tag_output.getvalue())
                 self.assertEqual([skill["id"] for skill in tag_data["skills"]], ["community/gis-domain"])
 
-    def test_removed_collection_subcommands_return_replacement_guidance(self) -> None:
+    def test_removed_collection_subcommands_are_invalid_choices(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -202,9 +202,10 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 patch("pathlib.Path.home", return_value=root),
                 chdir(root),
             ):
-                self.assertEqual(main(["collection", "enable", "community", "--tag", "gis"]), 2)
-            self.assertIn("`collection enable` was removed", error.getvalue())
-            self.assertIn("skillager tag add <tag> --from-collection <collection> --sync", error.getvalue())
+                with self.assertRaises(SystemExit) as cm:
+                    main(["collection", "enable", "community", "--tag", "gis"])
+            self.assertEqual(cm.exception.code, 2)
+            self.assertIn("invalid choice: 'enable'", error.getvalue())
 
             help_output = StringIO()
             with (
@@ -219,9 +220,9 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             self.assertNotIn("collection search", help_output.getvalue())
             self.assertNotIn("collection show", help_output.getvalue())
 
-            for command, replacement, args in (
-                ("search", "skillager search <query>", ["collection", "search", "community", "gis"]),
-                ("show", "skillager show <skill-id>", ["collection", "show", "community/gis-domain"]),
+            for command, args in (
+                ("search", ["collection", "search", "community", "gis"]),
+                ("show", ["collection", "show", "community/gis-domain"]),
             ):
                 removed_error = StringIO()
                 with (
@@ -230,13 +231,11 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     patch("pathlib.Path.home", return_value=root),
                     chdir(root),
                 ):
-                    self.assertEqual(main(args), 2)
+                    with self.assertRaises(SystemExit) as cm:
+                        main(args)
+                self.assertEqual(cm.exception.code, 2)
                 message = removed_error.getvalue()
-                self.assertIn(f"`collection {command}` was removed", message)
-                self.assertIn(replacement, message)
-                self.assertIn("skillager review --collection <name> --summary", message)
-                self.assertIn("skillager review --collection <name> --include-lint-blocked --json", message)
-                self.assertIn("skillager tag add <tag> --from-collection <collection> --sync", message)
+                self.assertIn(f"invalid choice: '{command}'", message)
 
     def test_tag_add_from_collection_and_sync(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1083,6 +1082,10 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(expose_output):
                     self.assertEqual(main(["expose", "community/gis-domain", "--mode", "router", "--agent", "codex", "--json"]), 0)
                 router_slug = json.loads(expose_output.getvalue())[0]["exposure_id"]
+                fallback_tag = router_slug.removeprefix("skillager-")
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["tag", "create", fallback_tag]), 0)
+                    self.assertEqual(main(["tag", "add", fallback_tag, "community/other"]), 0)
 
                 error = StringIO()
                 with redirect_stderr(error):

@@ -77,6 +77,16 @@ class SkillagerCoreTests(unittest.TestCase):
         self.assertNotIn("lookback", help_text)
         self.assertNotIn("recommend", help_text)
 
+    def test_review_help_surfaces_action_verbs_in_usage_and_positionals(self) -> None:
+        parser = build_parser()
+        stdout = StringIO()
+        with redirect_stdout(stdout), self.assertRaises(SystemExit) as cm:
+            parser.parse_args(["review", "--help"])
+        self.assertEqual(cm.exception.code, 0)
+        help_text = stdout.getvalue()
+        self.assertIn("{approve,pin,block,unblock|skill-id}", help_text)
+        self.assertIn("Optional action verb (approve, pin, block, unblock)", help_text)
+
     def test_python_module_entrypoint_runs(self) -> None:
         result = subprocess.run(
             [sys.executable, "-m", "skillager", "--version"],
@@ -234,9 +244,10 @@ class SkillagerCoreTests(unittest.TestCase):
                 patch("pathlib.Path.home", return_value=project),
                 chdir(project),
             ):
-                self.assertEqual(main(["state", "migrate"]), 2)
-            self.assertIn("`state` was removed", stderr.getvalue())
-            self.assertIn("no longer migrates state in place", stderr.getvalue())
+                with self.assertRaises(SystemExit) as cm:
+                    main(["state", "migrate"])
+            self.assertEqual(cm.exception.code, 2)
+            self.assertIn("invalid choice: 'state'", stderr.getvalue())
             self.assertTrue((legacy / "trust.json").exists())
 
     def test_new_command_is_removed_without_scaffolding(self) -> None:
@@ -254,9 +265,11 @@ class SkillagerCoreTests(unittest.TestCase):
                 patch("pathlib.Path.home", return_value=home),
                 chdir(project),
             ):
-                self.assertEqual(main(["new", "gis-workflow"]), 2)
+                with self.assertRaises(SystemExit) as cm:
+                    main(["new", "gis-workflow"])
+            self.assertEqual(cm.exception.code, 2)
             self.assertEqual(stdout.getvalue(), "")
-            self.assertIn("external authoring tooling", stderr.getvalue())
+            self.assertIn("invalid choice: 'new'", stderr.getvalue())
             self.assertFalse((project / ".agents" / "skills" / "gis-workflow").exists())
 
     def test_authored_high_risk_refusal_uses_review_hint(self) -> None:

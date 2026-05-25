@@ -132,7 +132,9 @@ Setup and doctor repair keep a best-effort registry of known project paths in th
 
 `skillager doctor` is the human diagnostic command. It reports cached Skillager update information when present, but it does not contact PyPI or write update-check cache files unless the selected diagnostic path explicitly says it will.
 
-Use `skillager doctor --agent <agent> --fix` when review is already complete but working artifacts are missing or stale. Use `skillager expose` directly when you already know a reviewed skill or tag should be exposed to the agent. Normal exposure uses explicit skill IDs or `--tag`; owner/admin bulk exposure can use `--all-reviewed`. `expose` does not install or repair Skillager Working or project working notes.
+Use `skillager doctor --agent <agent> --fix` when review is already complete but working artifacts are missing or stale. Use `skillager expose` directly when you already know a reviewed skill or tag should be exposed to the agent. Normal exposure uses explicit skill IDs or `--tag`; owner/admin bulk exposure can use `--all-reviewed --mode stub`, while native exposure still requires explicit IDs or a tag. `expose` does not install or repair Skillager Working or project working notes.
+
+Removed pre-pruning command names such as `trust`, `block`, `bootstrap`, `status`, `state`, `project`, `new`, `manifest`, `index`, `scan`, and runtime `lint` now fail with the normal argparse invalid-choice error. Use the current surfaces: `review approve/pin/block/unblock`, `doctor`, `working`, `tag`, `setup`, and the standalone `skillager-lint` package for author linting.
 
 Use `--mode stub` for skills you want visible by name without loading the full skill body into every session. A stub contains only the skill summary and an activation command; the full body still comes through Skillager's approval gate. After setup, Skillager prints numbered available-but-hidden stub candidates so you can say “please stub 1, 5, 8.”
 

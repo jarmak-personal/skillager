@@ -133,6 +133,21 @@ class SkillagerMaterializeTests(unittest.TestCase):
                 self.assertEqual(main(["expose", "--all-reviewed", "--agent", "codex"]), 2)
             self.assertIn("--all-reviewed requires explicit --mode", stderr.getvalue())
 
+    def test_materialize_rejects_all_reviewed_native_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            stderr = StringIO()
+            with (
+                redirect_stderr(stderr),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                self.assertEqual(main(["expose", "--all-reviewed", "--mode", "native", "--agent", "codex"]), 2)
+            self.assertIn("--all-reviewed cannot be used with --mode native", stderr.getvalue())
+
     def test_materialize_rejects_all_reviewed_include_unreviewed_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -147,6 +162,58 @@ class SkillagerMaterializeTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["expose", "--all-reviewed", "--mode", "native", "--include-unreviewed", "--agent", "codex"]), 2)
             self.assertIn("--all-reviewed cannot be combined with --include-unreviewed", stderr.getvalue())
+
+    def test_expose_without_agent_uses_saved_setup_agent_for_write_list_and_remove(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"},
+                clear=True,
+            ):
+                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages", "--agent", "claude"]), 0)
+                    self.assertEqual(main(["expose", "project/demo"]), 0)
+                    listed = StringIO()
+                    with redirect_stdout(listed):
+                        self.assertEqual(main(["expose", "--list", "--json"]), 0)
+                    payload = json.loads(listed.getvalue())
+                    self.assertEqual([item["agent"] for item in payload["exposures"]], ["claude"])
+                    self.assertEqual(main(["expose", "--remove", "project-demo"]), 0)
+            self.assertFalse((root / ".agents" / "skills" / "project-demo").exists())
+            self.assertFalse((root / ".claude" / "skills" / "project-demo").exists())
+
+    def test_expose_without_agent_fails_when_unavailable_or_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"},
+                clear=True,
+            ):
+                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                    unavailable = StringIO()
+                    with redirect_stderr(unavailable):
+                        self.assertEqual(main(["expose", "project/demo"]), 2)
+                    self.assertIn("pass --agent codex or --agent claude", unavailable.getvalue())
+                    (state / "status_scope.json").write_text(
+                        json.dumps({"schema": "skillager.status-scope.v1", "agents": ["codex", "claude"], "baseline": {}}),
+                        encoding="utf-8",
+                    )
+                    ambiguous = StringIO()
+                    with redirect_stderr(ambiguous):
+                        self.assertEqual(main(["expose", "project/demo"]), 2)
+                    self.assertIn("ambiguous", ambiguous.getvalue())
+                    self.assertIn("--all-agents", ambiguous.getvalue())
 
     def test_materialize_does_not_write_first_party_handoff_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -195,7 +262,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             self.assertNotIn("bootstrap", text)
             self.assertIn("Other notes stay.", text)
 
-    def test_materialize_all_reviewed_materializes_selected_filter_scope(self) -> None:
+    def test_materialize_all_reviewed_stub_materializes_selected_filter_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -212,7 +279,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
                     output = StringIO()
                     with redirect_stdout(output):
-                        self.assertEqual(main(["expose", "--all-reviewed", "--mode", "native", "--audience", "user", "--agent", "codex"]), 0)
+                        self.assertEqual(main(["expose", "--all-reviewed", "--mode", "stub", "--audience", "user", "--agent", "codex"]), 0)
             self.assertIn("project/gis-domain: exposed", output.getvalue())
             self.assertNotIn("project/commit: exposed", output.getvalue())
             self.assertTrue((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())

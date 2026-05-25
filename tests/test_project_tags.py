@@ -106,8 +106,10 @@ class SkillagerProjectTagTests(unittest.TestCase):
                 with chdir(project):
                     stderr = StringIO()
                     with redirect_stderr(stderr):
-                        self.assertEqual(main(["state", "migrate-tags", "--to", "projects", "--json"]), 2)
-            self.assertIn("`state` was removed", stderr.getvalue())
+                        with self.assertRaises(SystemExit) as cm:
+                            main(["state", "migrate-tags", "--to", "projects", "--json"])
+                    self.assertEqual(cm.exception.code, 2)
+            self.assertIn("invalid choice: 'state'", stderr.getvalue())
             self.assertFalse((project / ".skillager" / "tags.json").exists())
 
 

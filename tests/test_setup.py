@@ -1289,7 +1289,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 self.assertIn("--bulk-approve", error.getvalue())
             self.assertEqual(load_index(state)["skills"][0]["trust"], "discovered")
 
-    def test_removed_top_level_trust_and_block_do_not_change_state(self) -> None:
+    def test_removed_top_level_trust_and_block_are_invalid_choices_without_state_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -1306,12 +1306,16 @@ class SkillagerSetupTests(unittest.TestCase):
                     build_index(state, include_packages=False)
                 trust_error = StringIO()
                 with redirect_stderr(trust_error):
-                    self.assertEqual(main(["trust", "project/demo"]), 2)
-                self.assertIn("review approve", trust_error.getvalue())
+                    with self.assertRaises(SystemExit) as cm:
+                        main(["trust", "project/demo"])
+                self.assertEqual(cm.exception.code, 2)
+                self.assertIn("invalid choice: 'trust'", trust_error.getvalue())
                 block_error = StringIO()
                 with redirect_stderr(block_error):
-                    self.assertEqual(main(["block", "project/demo"]), 2)
-                self.assertIn("review block", block_error.getvalue())
+                    with self.assertRaises(SystemExit) as cm:
+                        main(["block", "project/demo"])
+                self.assertEqual(cm.exception.code, 2)
+                self.assertIn("invalid choice: 'block'", block_error.getvalue())
             self.assertEqual(load_index(state)["skills"][0]["trust"], "discovered")
 
     def test_setup_yolo_reviews_high_risk_for_trusted_source(self) -> None:

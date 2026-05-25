@@ -14,7 +14,7 @@ from skillager.cli import main
 
 class SkillagerBootstrapRemovedCommandTests(unittest.TestCase):
 
-    def test_bootstrap_is_removed_replacement_error_and_does_not_mutate(self) -> None:
+    def test_bootstrap_is_invalid_choice_and_does_not_mutate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -26,11 +26,12 @@ class SkillagerBootstrapRemovedCommandTests(unittest.TestCase):
                 redirect_stdout(stdout),
                 redirect_stderr(stderr),
             ):
-                code = main(["bootstrap", "--agent", "codex"])
+                with self.assertRaises(SystemExit) as cm:
+                    main(["bootstrap", "--agent", "codex"])
 
-            self.assertEqual(code, 2)
+            self.assertEqual(cm.exception.code, 2)
             self.assertEqual(stdout.getvalue(), "")
-            self.assertIn("skillager doctor --agent <agent> --fix", stderr.getvalue())
+            self.assertIn("invalid choice: 'bootstrap'", stderr.getvalue())
             self.assertFalse((root / ".agents").exists())
             self.assertFalse((root / "AGENTS.md").exists())
             self.assertFalse(state.exists())
