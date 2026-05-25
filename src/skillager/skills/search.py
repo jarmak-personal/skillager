@@ -296,7 +296,7 @@ def _target_text(skill: dict[str, Any]) -> str:
     targets = skill.get("targets", {})
     if not isinstance(targets, dict):
         return ""
-    for target_group in (targets.get("python_packages", []), targets.get("npm_packages", [])):
+    for target_group in (targets.get("python_packages", []), targets.get("npm_packages", []), targets.get("cargo_packages", [])):
         if not isinstance(target_group, list):
             continue
         for target in target_group:
@@ -369,6 +369,6 @@ def _visibility_rank(skill: dict[str, Any]) -> int:
         return 5
     if skill.get("source", {}).get("type") == "collection":
         return 6
-    if skill.get("source", {}).get("type") in {"python-package", "npm-package"}:
+    if skill.get("source", {}).get("type") in {"python-package", "npm-package", "cargo-package"}:
         return 7
     return 8

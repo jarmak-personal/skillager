@@ -349,7 +349,7 @@ def _skill_tail(skill_id: str) -> str:
 
 
 def _canonical_package(value: str, source: dict[str, Any] | None = None) -> str:
-    if source and source.get("type") == "npm-package":
+    if source and source.get("type") in {"npm-package", "cargo-package"}:
         return value.strip().lower()
     return re.sub(r"[-_.]+", "-", value.strip().lower())
 

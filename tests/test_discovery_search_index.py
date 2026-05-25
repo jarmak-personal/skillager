@@ -822,6 +822,140 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                 data = build_index(state, include_packages=True)
             self.assertEqual(data["skills"], [])
 
+    def test_global_cli_discovers_cargo_sparse_registry_package_skills_from_lockfile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            root.mkdir()
+            (root / ".git").mkdir()
+            state = root / ".skillager"
+            cargo_home = Path(tmp) / "cargo-home"
+            package_root = cargo_home / "registry" / "src" / "index.crates.io-abcdef" / "demo-crate-1.2.3"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (package_root / "Cargo.toml").write_text('[package]\nname = "demo-crate"\nversion = "1.2.3"\n', encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text("# Demo Crate Help\n\nUse Cargo crate-distributed guidance.\n", encoding="utf-8")
+            (root / "Cargo.lock").write_text(
+                'version = 3\n\n[[package]]\nname = "demo-crate"\nversion = "1.2.3"\nsource = "sparse+https://example.test/crates"\n',
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"CARGO_HOME": str(cargo_home)}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            skill = next(item for item in data["skills"] if item["id"] == "demo-crate/help")
+            self.assertEqual(skill["source"]["type"], "cargo-package")
+            self.assertEqual(skill["source"]["package"], "demo-crate")
+            self.assertEqual(skill["source"]["version"], "1.2.3")
+            self.assertEqual(skill["package"], "demo-crate")
+            self.assertEqual(skill["approval_key"], "package:demo-crate#.agents/skills/help")
+
+    def test_cargo_registry_cache_is_not_scanned_without_lockfile_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            root.mkdir()
+            state = root / ".skillager"
+            cargo_home = Path(tmp) / "cargo-home"
+            package_root = cargo_home / "registry" / "src" / "index.crates.io-abcdef" / "demo-crate-1.2.3"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (package_root / "Cargo.toml").write_text('[package]\nname = "demo-crate"\nversion = "1.2.3"\n', encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text("# Demo Crate Help\n\nUse Cargo crate guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"CARGO_HOME": str(cargo_home)}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            self.assertEqual(data["skills"], [])
+
+    def test_global_cli_discovers_project_local_cargo_package_skills_from_lockfile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            root.mkdir()
+            state = root / ".skillager"
+            cargo_home = Path(tmp) / "cargo-home"
+            package_root = root / "crates" / "demo_crate"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (package_root / "Cargo.toml").write_text('[package]\nname = "demo_crate"\nversion = "0.1.0"\n', encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text("# Demo Crate Help\n\nUse local Cargo crate guidance.\n", encoding="utf-8")
+            (root / "Cargo.lock").write_text('version = 3\n\n[[package]]\nname = "demo_crate"\nversion = "0.1.0"\n', encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"CARGO_HOME": str(cargo_home)}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=True)
+            skill = next(item for item in data["skills"] if item["id"] == "demo-crate/help")
+            self.assertEqual(skill["source"]["type"], "cargo-package")
+            self.assertEqual(skill["source"]["package"], "demo_crate")
+            self.assertEqual(skill["approval_key"], "package:demo_crate#.agents/skills/help")
+
+    def test_no_packages_skips_cargo_package_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            root.mkdir()
+            state = root / ".skillager"
+            cargo_home = Path(tmp) / "cargo-home"
+            package_root = cargo_home / "registry" / "src" / "index.crates.io-abcdef" / "demo-crate-1.2.3"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo Crate Help\n\nUse Cargo crate guidance.\n", encoding="utf-8")
+            (root / "Cargo.lock").write_text(
+                'version = 3\n\n[[package]]\nname = "demo-crate"\nversion = "1.2.3"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"CARGO_HOME": str(cargo_home)}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+            ):
+                data = build_index(state, include_packages=False)
+            self.assertEqual(data["skills"], [])
+
+    def test_list_no_packages_hides_reviewed_cargo_package_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "project"
+            root.mkdir()
+            state = root / ".skillager"
+            cargo_home = Path(tmp) / "cargo-home"
+            package_root = cargo_home / "registry" / "src" / "index.crates.io-abcdef" / "demo-crate-1.2.3"
+            skill_dir = package_root / ".agents" / "skills" / "help"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo Crate Help\n\nUse Cargo crate guidance.\n", encoding="utf-8")
+            (root / "Cargo.lock").write_text(
+                'version = 3\n\n[[package]]\nname = "demo-crate"\nversion = "1.2.3"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(
+                    os.environ,
+                    {"CARGO_HOME": str(cargo_home), "SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"},
+                ),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("skillager.paths.current_venv", return_value=None),
+                patch("skillager.paths.current_conda_env", return_value=None),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                data = build_index(state, include_packages=True)
+                skill = data["skills"][0]
+                set_trust(state, skill["id"], "reviewed", skill["content_hash"], skill["source"], approval_key=skill.get("approval_key"), approval_root=state)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["list", "--no-packages", "--json"]), 0)
+            self.assertEqual(json.loads(output.getvalue()), [])
+
     def test_search_prefers_exposed_project_skill_over_hidden_package_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

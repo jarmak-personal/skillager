@@ -6,6 +6,8 @@ from pathlib import Path
 
 IGNORED_DIR_NAMES = {
     ".git",
+    ".cargo",
+    ".conda",
     "__pycache__",
     ".pytest_cache",
     ".ruff_cache",
@@ -16,6 +18,7 @@ IGNORED_DIR_NAMES = {
     "node_modules",
     "build",
     "dist",
+    "target",
 }
 
 

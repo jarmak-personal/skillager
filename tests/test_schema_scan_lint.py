@@ -53,12 +53,12 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
             with self.assertRaisesRegex(SchemaError, "unknown manifest key"):
                 load_skill_from_dir(skill_dir, {"type": "project"})
 
-    def test_manifest_accepts_npm_package_targets(self) -> None:
+    def test_manifest_accepts_npm_and_cargo_package_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            skill_dir = root / ".skills" / "npm"
+            skill_dir = root / ".skills" / "package-targets"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# NPM\n\nUse npm guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text("# Package Targets\n\nUse package target guidance.\n", encoding="utf-8")
             (skill_dir / "skillager.yaml").write_text(
                 "\n".join(
                     [
@@ -71,6 +71,9 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                         "  npm_packages:",
                         "    - name: '@Scope/Demo_Pkg'",
                         "      versions: '^1.0.0 || >=2 <3'",
+                        "  cargo_packages:",
+                        "    - name: 'Demo_Crate'",
+                        "      versions: ' >=1, <2 '",
                     ]
                 )
                 + "\n",
@@ -78,6 +81,7 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
             )
             skill = load_skill_from_dir(skill_dir, {"type": "project"})
             self.assertEqual(skill.targets["npm_packages"], [{"name": "@scope/demo_pkg", "versions": "^1.0.0 || >=2 <3"}])
+            self.assertEqual(skill.targets["cargo_packages"], [{"name": "demo_crate", "versions": ">=1, <2"}])
 
     def test_invalid_manifest_is_lint_blocked_until_audited_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

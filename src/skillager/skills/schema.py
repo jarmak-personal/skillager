@@ -20,11 +20,13 @@ TRUST_STATES = {"discovered", "reviewed", "trusted", "pinned", "blocked", "lint_
 ENV_RE = _validators.ENV_RE
 PACKAGE_RE = _validators.PACKAGE_RE
 NPM_PACKAGE_RE = _validators.NPM_PACKAGE_RE
+CARGO_PACKAGE_RE = _validators.CARGO_PACKAGE_RE
 MAX_TARGET_PACKAGES = _validators.MAX_TARGET_PACKAGES
 MAX_ENV_NAMES = _validators.MAX_ENV_NAMES
 MAX_SPECIFIER_LENGTH = _validators.MAX_SPECIFIER_LENGTH
 SchemaError = _validators.ManifestValidationError
 canonical_npm_package_name = _validators.canonical_npm_package_name
+canonical_cargo_package_name = _validators.canonical_cargo_package_name
 
 
 @_dataclass(frozen=True)
@@ -209,6 +211,7 @@ def _dedupe_findings(findings: list[dict[str, _Any]]) -> list[dict[str, _Any]]:
 __all__ = [
     "ACTIVATION_MODES",
     "AUDIENCES",
+    "CARGO_PACKAGE_RE",
     "ENV_RE",
     "MAX_ENV_NAMES",
     "MAX_SPECIFIER_LENGTH",
@@ -220,6 +223,7 @@ __all__ = [
     "QuarantinedSkill",
     "SchemaError",
     "Skill",
+    "canonical_cargo_package_name",
     "canonical_npm_package_name",
     "infer_skill",
     "load_skill_from_dir",

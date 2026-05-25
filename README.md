@@ -6,7 +6,7 @@ Skillager is a local CLI for discovering, reviewing, organizing, and materializi
 Register/discover -> review -> approve -> search metadata -> materialize on demand
 ```
 
-Projects, Python libraries, npm packages, tools, and personal skill repos can ship useful agent guidance. Skillager keeps that guidance searchable and reviewed, but out of the agent context until it is needed.
+Projects, Python libraries, npm packages, Cargo crates, tools, and personal skill repos can ship useful agent guidance. Skillager keeps that guidance searchable and reviewed, but out of the agent context until it is needed.
 
 ## Quickstart
 
@@ -22,7 +22,7 @@ uv tool install skillager
    - Work through any required approvals etc. (don't blindly trust skills from sources you don't know.)
 4. Open your agent of choice and tell them to run `skillager handoff --agent [your agent]`
 
-`setup` automatically discovers project skills, package-provided skills from Python environments and project `node_modules`, Python environment skills from project virtualenv or conda environments, collections, and native agent skills. It scans them and only marks content available to your agent after user approval. Skillager is meant to be installed once as a user tool; it does not need to live inside every project environment.
+`setup` automatically discovers project skills, package-provided skills from Python environments, project `node_modules`, and `Cargo.lock`-selected Cargo crates, Python environment skills from project virtualenv or conda environments, collections, and native agent skills. It scans them and only marks content available to your agent after user approval. Skillager is meant to be installed once as a user tool; it does not need to live inside every project environment.
 
 Skillager writes a small project note in `AGENTS/CLAUDE.MD` so the agent knows to run `skillager working`, use metadata commands, and ask you to run setup or bootstrap when user-authority review is needed.
 
@@ -88,7 +88,7 @@ skillager materialize --tag workflows --mode router --agent codex --scope projec
 
 ## Package Authors
 
-Python libraries and npm packages can ship skills inside the package:
+Python libraries, npm packages, and Cargo crates can ship skills inside the package:
 
 ```text
 your_package/
@@ -110,7 +110,16 @@ your-npm-package/
       skillager.yaml
 ```
 
-Skillager discovers package skills after install from project Python environments, including virtualenv and conda environments, and from project `node_modules` without importing packages or running package scripts. Users still review and approve them before an agent can activate them.
+```text
+your-crate/
+  Cargo.toml
+  .agents/skills/
+    tokio-usage/
+      SKILL.md
+      skillager.yaml
+```
+
+Skillager discovers package skills after install from project Python environments, including virtualenv and conda environments, from project `node_modules`, and from Cargo crates selected by the current project's `Cargo.lock` without importing packages, running package scripts, or invoking Cargo. Users still review and approve them before an agent can activate them.
 
 `skillager.yaml` is optional and structured-only to support safe skills. Put searchable prose in `SKILL.md`; manifests can declare audience, activation, compatibility constraints, and typed package targets. For CI, run `uvx --from skillager-linter skillager-lint .`.
 

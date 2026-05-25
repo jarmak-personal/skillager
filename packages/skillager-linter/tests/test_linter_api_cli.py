@@ -56,17 +56,20 @@ class LinterApiCliTests(unittest.TestCase):
             self.assertEqual(result.lint.findings[0].code, "unknown_key")
             self.assertNotIn("hostile manifest bait", payload)
 
-    def test_npm_package_targets_lint_ok(self) -> None:
+    def test_npm_and_cargo_package_targets_lint_ok(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "demo"
             root.mkdir()
-            (root / "SKILL.md").write_text("# Demo\n\nUseful npm workflow.", encoding="utf-8")
+            (root / "SKILL.md").write_text("# Demo\n\nUseful package workflow.", encoding="utf-8")
             (root / "skillager.yaml").write_text(
                 MINIMAL_MANIFEST_YAML
                 + "targets:\n"
                 + "  npm_packages:\n"
                 + "    - name: '@Scope/Demo_Pkg'\n"
-                + "      versions: '^1.0.0 || >=2 <3'\n",
+                + "      versions: '^1.0.0 || >=2 <3'\n"
+                + "  cargo_packages:\n"
+                + "    - name: 'Demo_Crate'\n"
+                + "      versions: ' >=1, <2 '\n",
                 encoding="utf-8",
             )
 
@@ -75,6 +78,7 @@ class LinterApiCliTests(unittest.TestCase):
             self.assertEqual(result.lint.status, "ok")
             self.assertIsNotNone(result.metadata)
             self.assertEqual(result.metadata.targets["npm_packages"], [{"name": "@scope/demo_pkg", "versions": "^1.0.0 || >=2 <3"}])
+            self.assertEqual(result.metadata.targets["cargo_packages"], [{"name": "demo_crate", "versions": ">=1, <2"}])
 
     def test_signed_skill_without_card_lints_ok_and_logs_debug_note(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

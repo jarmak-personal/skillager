@@ -1,6 +1,6 @@
 # Package Author Guide
 
-Packages can ship skills alongside package code. Skillager discovers package-provided `.skills`, `skills`, and `.agents/skills` directories in project Python environments, including virtualenv and conda environments, and in project `node_modules` without importing packages or running package scripts.
+Packages can ship skills alongside package code. Skillager discovers package-provided `.skills`, `skills`, and `.agents/skills` directories in project Python environments, including virtualenv and conda environments, in project `node_modules`, and in `Cargo.lock`-selected Cargo crates without importing packages, running package scripts, or invoking Cargo.
 
 ## Recommended Layout
 
@@ -24,6 +24,19 @@ your-npm-package/
   package.json
   .agents/skills/
     react-query-usage/
+      SKILL.md
+      skillager.yaml
+      references/
+      scripts/
+```
+
+Cargo crate:
+
+```text
+your-crate/
+  Cargo.toml
+  .agents/skills/
+    tokio-usage/
       SKILL.md
       skillager.yaml
       references/
@@ -81,6 +94,22 @@ targets:
 ```
 
 Npm `versions` values are normalized as compact non-empty strings for targeting and search; Skillager does not run npm or resolve semver ranges during lint or discovery. V1 discovery scans the current project's top-level `node_modules` only, so package-manager root hoisting is covered but nested workspace-local `node_modules` directories are not crawled.
+
+For Cargo crates, use crate names and Cargo semver requirement strings:
+
+```yaml
+schema: skillager.skill.v1
+audience:
+  - user
+activation:
+  default: suggested
+targets:
+  cargo_packages:
+    - name: tokio
+      versions: ">=1,<2"
+```
+
+Cargo `versions` values are normalized as compact non-empty strings for targeting and search; Skillager does not invoke Cargo or resolve version requirements during lint or discovery. V1 discovery reads the current project's `Cargo.lock`, then looks for matching crate sources in the local Cargo registry/git cache and matching local crate roots under the project tree.
 
 The manifest is intentionally structured-only. It cannot declare `id`, `name`, `summary`, `source`, `entrypoint`, `safety`, `triggers`, `domains`, `tools`, or `references`. Skillager derives identity from the package/path and from the reviewed `SKILL.md` body: simple `name`/`description` frontmatter when present, then top-level heading/first sentence fallbacks.
 

@@ -2,18 +2,27 @@ from __future__ import annotations
 
 import json
 import hashlib
+import os
+import sys
 from dataclasses import replace
 from importlib import metadata
 from pathlib import Path
 from typing import Any, Iterable, TypeAlias
 from urllib.parse import unquote, urlparse
 
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib  # type: ignore[import-not-found]
+
 from ..paths import environment_roots, find_project_root, venv_site_packages
 from .schema import (
+    CARGO_PACKAGE_RE,
     NPM_PACKAGE_RE,
     QuarantinedSkill,
     SchemaError,
     Skill,
+    canonical_cargo_package_name,
     canonical_npm_package_name,
     load_skill_from_dir,
     quarantine_skill_from_dir,
@@ -22,6 +31,7 @@ from .schema import (
 IGNORED_CHILD_REPO_DIR_NAMES = {
     ".cache",
     ".conda",
+    ".cargo",
     ".git",
     ".gradle",
     ".hg",
@@ -211,6 +221,9 @@ def discover_package_skills() -> tuple[list[IndexableSkill], list[dict[str, str]
     npm_skills, npm_errors = discover_npm_package_skills(project_root)
     skills.extend(npm_skills)
     errors.extend(npm_errors)
+    cargo_skills, cargo_errors = discover_cargo_package_skills(project_root)
+    skills.extend(cargo_skills)
+    errors.extend(cargo_errors)
     return skills, errors
 
 
@@ -296,7 +309,7 @@ def _append_npm_package(
         return
     if package_root in seen_roots:
         return
-    if not _has_npm_package_skill_root(package_dir):
+    if not _has_package_skill_root(package_dir):
         return
     if not (package_dir / "package.json").is_file():
         return
@@ -305,7 +318,7 @@ def _append_npm_package(
     packages.append((package_root, package_name, version))
 
 
-def _has_npm_package_skill_root(package_dir: Path) -> bool:
+def _has_package_skill_root(package_dir: Path) -> bool:
     for skill_root, _ in project_skill_roots(package_dir, {}):
         try:
             if skill_root.is_dir():
@@ -347,6 +360,231 @@ def _npm_package_name_from_path(node_modules: Path, package_dir: Path) -> str:
         name = package_dir.name
     canonical = canonical_npm_package_name(name)
     return canonical if NPM_PACKAGE_RE.fullmatch(canonical) else "unknown"
+
+
+def discover_cargo_package_skills(project_root: Path | None = None) -> tuple[list[IndexableSkill], list[dict[str, str]]]:
+    skills: list[IndexableSkill] = []
+    errors: list[dict[str, str]] = []
+    seen_dirs: set[Path] = set()
+    project_root = project_root or find_project_root()
+    if not project_root:
+        return skills, errors
+
+    for package_root, package_name, version, environment in _cargo_package_roots(project_root):
+        source = {
+            "type": "cargo-package",
+            "package": package_name,
+            "version": version,
+            "environment": str(environment),
+            "package_root": str(package_root),
+        }
+        for root, root_source in project_skill_roots(package_root, source):
+            try:
+                skill_dirs = _skill_dirs(root)
+            except OSError as exc:
+                errors.append({"path": str(root), "error": str(exc)})
+                continue
+            for skill_dir in skill_dirs:
+                skill_dir = skill_dir.resolve()
+                if skill_dir in seen_dirs:
+                    continue
+                seen_dirs.add(skill_dir)
+                try:
+                    skills.append(load_skill_from_dir(skill_dir, root_source))
+                except (SchemaError, OSError, ValueError) as exc:
+                    quarantined = quarantine_skill_from_dir(skill_dir, root_source, exc)
+                    if quarantined:
+                        skills.append(quarantined)
+                    errors.append({"path": str(skill_dir), "error": str(exc)})
+    return skills, errors
+
+
+def _cargo_package_roots(project_root: Path) -> list[tuple[Path, str, str | None, Path]]:
+    lock_path = project_root / "Cargo.lock"
+    if not lock_path.is_file():
+        return []
+    lock_packages = _cargo_lock_packages(lock_path)
+    if not lock_packages:
+        return []
+    cargo_home = _cargo_home()
+    packages: list[tuple[Path, str, str | None, Path]] = []
+    seen_roots: set[Path] = set()
+    local_packages: dict[str, list[tuple[str, str]]] = {}
+    git_packages: dict[str, list[tuple[str, str]]] = {}
+
+    for package in lock_packages:
+        raw_name = package.get("name")
+        raw_version = package.get("version")
+        if not isinstance(raw_name, str) or not isinstance(raw_version, str):
+            continue
+        name = canonical_cargo_package_name(raw_name)
+        version = raw_version.strip()
+        if not name or not version or not CARGO_PACKAGE_RE.fullmatch(name):
+            continue
+        source = package.get("source")
+        if isinstance(source, str) and source.startswith(("registry+", "sparse+")):
+            for root, environment in _cargo_registry_package_dirs(cargo_home, name, version):
+                _append_cargo_package(packages, seen_roots, root, name, version, environment)
+        elif isinstance(source, str) and source.startswith("git+"):
+            git_packages.setdefault(name, []).append((version, source))
+        elif source is None:
+            local_packages.setdefault(name, []).append((version, "local"))
+
+    if git_packages:
+        for root, name, version, environment in _cargo_manifest_package_roots(cargo_home / "git" / "checkouts", git_packages):
+            _append_cargo_package(packages, seen_roots, root, name, version, environment)
+    if local_packages:
+        for root, name, version, environment in _cargo_manifest_package_roots(project_root, local_packages):
+            _append_cargo_package(packages, seen_roots, root, name, version, environment)
+    return packages
+
+
+def _cargo_home() -> Path:
+    raw = os.environ.get("CARGO_HOME")
+    if raw:
+        try:
+            return Path(raw).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return Path(raw).expanduser()
+    try:
+        return (Path.home() / ".cargo").resolve()
+    except (OSError, RuntimeError):
+        return Path(".cargo").resolve()
+
+
+def _cargo_registry_package_dirs(cargo_home: Path, name: str, version: str) -> list[tuple[Path, Path]]:
+    registry_src = cargo_home / "registry" / "src"
+    try:
+        source_roots = sorted((path for path in registry_src.iterdir() if path.is_dir()), key=lambda path: path.name)
+    except OSError:
+        return []
+    package_dir_name = f"{name}-{version}"
+    result: list[tuple[Path, Path]] = []
+    for source_root in source_roots:
+        package_root = source_root / package_dir_name
+        try:
+            if package_root.is_dir():
+                result.append((package_root, source_root))
+        except OSError:
+            continue
+    return result
+
+
+def _append_cargo_package(
+    packages: list[tuple[Path, str, str | None, Path]],
+    seen_roots: set[Path],
+    package_dir: Path,
+    package_name: str,
+    version: str,
+    environment: Path,
+) -> None:
+    try:
+        if not package_dir.is_dir():
+            return
+        package_root = package_dir.resolve()
+    except OSError:
+        return
+    if package_root in seen_roots:
+        return
+    if not _has_package_skill_root(package_dir):
+        return
+    seen_roots.add(package_root)
+    packages.append((package_root, package_name, version, environment))
+
+
+def _cargo_manifest_package_roots(root: Path, locked: dict[str, list[tuple[str, str]]]) -> list[tuple[Path, str, str, Path]]:
+    result: list[tuple[Path, str, str, Path]] = []
+    for manifest in _cargo_manifest_paths(root):
+        package_root = manifest.parent
+        if not _has_package_skill_root(package_root):
+            continue
+        name, version = _cargo_manifest_metadata(manifest)
+        match = _matching_locked_cargo_package(name, version, locked)
+        if not match:
+            continue
+        package_name, package_version = match
+        result.append((package_root, package_name, package_version, root))
+    return sorted(result, key=lambda item: item[0].as_posix())
+
+
+def _matching_locked_cargo_package(name: str | None, version: str | None, locked: dict[str, list[tuple[str, str]]]) -> tuple[str, str] | None:
+    if not name:
+        return None
+    canonical = canonical_cargo_package_name(name)
+    if not CARGO_PACKAGE_RE.fullmatch(canonical):
+        return None
+    candidates = locked.get(canonical, [])
+    if version:
+        normalized_version = version.strip()
+        for candidate_version, _source in candidates:
+            if candidate_version == normalized_version:
+                return canonical, candidate_version
+        return None
+    if len(candidates) == 1:
+        return canonical, candidates[0][0]
+    return None
+
+
+def _cargo_manifest_paths(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    manifests: list[Path] = []
+    ignored = set(IGNORED_CHILD_REPO_DIR_NAMES)
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(dirname for dirname in dirnames if dirname not in ignored)
+        if "Cargo.toml" in filenames:
+            manifests.append(Path(dirpath) / "Cargo.toml")
+    return sorted(manifests, key=lambda path: path.as_posix())
+
+
+def _cargo_manifest_metadata(manifest_path: Path) -> tuple[str | None, str | None]:
+    data = _load_toml(manifest_path)
+    if not data:
+        return None, None
+    package = data.get("package")
+    if not isinstance(package, dict):
+        return None, None
+    raw_name = package.get("name")
+    raw_version = package.get("version")
+    name = raw_name if isinstance(raw_name, str) and raw_name.strip() else None
+    version = raw_version if isinstance(raw_version, str) and raw_version.strip() else None
+    return name, version
+
+
+def _cargo_lock_packages(lock_path: Path) -> list[dict[str, str | None]]:
+    data = _load_toml(lock_path)
+    if not data:
+        return []
+    packages: list[dict[str, str | None]] = []
+    raw_packages = data.get("package")
+    if not isinstance(raw_packages, list):
+        return []
+    for raw_package in raw_packages:
+        if not isinstance(raw_package, dict):
+            continue
+        raw_name = raw_package.get("name")
+        raw_version = raw_package.get("version")
+        if not isinstance(raw_name, str) or not isinstance(raw_version, str):
+            continue
+        package: dict[str, str | None] = {
+            "name": raw_name,
+            "version": raw_version,
+            "source": None,
+        }
+        raw_source = raw_package.get("source")
+        if isinstance(raw_source, str):
+            package["source"] = raw_source
+        packages.append(package)
+    return [package for package in packages if package.get("name") and package.get("version")]
+
+
+def _load_toml(path: Path) -> dict[str, Any] | None:
+    try:
+        with path.open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _package_distributions(project_root: Path | None = None) -> list[tuple[metadata.Distribution, str | None]]:
