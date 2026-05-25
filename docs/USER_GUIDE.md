@@ -20,7 +20,7 @@ Use `--agent claude` instead for Claude projects. `setup` is the user approval f
 
 Install Skillager as a global user tool with `uv tool install skillager` or `pipx install skillager`. It scans the current project's `.venv`, `venv`, `.conda`, project-local active conda environments, top-level `node_modules`, and `Cargo.lock`-selected Cargo crates for installed package skills, but ordinary projects do not need Skillager installed inside their own Python, JavaScript, or Rust environment.
 
-At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also expose a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working` after context resets and can use available metadata to add useful skills to project-local tags and expose narrow native skills, stubs, a compact router skill for a tag, or nothing. Run `skillager handoff` when you want explicit post-setup curation guidance.
+At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also expose a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working` after context resets and can use available metadata to add useful skills to project-local tags and expose narrow native skills, stubs, a compact router skill for a tag or explicit skill set, or nothing. Run `skillager handoff` when you want explicit post-setup curation guidance.
 
 Setup does not expose every approved skill by default. Approval makes a skill available for consideration; tagging and exposure are reversible project ergonomics based on what you are doing.
 
@@ -90,8 +90,11 @@ skillager state migrate
 skillager block <skill-id>
 skillager tag add gis vibespatial/gis-domain
 skillager expose --tag gis --mode router --agent codex --scope project
+skillager expose <skill-id> <skill-id> --mode router --agent codex --scope project
 skillager expose <skill-id> --mode stub --agent codex --scope project
 ```
+
+Use a tag router for a named reusable group, or pass explicit skill IDs for a deterministic ad-hoc router without creating a tag. Router exposure writes compact available metadata only, not full skill bodies, and skips unavailable or incompatible members. The expose output and JSON give the router exposure id/slug; activate a listed skill with `skillager activate <skill-id> --from-router <router-slug>`.
 
 Use `--json` when another program needs stable output. `status --json`, `handoff --json`, `list --json`, `show --json`, `tag show --json`, and `search --json` are compact and available-only for agent use; pass `--full-json` for explicit user-directed diagnostics where available. Agents should use `search --agent <agent> --json`, `list --summary-json --agent <agent>`, and project tag metadata to build their own candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `doctor --json` and `setup --summary-json` for owner-run diagnostics and setup automation.
 

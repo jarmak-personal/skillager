@@ -86,7 +86,7 @@ def _unreviewed_reason(skill: dict[str, Any]) -> str:
 
 
 def materialize_router(
-    tag: str,
+    tag: str | None,
     skills: list[dict[str, Any]],
     *,
     agents: list[str],
@@ -94,31 +94,121 @@ def materialize_router(
     dry_run: bool = False,
     force: bool = False,
     project_dir: Path | None = None,
+    router_slug: str | None = None,
+    selection_kind: str = "tag",
 ) -> list[dict[str, Any]]:
-    reviewed = [skill for skill in skills if skill.get("trust") in TRUSTED_STATES and skill.get("trust") != "blocked"]
-    router_skill = {
-        "id": f"skillager/{tag}",
-        "name": f"Skillager {tag} Router",
-        "summary": f"Route {tag} tasks to available Skillager-managed skills.",
-        "source": {"type": "skillager-router", "tag": tag},
-        "content_hash": content_hashes(reviewed),
-        "trust": "reviewed",
-    }
+    router_kind = "tag" if selection_kind == "tag" else "explicit"
+    if router_kind == "tag" and not tag:
+        raise ValueError("tag router requires a tag")
+    if router_kind == "explicit" and not router_slug:
+        raise ValueError("explicit router requires a router slug")
+    reviewed, skipped = _router_member_selection(skills)
     results: list[dict[str, Any]] = []
-    if not reviewed:
-        for agent in agents:
-            target = target_dir(agent=agent, scope=scope, skill=router_skill, project_dir=project_dir)
-            results.append(_result(router_skill, target, "skipped", "no available skills in tag", agent=agent, scope=scope))
-        return results
     for agent in agents:
+        agent_reviewed, agent_skipped = _router_agent_member_selection(reviewed, agent=agent, scope=scope)
+        router_skill = _router_skill(tag, agent_reviewed, router_slug=router_slug, router_kind=router_kind)
         target = target_dir(agent=agent, scope=scope, skill=router_skill, project_dir=project_dir)
+        if not agent_reviewed:
+            results.append(_result(router_skill, target, "skipped", _empty_router_reason(router_kind), agent=agent, scope=scope))
+            results.extend(agent_skipped)
+            continue
         try:
             results.append(
-                materialize_router_one(tag, reviewed, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force)
+                materialize_router_one(
+                    tag,
+                    agent_reviewed,
+                    target=target,
+                    agent=agent,
+                    scope=scope,
+                    dry_run=dry_run,
+                    force=force,
+                    router_slug=router_slug,
+                    router_kind=router_kind,
+                )
             )
         except OSError as exc:
             results.append(_result(router_skill, target, "skipped", str(exc), agent=agent, scope=scope))
+        results.extend(agent_skipped)
+    results.extend(skipped)
     return results
+
+
+def explicit_router_slug(skill_ids: list[str]) -> str:
+    canonical = "\n".join(sorted(dict.fromkeys(skill_ids)))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:10]
+    return f"skillager-router-{digest}"
+
+
+def _router_member_selection(skills: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    reviewed: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for skill in skills:
+        reason = _router_member_skip_reason(skill)
+        if reason:
+            skipped.append(_result(skill, None, "skipped", reason))
+        else:
+            reviewed.append(skill)
+    return reviewed, skipped
+
+
+def _router_agent_member_selection(
+    skills: list[dict[str, Any]],
+    *,
+    agent: str,
+    scope: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    selected: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for skill in skills:
+        problem = compatibility_problem(skill, agent)
+        if problem:
+            skipped.append(_result(skill, None, "skipped", problem, agent=agent, scope=scope))
+        else:
+            selected.append(skill)
+    return selected, skipped
+
+
+def _router_member_skip_reason(skill: dict[str, Any]) -> str | None:
+    trust = skill.get("trust")
+    if trust == "blocked":
+        return "blocked"
+    if trust == "lint_blocked":
+        return "lint-blocked"
+    if trust not in TRUSTED_STATES:
+        return _unreviewed_reason(skill)
+    return None
+
+
+def _empty_router_reason(router_kind: str) -> str:
+    return "no available skills in tag" if router_kind == "tag" else "no available skills in router selection"
+
+
+def _router_skill(
+    tag: str | None,
+    skills: list[dict[str, Any]],
+    *,
+    router_slug: str | None,
+    router_kind: str,
+) -> dict[str, Any]:
+    if router_kind == "tag":
+        assert tag is not None
+        return {
+            "id": f"skillager/{tag}",
+            "name": f"Skillager {tag} Router",
+            "summary": f"Route {tag} tasks to available Skillager-managed skills.",
+            "source": {"type": "skillager-router", "tag": tag},
+            "content_hash": content_hashes(skills),
+            "trust": "reviewed",
+        }
+    assert router_slug is not None
+    return {
+        "id": f"skillager/{router_slug.removeprefix('skillager-')}",
+        "name": "Skillager Explicit Router",
+        "summary": "Route explicitly selected tasks to available Skillager-managed skills.",
+        "source": {"type": "skillager-router", "router_kind": "explicit", "router_slug": router_slug},
+        "content_hash": content_hashes(skills),
+        "trust": "reviewed",
+    }
 
 
 def materialize_working_skill(
@@ -285,7 +375,7 @@ Runtime signals include:
 
 
 def materialize_router_one(
-    tag: str,
+    tag: str | None,
     skills: list[dict[str, Any]],
     *,
     target: Path,
@@ -293,13 +383,10 @@ def materialize_router_one(
     scope: str,
     dry_run: bool = False,
     force: bool = False,
+    router_slug: str | None = None,
+    router_kind: str = "tag",
 ) -> dict[str, Any]:
-    router_skill = {
-        "id": f"skillager/{tag}",
-        "source": {"type": "skillager-router", "tag": tag},
-        "content_hash": content_hashes(skills),
-        "trust": "reviewed",
-    }
+    router_skill = _router_skill(tag, skills, router_slug=router_slug, router_kind=router_kind)
     with _target_lock(target):
         sidecar = target / "skillager.materialized.yaml"
         if target.exists():
@@ -312,29 +399,66 @@ def materialize_router_one(
         if target.exists():
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
-        (target / "SKILL.md").write_text(render_router_skill(tag, skills, agent=agent), encoding="utf-8")
+        actual_router_slug = router_slug or target.name
+        (target / "SKILL.md").write_text(
+            render_router_skill(tag, skills, agent=agent, router_slug=actual_router_slug, router_kind=router_kind),
+            encoding="utf-8",
+        )
         materialized_hash = content_hash(target)
-        sidecar.write_text(dumps(_router_sidecar(tag, skills, agent=agent, scope=scope, materialized_hash=materialized_hash)), encoding="utf-8")
+        sidecar.write_text(
+            dumps(
+                _router_sidecar(
+                    tag,
+                    skills,
+                    agent=agent,
+                    scope=scope,
+                    materialized_hash=materialized_hash,
+                    router_slug=actual_router_slug,
+                    router_kind=router_kind,
+                )
+            ),
+            encoding="utf-8",
+        )
         return _result(router_skill, target, "materialized", None, agent=agent, scope=scope)
 
 
-def render_router_skill(tag: str, skills: list[dict[str, Any]], *, agent: str | None = None) -> str:
+def render_router_skill(
+    tag: str | None,
+    skills: list[dict[str, Any]],
+    *,
+    agent: str | None = None,
+    router_slug: str | None = None,
+    router_kind: str = "tag",
+) -> str:
+    if router_kind == "tag":
+        assert tag is not None
+        title = f"Skillager {tag} Router"
+        description = f"Route {tag} tasks to available Skillager-managed skills."
+        use_when = f"Use when the task is related to the `{tag}` skill tag or one of the available skills exposed by this router."
+        activation_slug = router_slug or f"skillager-{slugify(tag)}"
+        search_instruction = f"Activate only skills listed below or returned by `skillager search --tag {tag} \"<query>\" --agent {agent or 'codex'}`."
+    else:
+        title = "Skillager Explicit Router"
+        description = "Route explicitly selected tasks to available Skillager-managed skills."
+        use_when = "Use when the task matches one of the explicit available skills exposed by this router."
+        activation_slug = router_slug or "skillager-router"
+        search_instruction = "Activate only skills listed below."
     lines = [
         "---",
-        f"name: \"{_frontmatter_string(f'Skillager {tag} Router')}\"",
-        f"description: \"Route {tag} tasks to available Skillager-managed skills.\"",
+        f"name: \"{_frontmatter_string(title)}\"",
+        f"description: \"{_frontmatter_string(description)}\"",
         "---",
         "",
-        f"# Skillager {tag} Router",
+        f"# {title}",
         "",
-        f"Use when the task is related to the `{tag}` skill tag or one of the available skills exposed by this router.",
+        use_when,
         "",
         "This router exposes compact available metadata only. It does not approve new skills.",
         "",
         "When an available skill exposed by this router is relevant:",
         "",
-        f"1. Run `skillager activate <skill-id> --from-router skillager-{slugify(tag)}`.",
-        f"2. Activate only skills listed below or returned by `skillager search --tag {tag} \"<query>\" --agent {agent or 'codex'}`.",
+        f"1. Run `skillager activate <skill-id> --from-router {activation_slug}`.",
+        f"2. {search_instruction}",
         "3. Never use `--force`.",
         "4. If no exposed skill fits, continue without activating another skill.",
         "",
@@ -342,17 +466,21 @@ def render_router_skill(tag: str, skills: list[dict[str, Any]], *, agent: str | 
         "",
     ]
     if not skills:
-        lines.extend(["No skills are currently available for this tag.", ""])
+        empty_label = "tag" if router_kind == "tag" else "router selection"
+        lines.extend([f"No skills are currently available for this {empty_label}.", ""])
         return "\n".join(lines)
     if len(skills) > 20:
-        lines.extend(
-            [
-                f"This tag contains {len(skills)} available skills.",
-                f"Use `skillager search --tag {tag} \"<query>\" --agent {agent or 'codex'}` to find the right skill, then activate it through this router.",
-                "",
-            ]
-        )
-        return "\n".join(lines)
+        if router_kind == "tag":
+            lines.extend(
+                [
+                    f"This tag contains {len(skills)} available skills.",
+                    f"Use `skillager search --tag {tag} \"<query>\" --agent {agent or 'codex'}` to find the right skill, then activate it through this router.",
+                    "",
+                ]
+            )
+            return "\n".join(lines)
+        lines.append(f"This router contains {len(skills)} explicitly selected available skills.")
+        lines.append("")
     for skill in skills:
         lines.append(f"- `{skill['id']}`")
         lines.append(f"  - Use when: {skill.get('summary', '').strip()}")
@@ -696,19 +824,24 @@ def _working_sidecar(*, agent: str, scope: str, materialized_hash: str) -> dict[
 
 
 def _router_sidecar(
-    tag: str,
+    tag: str | None,
     skills: list[dict[str, Any]],
     *,
     agent: str,
     scope: str,
     materialized_hash: str,
+    router_slug: str,
+    router_kind: str,
 ) -> dict[str, Any]:
-    return {
+    router_skill = _router_skill(tag, skills, router_slug=router_slug, router_kind=router_kind)
+    data = {
         "schema": ROUTER_SCHEMA,
-        "id": f"skillager/{tag}",
-        "source_id": f"skillager/{tag}",
+        "id": router_skill["id"],
+        "source_id": router_skill["id"],
         "source_type": "skillager-router",
-        "tag": tag,
+        "router_kind": router_kind,
+        "selection_kind": router_kind,
+        "router_slug": router_slug,
         "skill_ids": [skill["id"] for skill in skills],
         "source_hash": content_hashes(skills),
         "materialized_hash": materialized_hash,
@@ -718,6 +851,9 @@ def _router_sidecar(
         "scope": scope,
         "customized": False,
     }
+    if tag is not None:
+        data["tag"] = tag
+    return data
 
 
 def _stub_sidecar(skill: dict[str, Any], *, agent: str, scope: str, materialized_hash: str) -> dict[str, Any]:

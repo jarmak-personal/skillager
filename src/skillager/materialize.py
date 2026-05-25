@@ -16,6 +16,7 @@ WORKING_REASON_UNMANAGED = _impl.WORKING_REASON_UNMANAGED
 WORKING_SKILL_ID = _impl.WORKING_SKILL_ID
 agent_note_paths = _impl.agent_note_paths
 ensure_agent_notes = _impl.ensure_agent_notes
+explicit_router_slug = _impl.explicit_router_slug
 materialize_router = _impl.materialize_router
 materialize_skills = _impl.materialize_skills
 materialize_working_skill = _impl.materialize_working_skill
@@ -47,6 +48,7 @@ __all__ = [
     "WORKING_SKILL_ID",
     "agent_note_paths",
     "ensure_agent_notes",
+    "explicit_router_slug",
     "materialize_router",
     "materialize_skills",
     "materialize_working_skill",

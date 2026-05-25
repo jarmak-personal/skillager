@@ -51,8 +51,10 @@ Exposure modes:
   - Regular working project skills
 - `stub`: write a tiny handle that activates the reviewed skill through Skillager.
   - Skills you want to only manually activate -- keep the context out of the agent.
-- `router`: write one compact skill for a curated tag and let the agent choose from that tag.
+- `router`: write one compact skill for a curated tag or explicit skill IDs and let the agent activate one listed skill on demand.
   - Grouped skills to minimize context usage
+
+Routers expose compact available metadata only, not full skill bodies. Unavailable or incompatible members are skipped. `expose` output and JSON include the router exposure id/slug; activate a listed skill with `skillager activate <skill-id> --from-router <router-slug>`.
 
 Metadata commands stay metadata-only. `status`, `list`, `search`, `show` without `--content`, `handoff`, `lint`, and summary JSON outputs do not reveal full skill bodies.
 
@@ -65,6 +67,7 @@ Metadata commands stay metadata-only. `status`, `list`, `search`, `show` without
 - Add a skill to a tag: `skillager tag add spatial-python vibespatial/gis-domain`
 - Inspect a tag: `skillager tag show spatial-python`
 - Expose a tag as one router skill: `skillager expose --tag spatial-python --mode router --agent codex --scope project`
+- Expose selected skills as one deterministic router without a tag: `skillager expose vibespatial/gis-domain vibespatial/dispatch-wiring --mode router --agent codex --scope project`
 - Expose one skill as a stub: `skillager expose vibespatial/gis-domain --mode stub --agent codex --scope project`
 - Reuse tags across projects: `skillager tag sync --from ../project-a --to ../project-b`
 
@@ -84,6 +87,12 @@ After review, collection skills are searchable from any project on your machine.
 ```bash
 skillager tag add workflows --from-collection workflows
 skillager expose --tag workflows --mode router --agent codex --scope project
+```
+
+For a one-off router, pass explicit available skill IDs instead of creating a tag:
+
+```bash
+skillager expose workflows/release-check workflows/pr-review --mode router --agent codex --scope project
 ```
 
 ## Package Authors

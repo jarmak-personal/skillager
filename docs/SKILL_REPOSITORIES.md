@@ -90,7 +90,17 @@ For large tags, prefer router mode:
 skillager expose --tag gis --mode router --agent codex --scope project
 ```
 
-This writes one compact native router skill. The router includes available skill IDs and author summaries, then tells the agent to activate a specific skill through Skillager when needed.
+For a one-off set, pass explicit available skill IDs instead of creating a tag:
+
+```bash
+skillager expose vibespatial/gis-domain vibespatial/dispatch-wiring --mode router --agent codex --scope project
+```
+
+This writes one compact native router skill. The router includes available skill IDs and author summaries, not full skill bodies, then tells the agent to activate a specific skill through Skillager when needed. Unavailable or incompatible members are skipped. The expose output and JSON give the router exposure id/slug for activation:
+
+```bash
+skillager activate <skill-id> --from-router <router-slug>
+```
 
 For personal command collections where the names themselves are useful, expose selected commands as stubs:
 

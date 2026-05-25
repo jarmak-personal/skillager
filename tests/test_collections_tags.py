@@ -12,7 +12,9 @@ from unittest.mock import patch
 from support import chdir
 from skillager.cli import main
 from skillager.index import build_index
+from skillager.materialize import explicit_router_slug
 from skillager.paths import project_state_root
+from skillager.simple_yaml import load_mapping
 from skillager.trust import content_hash, set_trust, trust_state
 
 
@@ -939,6 +941,257 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertIn("# GIS Domain", activate_output.getvalue())
 
                 self.assertEqual(main(["activate", "community/other", "--from-router", "skillager-gis"]), 2)
+
+    def test_explicit_router_exposes_without_creating_tag_and_activates_listed_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            gis = collection / "gis-domain"
+            other = collection / "other"
+            gis.mkdir(parents=True)
+            other.mkdir(parents=True)
+            (gis / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (other / "SKILL.md").write_text("# Other\n\nUse related support concepts.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
+
+                expose_output = StringIO()
+                with redirect_stdout(expose_output):
+                    self.assertEqual(
+                        main(
+                            [
+                                "expose",
+                                "community/gis-domain",
+                                "community/other",
+                                "--mode",
+                                "router",
+                                "--agent",
+                                "codex",
+                                "--json",
+                            ]
+                        ),
+                        0,
+                    )
+                expose_data = json.loads(expose_output.getvalue())
+                router_result = next(item for item in expose_data if item["skill_id"].startswith("skillager/router-"))
+                router_slug = router_result["exposure_id"]
+                self.assertTrue(router_slug.startswith("skillager-router-"))
+                self.assertEqual(router_result["target"], str(root / ".agents" / "skills" / router_slug))
+
+                tags_path = root / ".skillager" / "tags.json"
+                if tags_path.exists():
+                    self.assertEqual(json.loads(tags_path.read_text(encoding="utf-8")).get("tags"), {})
+
+                router_dir = root / ".agents" / "skills" / router_slug
+                router_text = (router_dir / "SKILL.md").read_text(encoding="utf-8")
+                self.assertIn(f"skillager activate <skill-id> --from-router {router_slug}", router_text)
+                sidecar = load_mapping(router_dir / "skillager.materialized.yaml")
+                self.assertEqual(sidecar["router_kind"], "explicit")
+                self.assertEqual(sidecar["selection_kind"], "explicit")
+                self.assertEqual(sidecar["router_slug"], router_slug)
+                self.assertNotIn("tag", sidecar)
+                self.assertEqual(sidecar["skill_ids"], ["community/gis-domain", "community/other"])
+
+                search_output = StringIO()
+                with redirect_stdout(search_output):
+                    self.assertEqual(main(["search", "gis", "--json"]), 0)
+                search_data = json.loads(search_output.getvalue())
+                self.assertEqual(search_data[0]["exposure"], "router")
+                self.assertEqual(search_data[0]["exposed_via"][0]["router_slug"], router_slug)
+                self.assertNotIn("materialized_targets", search_data[0])
+
+                activate_output = StringIO()
+                with redirect_stdout(activate_output):
+                    self.assertEqual(main(["activate", "community/gis-domain", "--from-router", router_slug]), 0)
+                self.assertIn("# GIS Domain", activate_output.getvalue())
+
+    def test_explicit_router_refuses_skill_not_listed_in_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            gis = collection / "gis-domain"
+            other = collection / "other"
+            gis.mkdir(parents=True)
+            other.mkdir(parents=True)
+            (gis / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (other / "SKILL.md").write_text("# Other\n\nUse unrelated concepts.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
+                expose_output = StringIO()
+                with redirect_stdout(expose_output):
+                    self.assertEqual(main(["expose", "community/gis-domain", "--mode", "router", "--agent", "codex", "--json"]), 0)
+                router_slug = json.loads(expose_output.getvalue())[0]["exposure_id"]
+
+                error = StringIO()
+                with redirect_stderr(error):
+                    self.assertEqual(main(["activate", "community/other", "--from-router", router_slug]), 2)
+                self.assertIn("skill community/other is not listed by router", error.getvalue())
+
+    def test_explicit_router_skips_codex_incompatible_member_in_sidecar(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            compatible = collection / "compatible"
+            claude_only = collection / "claude-only"
+            compatible.mkdir(parents=True)
+            claude_only.mkdir(parents=True)
+            (compatible / "SKILL.md").write_text("# Compatible\n\nUse compatible guidance.\n", encoding="utf-8")
+            (claude_only / "SKILL.md").write_text("# Claude Only\n\nUse Claude-only guidance.\n", encoding="utf-8")
+            (claude_only / "skillager.yaml").write_text(
+                "\n".join(
+                    [
+                        "schema: skillager.skill.v1",
+                        "audience:",
+                        "  - user",
+                        "activation:",
+                        "  default: manual",
+                        "compatibility:",
+                        "  exclusive_to: claude",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
+
+                expose_output = StringIO()
+                with redirect_stdout(expose_output):
+                    self.assertEqual(
+                        main(
+                            [
+                                "expose",
+                                "community/compatible",
+                                "community/claude-only",
+                                "--mode",
+                                "router",
+                                "--agent",
+                                "codex",
+                                "--json",
+                            ]
+                        ),
+                        0,
+                    )
+                expose_data = json.loads(expose_output.getvalue())
+                router_result = next(item for item in expose_data if item["skill_id"].startswith("skillager/router-"))
+                skipped = next(item for item in expose_data if item["skill_id"] == "community/claude-only")
+                self.assertEqual(router_result["status"], "exposed")
+                self.assertEqual(skipped["status"], "skipped")
+                self.assertIn("exclusive to claude", skipped["reason"])
+
+                router_dir = root / ".agents" / "skills" / router_result["exposure_id"]
+                sidecar = load_mapping(router_dir / "skillager.materialized.yaml")
+                self.assertEqual(sidecar["skill_ids"], ["community/compatible"])
+                router_text = (router_dir / "SKILL.md").read_text(encoding="utf-8")
+                self.assertIn("community/compatible", router_text)
+                self.assertNotIn("community/claude-only", router_text)
+
+    def test_explicit_router_reexpose_skips_stale_members_and_preserves_remaining(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "community"
+            gis = collection / "gis-domain"
+            other = collection / "other"
+            gis.mkdir(parents=True)
+            other.mkdir(parents=True)
+            (gis / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (other / "SKILL.md").write_text("# Other\n\nUse related support concepts.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--trust-all"]), 0)
+                initial_output = StringIO()
+                explicit_expose = [
+                    "expose",
+                    "community/gis-domain",
+                    "community/other",
+                    "--mode",
+                    "router",
+                    "--agent",
+                    "codex",
+                    "--json",
+                ]
+                with redirect_stdout(initial_output):
+                    self.assertEqual(main(explicit_expose), 0)
+                router_slug = json.loads(initial_output.getvalue())[0]["exposure_id"]
+                router_dir = root / ".agents" / "skills" / router_slug
+
+                (gis / "SKILL.md").unlink()
+                gis.rmdir()
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "refresh", "community"]), 0)
+
+                reexpose_output = StringIO()
+                with redirect_stdout(reexpose_output):
+                    self.assertEqual(main(explicit_expose), 0)
+                reexpose_data = json.loads(reexpose_output.getvalue())
+                router_result = next(item for item in reexpose_data if item["skill_id"].startswith("skillager/router-"))
+                skipped = next(item for item in reexpose_data if item["skill_id"] == "community/gis-domain")
+                self.assertEqual(router_result["status"], "exposed")
+                self.assertEqual(router_result["exposure_id"], router_slug)
+                self.assertEqual(skipped["status"], "skipped")
+                self.assertIn("skill not found", skipped["reason"])
+                sidecar = load_mapping(router_dir / "skillager.materialized.yaml")
+                self.assertEqual(sidecar["skill_ids"], ["community/other"])
+
+                activate_other = StringIO()
+                with redirect_stdout(activate_other):
+                    self.assertEqual(main(["activate", "community/other", "--from-router", router_slug]), 0)
+                self.assertIn("# Other", activate_other.getvalue())
+                stale_error = StringIO()
+                with redirect_stderr(stale_error):
+                    self.assertEqual(main(["activate", "community/gis-domain", "--from-router", router_slug]), 2)
+                self.assertIn("skill not found", stale_error.getvalue())
+
+                before_all_stale_sidecar = (router_dir / "skillager.materialized.yaml").read_text(encoding="utf-8")
+                (other / "SKILL.md").write_text("# Other\n\nUse changed support concepts.\n", encoding="utf-8")
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "refresh", "community"]), 0)
+                all_stale_output = StringIO()
+                with redirect_stdout(all_stale_output):
+                    self.assertEqual(main(explicit_expose), 0)
+                all_stale_data = json.loads(all_stale_output.getvalue())
+                all_stale_router = next(item for item in all_stale_data if item["skill_id"].startswith("skillager/router-"))
+                self.assertEqual(all_stale_router["status"], "skipped")
+                self.assertIn("no available skills", all_stale_router["reason"])
+                self.assertEqual((router_dir / "skillager.materialized.yaml").read_text(encoding="utf-8"), before_all_stale_sidecar)
+
+                typo_error = StringIO()
+                typo_slug = explicit_router_slug(["totally/missing"])
+                with redirect_stderr(typo_error):
+                    self.assertEqual(main(["expose", "totally/missing", "--mode", "router", "--agent", "codex"]), 2)
+                self.assertIn("skill not found: totally/missing", typo_error.getvalue())
+                self.assertFalse((root / ".agents" / "skills" / typo_slug).exists())
 
     def test_router_exposure_does_not_rewarn_for_approved_routed_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

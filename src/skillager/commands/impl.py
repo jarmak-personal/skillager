@@ -47,6 +47,7 @@ from ..materialize import (
     WORKING_SKILL_ID,
     agent_note_paths,
     ensure_agent_notes,
+    explicit_router_slug,
     materialize_skills,
     materialize_working_skill,
 )
@@ -265,7 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", choices=["markdown", "codex", "claude", "json"], default="markdown")
     p.add_argument("--force", action="store_true", help="Allow activation despite review state. Use only with explicit user approval.")
     p.add_argument("--allow-incompatible", action="store_true", help="Allow activation even when skill metadata explicitly excludes this agent.")
-    p.add_argument("--from-router", help="Router skill slug, e.g. skillager-gis. Refuses skills outside the attached router tag.")
+    p.add_argument("--from-router", help="Router skill slug, e.g. skillager-gis or skillager-router-<hash>. Refuses skills outside the attached router.")
     p.add_argument("--from-stub", help="Stub skill slug, e.g. fastapi-fastapi. Refuses activation unless that stub is exposed in this project.")
     p.add_argument("--agent", help="Agent name for compatibility checks, e.g. codex or claude.")
     p.add_argument("--external-session-id", help=argparse.SUPPRESS)
@@ -809,9 +810,12 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             provenance. Stub exposure writes a tiny native handle that
             tells the agent how to activate the full available body through
             Skillager on demand. Router exposure writes one compact router for
-            a project-local tag. Exposure does not install or repair Skillager
-            Working or project working notes; use `skillager doctor --fix` for
-            first-party working artifacts.
+            a project-local tag or explicit skill IDs. Routers expose compact
+            available metadata only, not full skill bodies; unavailable or
+            incompatible members are skipped. Expose output and JSON identify
+            the router slug to pass to --from-router. Exposure does not install
+            or repair Skillager Working or project working notes; use
+            `skillager doctor --fix` for first-party working artifacts.
             Customized local copies are not overwritten unless --force is used.
             """
         ),
@@ -820,6 +824,8 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             Examples:
               skillager expose fastapi/fastapi --agent codex
               skillager expose --tag gis --mode router --agent codex
+              skillager expose fastapi/fastapi pytest/pytest --mode router --agent codex
+              skillager activate <skill-id> --from-router <router-slug>
               skillager expose fastapi/fastapi --mode stub --agent codex
               skillager expose --list --agent codex --scope project
               skillager expose --remove fastapi-fastapi --agent codex --scope project
@@ -833,7 +839,7 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         "--mode",
         choices=["native", "router", "stub"],
         default=None,
-        help="native copies each skill; stub writes tiny activation handles; router creates one router skill for --tag.",
+        help="native copies each skill; stub writes tiny activation handles; router creates one router skill for --tag or explicit skill IDs.",
     )
     p.add_argument("--agent", action="append", choices=["codex", "claude"], help="Agent target. Repeat to target multiple agents. Defaults to codex.")
     p.add_argument("--all-agents", action="store_true", help="Target both codex and claude.")
@@ -2006,7 +2012,7 @@ def _project_exposure_breakdown(
                 stubbed_ids.add(skill_id)
             elif kind == "router":
                 routed_ids.add(skill_id)
-                tag = target.get("tag") or target.get("router")
+                tag = target.get("tag")
                 if tag:
                     router_tags.add(str(tag))
     exposed_ids = native_ids | stubbed_ids | routed_ids
@@ -4063,14 +4069,14 @@ def _compact_exposed_via(skill: dict[str, Any]) -> list[dict[str, Any]]:
         if kind not in {"native", "router", "stub"}:
             continue
         item: dict[str, Any] = {"kind": kind}
-        for key in ("agent", "scope", "status", "router", "tag"):
+        for key in ("agent", "scope", "status", "router", "tag", "router_kind", "selection_kind"):
             value = target.get(key)
             if value:
                 item[key] = value
         path = target.get("path")
         if path:
             if kind == "router":
-                item["router_slug"] = Path(str(path)).name
+                item["router_slug"] = str(target.get("router_slug") or Path(str(path)).name)
             elif kind == "stub":
                 item["stub"] = Path(str(path)).name
         identity = tuple(sorted((str(key), str(value)) for key, value in item.items()))
@@ -4737,6 +4743,9 @@ def _project_exposure(project: Path) -> dict[str, list[dict[str, Any]]]:
                     target["kind"] = "router"
                     target["router"] = data.get("id") or data.get("source_id")
                     target["tag"] = data.get("tag")
+                    target["router_kind"] = data.get("router_kind")
+                    target["selection_kind"] = data.get("selection_kind")
+                    target["router_slug"] = data.get("router_slug")
                     for skill_id in data.get("skill_ids") or []:
                         exposure.setdefault(str(skill_id), []).append(dict(target))
                 elif data.get("source_type") == "skillager-stub":
@@ -4826,7 +4835,53 @@ def _require_attached_tag(state_root: Path, tag: str) -> None:
 
 
 def _validate_router_activation(state_root: Path, catalog_root: Path, router: str, skill: dict[str, Any]) -> None:
+    sidecars = _router_sidecar_records(_current_project_dir(), router)
+    if sidecars:
+        _validate_router_sidecars(state_root, catalog_root, router, skill, sidecars)
+        return
     tag = _tag_from_router(router)
+    _validate_router_tag_activation(state_root, catalog_root, router, tag, skill)
+
+
+def _validate_router_sidecars(
+    state_root: Path,
+    catalog_root: Path,
+    router: str,
+    skill: dict[str, Any],
+    sidecars: list[dict[str, Any]],
+) -> None:
+    unreadable = next((item for item in sidecars if item.get("error")), None)
+    if unreadable:
+        raise ValueError(f"router sidecar is unreadable: {unreadable['path']}")
+    allowed: set[str] = set()
+    legacy_tags: set[str] = set()
+    explicit_without_skill_ids = False
+    for item in sidecars:
+        data = item.get("data") or {}
+        skill_ids = data.get("skill_ids")
+        if isinstance(skill_ids, list) and skill_ids:
+            allowed.update(str(skill_id) for skill_id in skill_ids)
+            continue
+        if data.get("tag"):
+            legacy_tags.add(str(data["tag"]))
+        elif data.get("router_kind") == "explicit" or data.get("selection_kind") == "explicit":
+            explicit_without_skill_ids = True
+    if allowed:
+        if skill["id"] in allowed:
+            return
+        raise ValueError(f"skill {skill['id']} is not listed by router {router}")
+    for tag in sorted(legacy_tags):
+        try:
+            _validate_router_tag_activation(state_root, catalog_root, router, tag, skill)
+            return
+        except ValueError:
+            continue
+    if explicit_without_skill_ids:
+        raise ValueError(f"router {router} does not list activatable skills")
+    raise ValueError(f"skill {skill['id']} is not listed by router {router}")
+
+
+def _validate_router_tag_activation(state_root: Path, catalog_root: Path, router: str, tag: str, skill: dict[str, Any]) -> None:
     _require_attached_tag(state_root, tag)
     allowed = {
         item["id"]
@@ -4835,6 +4890,44 @@ def _validate_router_activation(state_root: Path, catalog_root: Path, router: st
     }
     if skill["id"] not in allowed:
         raise ValueError(f"skill {skill['id']} is not listed by router {router}")
+
+
+def _router_sidecar_records(project_dir: Path, router: str) -> list[dict[str, Any]]:
+    requested_slug = _slug(router)
+    records: list[dict[str, Any]] = []
+    for root_path in _router_sidecar_roots(project_dir):
+        if not root_path.is_dir():
+            continue
+        sidecar = root_path / requested_slug / "skillager.materialized.yaml"
+        if not sidecar.exists():
+            continue
+        try:
+            data = load_mapping(sidecar)
+        except (OSError, UnicodeError, YamlError):
+            records.append({"path": str(sidecar), "error": "unreadable"})
+            continue
+        if data.get("source_type") == "skillager-router":
+            records.append({"path": str(sidecar), "data": data})
+    return records
+
+
+def _router_sidecar_roots(project_dir: Path) -> list[Path]:
+    roots: list[Path] = []
+    for agent_roots in _project_skill_roots(project_dir).values():
+        roots.extend(agent_roots)
+    roots.extend([Path.home() / ".codex" / "skills", Path.home() / ".claude" / "skills"])
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in roots:
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(path)
+    return deduped
 
 
 def _validate_stub_activation(skill: dict[str, Any], stub: str) -> None:
@@ -4998,15 +5091,54 @@ def cmd_expose(args: argparse.Namespace) -> int:
         _require_expose_management_only(args, "--remove")
         return _cmd_expose_remove(args)
     mode = args.mode or "native"
-    if mode == "router" and not args.tag:
-        raise ValueError("--mode router requires --tag")
+    if mode == "router" and not (args.tag or args.skill_ids):
+        raise ValueError("--mode router requires --tag or explicit skill IDs")
     _require_expose_selection(args)
     agents = ["codex", "claude"] if args.all_agents else args.agent or ["codex"]
     agent_notes_ready_before = _agent_notes_ready(Path.cwd(), agents=agents) if args.scope == "project" else False
     materialized_targets_before = _materialized_target_paths(Path.cwd(), agents=agents) if args.scope == "project" else set()
-    if args.tag and mode == "router":
-        _require_attached_tag(root(args), args.tag)
-        skills = _select_project_tag_skills(root(args), catalog_root(args), args.tag)
+    if mode == "router":
+        skills: list[dict[str, Any]]
+        explicit_skipped: list[dict[str, Any]] = []
+        if args.tag:
+            _require_attached_tag(root(args), args.tag)
+            skills = _select_project_tag_skills(
+                root(args),
+                catalog_root(args),
+                args.tag,
+                include_blocked=True,
+                include_lint_blocked=True,
+            )
+            router_slug = None
+            selection_kind = "tag"
+        else:
+            inventory = _effective_project_skills(
+                root(args),
+                catalog_root=catalog_root(args),
+                include_blocked=True,
+                include_lint_blocked=True,
+            )
+            skills = select_visible_skills(
+                inventory,
+                skill_ids=args.skill_ids,
+                source=args.source,
+                audience=args.audience,
+                package=args.package,
+                activation=args.activation,
+                include_blocked=True,
+                include_lint_blocked=True,
+            )
+            router_slug = explicit_router_slug(args.skill_ids)
+            explicit_skipped = _explicit_router_missing_results(
+                args.skill_ids,
+                inventory,
+                selected=skills,
+                router_slug=router_slug,
+                agents=agents,
+                scope=args.scope,
+                project_dir=Path.cwd(),
+            )
+            selection_kind = "explicit"
         results = materialize_router(
             args.tag,
             skills,
@@ -5015,10 +5147,13 @@ def cmd_expose(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             force=args.force,
             project_dir=Path.cwd(),
+            router_slug=router_slug,
+            selection_kind=selection_kind,
         )
-    else:
-        if args.tag:
-            _require_attached_tag(root(args), args.tag)
+        if not args.tag:
+            results.extend(explicit_skipped)
+    elif args.tag:
+        _require_attached_tag(root(args), args.tag)
         tag_skill_ids = {skill["id"] for skill in _select_project_tag_skills(root(args), catalog_root(args), args.tag)} if args.tag else None
         inventory = _effective_project_skills(
             root(args),
@@ -5037,6 +5172,35 @@ def cmd_expose(args: argparse.Namespace) -> int:
         )
         if tag_skill_ids is not None:
             skills = [skill for skill in skills if skill["id"] in tag_skill_ids]
+        _require_materialize_matches(args.skill_ids, inventory, skills, tag_skill_ids=tag_skill_ids)
+        results = materialize_skills(
+            skills,
+            agents=agents,
+            scope=args.scope,
+            mode=mode,
+            dry_run=args.dry_run,
+            force=args.force,
+            reviewed_only=not args.include_unreviewed,
+            project_dir=Path.cwd(),
+            allow_incompatible=args.allow_incompatible,
+        )
+    else:
+        tag_skill_ids = None
+        inventory = _effective_project_skills(
+            root(args),
+            catalog_root=catalog_root(args),
+            include_blocked=args.include_blocked,
+            include_lint_blocked=True,
+        )
+        skills = select_visible_skills(
+            inventory,
+            skill_ids=args.skill_ids,
+            source=args.source,
+            audience=args.audience,
+            package=args.package,
+            activation=args.activation,
+            include_blocked=args.include_blocked,
+        )
         _require_materialize_matches(args.skill_ids, inventory, skills, tag_skill_ids=tag_skill_ids)
         results = materialize_skills(
             skills,
@@ -5226,6 +5390,9 @@ def _exposure_record(sidecar: Path, data: dict[str, Any], *, fallback_agent: str
     }
     if data.get("tag"):
         record["tag"] = data.get("tag")
+    for key in ("router_kind", "selection_kind", "router_slug"):
+        if data.get(key):
+            record[key] = data.get(key)
     if data.get("skill_ids"):
         record["skill_ids"] = list(data.get("skill_ids") or [])
     return record
@@ -5262,6 +5429,51 @@ def _require_materialize_matches(
             raise ValueError(f"skill is not listed by the selected tag: {skill_id}")
         if skill_id not in selected_ids:
             raise ValueError(f"skill is not selectable with the requested filters: {skill_id}")
+
+
+def _explicit_router_missing_results(
+    requested_ids: list[str],
+    inventory: list[dict[str, Any]],
+    *,
+    selected: list[dict[str, Any]],
+    router_slug: str,
+    agents: list[str],
+    scope: str,
+    project_dir: Path,
+) -> list[dict[str, Any]]:
+    requested = list(dict.fromkeys(requested_ids))
+    if not requested:
+        return []
+    inventory_ids = {skill["id"] for skill in inventory}
+    selected_ids = {skill["id"] for skill in selected}
+    missing: list[str] = []
+    found_any = False
+    for skill_id in requested:
+        if skill_id not in inventory_ids:
+            missing.append(skill_id)
+            continue
+        found_any = True
+        if skill_id not in selected_ids:
+            raise ValueError(f"skill is not selectable with the requested filters: {skill_id}")
+    if not found_any and not _explicit_router_target_exists(router_slug, agents=agents, scope=scope, project_dir=project_dir):
+        raise KeyError(f"skill not found: {requested[0]}")
+    return [
+        {
+            "skill_id": skill_id,
+            "target": None,
+            "status": "skipped",
+            "reason": "skill not found",
+        }
+        for skill_id in missing
+    ]
+
+
+def _explicit_router_target_exists(router_slug: str, *, agents: list[str], scope: str, project_dir: Path) -> bool:
+    router_skill = {"id": f"skillager/{router_slug.removeprefix('skillager-')}"}
+    return any(
+        target_dir(agent=agent, scope=scope, skill=router_skill, project_dir=project_dir).exists()
+        for agent in agents
+    )
 
 
 def _annotate_exposure_results(results: list[dict[str, Any]], *, mode: str) -> None:

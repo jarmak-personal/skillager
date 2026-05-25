@@ -81,7 +81,7 @@ After setup, Skillager installs or refreshes the `skillager-working` bootstrap s
 
 - a narrow native skill for a specific recurring workflow
 - a stub for an available command the user wants easy access to by name
-- a router skill for a broad project-local tag
+- a router skill for a broad project-local tag or explicit short skill set
 - nothing, if the existing project exposure is enough
 
 Before changing tags or exposure, build your own slate from available metadata and the user's stated goal. Start with `skillager search "<user goal>" --agent codex --json`; run a few focused searches when the goal has multiple facets, such as domain terms, package/project names, and workflow terms. Search JSON is ranked and includes `score` and `reasons`; use `--limit <n>` to widen or narrow the slate. Use `--full-json` only for explicit diagnostics such as `score_detail`, source paths, and full exposure records. Use `skillager list --summary-json --agent codex` when you need orientation before a targeted search. Consider 5-20 plausible available skills or skill groups when enough relevant options exist. A group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation. Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task. Include adjacent options the user may reasonably want, such as a brainstorm/research suite for ideation or a review/debugging suite for validation. If fewer than five relevant available candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
@@ -98,6 +98,12 @@ Prefer router exposure for broad tags:
 
 ```bash
 skillager expose --tag workflows --mode router --agent codex --scope project
+```
+
+For a short ad-hoc set that does not need a reusable tag, expose explicit skill IDs. This creates a deterministic explicit router:
+
+```bash
+skillager expose workflows/release-check workflows/pr-review --mode router --agent codex --scope project
 ```
 
 Prefer native exposure for narrow, high-signal project skills:
@@ -144,21 +150,34 @@ These commands curate or expose available skills. They are agent-managed after t
 ```bash
 skillager tag add <tag> <skill-id> [<skill-id> ...]
 skillager expose --tag <tag> --mode router --agent codex --scope project
+skillager expose <skill-id> <skill-id> --mode router --agent codex --scope project
 skillager expose <skill-id> --mode stub --agent codex --scope project
 skillager expose <skill-id> --agent codex --scope project
 ```
 
 ## Router Skills
 
-A Skillager router skill is a compact project skill that lists available skill IDs and author summaries. It does not contain the hidden skill bodies.
+A Skillager router skill is a compact project skill that lists available skill IDs and author summaries for a tag or explicit selection. It does not contain the hidden skill bodies. Unavailable or incompatible members are skipped.
 
-When a router tells you to activate a skill, use:
+Tag router:
 
 ```bash
-skillager activate <skill-id> --from-router skillager-<tag>
+skillager expose --tag gis --mode router --agent codex --scope project
 ```
 
-This command refuses skills outside the project-local tag and skills that are not available.
+Ad-hoc explicit router:
+
+```bash
+skillager expose <skill-id> <skill-id> --mode router --agent codex --scope project
+```
+
+The expose output and JSON include the router exposure id/slug. When a router tells you to activate a skill, use that slug:
+
+```bash
+skillager activate <skill-id> --from-router <router-slug>
+```
+
+This command refuses skills outside the router and skills that are not available.
 
 ## If Status Reports New Skills
 
