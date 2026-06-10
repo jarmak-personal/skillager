@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from support import TtyStringIO, chdir
 from skillager.cli import main
+from skillager.commands.impl import _interactive_review_lint_blocked
 from skillager.index import build_index, load_index
 from skillager.trust import set_trust
 
@@ -845,6 +846,75 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("project/shell-helper: blocked", text)
             self.assertEqual(load_index(state)["skills"][0]["trust"], "blocked")
 
+    def test_interactive_lint_review_override_requires_reason_and_records_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "linted"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Linted\n\nUse linted guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                "schema: skillager.skill.v1\nsummary: lint bait\naudience:\n  - user\nactivation:\n  default: manual\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                skill = build_index(state, include_packages=False)["skills"][0]
+                output = StringIO()
+                with (
+                    redirect_stdout(output),
+                    patch("skillager.commands.impl._interactive_input", side_effect=["o", "", "audited local fixture"]),
+                ):
+                    decided = _interactive_review_lint_blocked(state, [skill], catalog_root=state, global_scope=False)
+            self.assertEqual(decided, {"project/linted"})
+            text = output.getvalue()
+            self.assertIn("Reason is required for audited lint override.", text)
+            self.assertIn("project/linted: reviewed", text)
+            self.assertIn("Approved with audited lint override (1):", text)
+            self.assertEqual(load_index(state)["skills"][0]["trust"], "reviewed")
+            trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
+            self.assertEqual(trust_log["skills"]["project/linted"]["lint_override"]["reason"], "audited local fixture")
+
+    def test_interactive_lint_review_skip_block_and_quit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            first = root / ".skills" / "first"
+            second = root / ".skills" / "second"
+            third = root / ".skills" / "third"
+            for skill_dir in (first, second, third):
+                skill_dir.mkdir(parents=True)
+                (skill_dir / "SKILL.md").write_text(f"# {skill_dir.name.title()}\n\nUse linted guidance.\n", encoding="utf-8")
+                (skill_dir / "skillager.yaml").write_text(
+                    "schema: skillager.skill.v1\nsummary: lint bait\naudience:\n  - user\nactivation:\n  default: manual\n",
+                    encoding="utf-8",
+                )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                skills = build_index(state, include_packages=False)["skills"]
+                output = StringIO()
+                with (
+                    redirect_stdout(output),
+                    patch("skillager.commands.impl._interactive_input", side_effect=["s", "b", "q"]),
+                ):
+                    decided = _interactive_review_lint_blocked(state, skills, catalog_root=state, global_scope=False)
+            self.assertEqual(decided, {"project/first", "project/second"})
+            trusts = {skill["id"]: skill["trust"] for skill in load_index(state)["skills"]}
+            self.assertEqual(trusts["project/first"], "lint_blocked")
+            self.assertEqual(trusts["project/second"], "blocked")
+            self.assertEqual(trusts["project/third"], "lint_blocked")
+            text = output.getvalue()
+            self.assertIn("project/first: skipped; remains lint-blocked", text)
+            self.assertIn("project/second: blocked", text)
+
     def test_interactive_setup_can_expose_narrow_native_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1348,17 +1418,50 @@ class SkillagerSetupTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with (
-                redirect_stdout(StringIO()),
                 patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
                 patch("skillager.discovery.find_project_root", return_value=root),
                 patch("pathlib.Path.home", return_value=root),
                 chdir(root),
             ):
-                self.assertEqual(main(["setup", "--no-packages", "--yolo"]), 0)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["setup", "--no-packages", "--yolo"]), 0)
             data = load_index(state)
             self.assertEqual(data["skills"][0]["trust"], "reviewed")
             trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
             self.assertIn("--yolo", trust_log["skills"]["project/trusted-linted"]["lint_override"]["reason"])
+            text = output.getvalue()
+            self.assertIn("Lint overrides recorded this run: 1 (audited)", text)
+            self.assertIn("Approved with audited lint override (1):", text)
+            self.assertIn("project/trusted-linted", text)
+            self.assertIn("revisit: skillager review --include-lint-blocked", text)
+            self.assertIn("revoke:  skillager review block project/trusted-linted", text)
+
+    def test_setup_yolo_json_reports_lint_override_action_item(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "trusted-linted"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Trusted Linted\n\nUse linted guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                "schema: skillager.skill.v1\nsummary: lint bait\naudience:\n  - user\nactivation:\n  default: manual\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["setup", "--no-packages", "--yolo", "--json"]), 0)
+            data = json.loads(output.getvalue())
+            changed = data["action"]["changed"][0]
+            self.assertEqual(changed["skill_id"], "project/trusted-linted")
+            self.assertEqual(changed["lint_override"]["reason"], "accepted by --bulk-approve/--yolo approval shortcut")
+            self.assertEqual(changed["lint_override"]["findings"][0]["code"], "unknown_key")
 
     def test_setup_override_lint_reason_approves_lint_blocked_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1372,15 +1475,20 @@ class SkillagerSetupTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with (
-                redirect_stdout(StringIO()),
                 patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
                 patch("skillager.discovery.find_project_root", return_value=root),
                 patch("pathlib.Path.home", return_value=root),
                 chdir(root),
             ):
-                self.assertEqual(main(["setup", "--no-packages", "--override-lint", "--reason", "known good"]), 0)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["setup", "--no-packages", "--override-lint", "--reason", "known good", "--json"]), 0)
             data = load_index(state)
             self.assertEqual(data["skills"][0]["trust"], "reviewed")
+            report = json.loads(output.getvalue())
+            changed = report["action"]["changed"][0]
+            self.assertEqual(changed["lint_override"]["reason"], "known good")
+            self.assertEqual(changed["lint_override"]["findings"][0]["code"], "unknown_key")
             trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
             self.assertEqual(trust_log["skills"]["project/known-good-linted"]["lint_override"]["reason"], "known good")
 

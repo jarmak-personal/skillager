@@ -10,7 +10,7 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
-from support import chdir
+from support import TtyStringIO, chdir
 from skillager.cli import main
 from skillager.index import build_index, load_index
 from skillager.manifest import init_manifests
@@ -139,6 +139,98 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                 trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
                 self.assertEqual(trust_log["skills"]["project/demo"]["lint_override"]["reason"], "local test fixture")
 
+    def test_lint_blocked_reports_show_path_and_resolution_command(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                "schema: skillager.skill.v1\nsummary: lint bait\naudience:\n  - user\nactivation:\n  default: manual\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                build_index(state, include_packages=False)
+                review_output = StringIO()
+                with redirect_stdout(review_output):
+                    self.assertEqual(main(["review", "--include-lint-blocked", "--summary"]), 0)
+                review_text = review_output.getvalue()
+                self.assertIn("Lint blocked (1)", review_text)
+                self.assertIn(str(skill_dir), review_text)
+                self.assertIn("block unknown_key skillager.yaml: contains unknown manifest field", review_text)
+                self.assertIn("fix:      edit the source above, then re-run `skillager setup`", review_text)
+                self.assertIn('override: skillager review approve project/demo --override-lint --reason "<why>"', review_text)
+
+                show_output = StringIO()
+                with redirect_stdout(show_output):
+                    self.assertEqual(main(["show", "project/demo"]), 0)
+                show_text = show_output.getvalue()
+                self.assertIn("id: project/demo", show_text)
+                self.assertIn("available: false", show_text)
+                self.assertIn("Lint blocked (1)", show_text)
+                self.assertIn('override: skillager review approve project/demo --override-lint --reason "<why>"', show_text)
+                self.assertNotIn("Use demo guidance", show_text)
+
+                show_json = StringIO()
+                with redirect_stdout(show_json):
+                    self.assertEqual(main(["show", "project/demo", "--json"]), 0)
+                show_data = json.loads(show_json.getvalue())
+                self.assertFalse(show_data["skill"]["available"])
+                self.assertEqual(show_data["skill"]["trust"], "lint_blocked")
+                self.assertEqual(show_data["skill"]["lint"]["findings"][0]["code"], "unknown_key")
+
+                content_error = StringIO()
+                with redirect_stderr(content_error):
+                    self.assertEqual(main(["show", "project/demo", "--content"]), 2)
+                self.assertIn("skill content is not available while lint-blocked", content_error.getvalue())
+
+    def test_review_and_list_hint_when_lint_blocked_skills_are_hidden(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                "schema: skillager.skill.v1\nsummary: lint bait\naudience:\n  - user\nactivation:\n  default: manual\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                build_index(state, include_packages=False)
+                review_output = StringIO()
+                with redirect_stdout(review_output):
+                    self.assertEqual(main(["review"]), 0)
+                self.assertIn("1 lint-blocked skill(s) hidden; add --include-lint-blocked to see them.", review_output.getvalue())
+
+                list_output = TtyStringIO()
+                with redirect_stdout(list_output):
+                    self.assertEqual(main(["list"]), 0)
+                self.assertIn("1 lint-blocked skill(s) hidden; add --include-lint-blocked to see them.", list_output.getvalue())
+
+                included_output = TtyStringIO()
+                with redirect_stdout(included_output):
+                    self.assertEqual(main(["list", "--include-lint-blocked"]), 0)
+                self.assertIn("project/demo", included_output.getvalue())
+                self.assertNotIn("lint-blocked skill(s) hidden", included_output.getvalue())
+
+                summary_output = StringIO()
+                with redirect_stdout(summary_output):
+                    self.assertEqual(main(["list", "--include-lint-blocked", "--summary-json"]), 0)
+                summary_data = json.loads(summary_output.getvalue())
+                by_id = {item["id"]: item for item in summary_data["skills"]}
+                self.assertFalse(by_id["project/demo"]["available"])
+
     def test_review_override_lint_reason_approves_selected_lint_blocked_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -160,8 +252,13 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                 build_index(state, include_packages=False)
                 review_output = StringIO()
                 with redirect_stdout(review_output):
-                    self.assertEqual(main(["review", "approve", "project/demo", "--override-lint", "--reason", "known good"]), 0)
+                    self.assertEqual(main(["review", "approve", "project/demo", "--override-lint", "--reason", "known good", "--json"]), 0)
                 self.assertNotIn("Use demo guidance", review_output.getvalue())
+                review_data = json.loads(review_output.getvalue())
+                changed = review_data["action"]["changed"][0]
+                self.assertEqual(changed["skill_id"], "project/demo")
+                self.assertEqual(changed["lint_override"]["reason"], "known good")
+                self.assertEqual(changed["lint_override"]["findings"][0]["code"], "unknown_key")
 
             trusted = load_index(state)["skills"][0]
             self.assertEqual(trusted["trust"], "reviewed")

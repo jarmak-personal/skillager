@@ -239,7 +239,7 @@ def apply_review_action(
 ) -> dict[str, Any]:
     if override_lint and not (reason or "").strip():
         raise ValueError("--reason is required with --override-lint")
-    changed: list[dict[str, str]] = []
+    changed: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
     bulk_approve = bool(bulk_approve or yolo)
     if review_action not in {None, "approve", "pin", "block", "unblock"}:
@@ -280,7 +280,7 @@ def apply_review_action(
                 approval_root=approval_root,
                 global_scope=global_scope,
             )
-            changed.append(_review_action_item(skill, record))
+            changed.append(_review_action_item(skill, record, lint_override=lint_override))
             continue
         if block_high and risk == "high":
             record = set_trust(state_root, skill["id"], "blocked", skill["content_hash"], skill["source"], lint=skill.get("lint"))
@@ -295,7 +295,7 @@ def apply_review_action(
                 approval_root=approval_root,
                 global_scope=global_scope,
             )
-            changed.append(_review_action_item(skill, record))
+            changed.append(_review_action_item(skill, record, lint_override=lint_override))
             continue
         if trust_state:
             if risk == "high" and trust_state in {"trusted", "pinned"}:
@@ -309,7 +309,7 @@ def apply_review_action(
                 approval_root=approval_root,
                 global_scope=global_scope,
             )
-            changed.append(_review_action_item(skill, record))
+            changed.append(_review_action_item(skill, record, lint_override=lint_override))
             continue
         if override_lint_only and lint_override:
             record = _set_review_trust(
@@ -320,7 +320,7 @@ def apply_review_action(
                 approval_root=approval_root,
                 global_scope=global_scope,
             )
-            changed.append(_review_action_item(skill, record))
+            changed.append(_review_action_item(skill, record, lint_override=lint_override))
             continue
         if accept_low:
             if risk == "low":
@@ -332,17 +332,36 @@ def apply_review_action(
                     approval_root=approval_root,
                     global_scope=global_scope,
                 )
-                changed.append(_review_action_item(skill, record))
+                changed.append(_review_action_item(skill, record, lint_override=lint_override))
             else:
                 skipped.append({"skill_id": skill["id"], "reason": f"risk is {risk}"})
     return {"changed": changed, "skipped": skipped}
 
 
-def _review_action_item(skill: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+def _review_action_item(
+    skill: dict[str, Any],
+    record: dict[str, Any],
+    *,
+    lint_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     item = {"skill_id": skill["id"], "state": record["state"], "scope": record.get("scope", "project")}
     duplicate = skill.get("duplicate_of_reviewed")
     if duplicate:
         item["duplicate_of_reviewed"] = duplicate
+    override = lint_override or record.get("lint_override")
+    if override:
+        item["lint_override"] = {
+            "reason": override.get("reason"),
+            "findings": [
+                {
+                    key: value
+                    for key, value in finding.items()
+                    if key in {"code", "field", "detail", "rule_key", "severity"}
+                }
+                for finding in override.get("findings", [])
+                if isinstance(finding, dict)
+            ],
+        }
     return item
 
 

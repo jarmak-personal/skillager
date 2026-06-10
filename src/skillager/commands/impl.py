@@ -194,6 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent", choices=["codex", "claude"], help="Annotate duplicate native variants with this agent's preference. Does not hide alternatives.")
     p.add_argument("--no-packages", action="store_true", help="Hide installed package skills from the listing.")
     p.add_argument("--include-global", action="store_true", help="Include already-installed global native skills. Defaults to local/project/package inventory.")
+    p.add_argument("--include-lint-blocked", action="store_true", help="Include lint-blocked quarantined skills as metadata-only rows.")
     p.add_argument("--json", action="store_true", help="Emit listed skills as JSON.")
     p.add_argument("--summary-json", action="store_true", help="Emit compact inventory counts, all listed skill IDs, and duplicate variant hints.")
     p.add_argument("--full-json", action="store_true", help="Emit full indexed metadata, including review diagnostics.")
@@ -227,7 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
         "show",
         help="Show skill metadata.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Show one available project skill's metadata. Use --content only when the user asks for the full body.",
+        description="Show one project skill's metadata. Lint-blocked skills show quarantined diagnostics only. Use --content only when the user asks for the full body.",
         epilog="Examples:\n  skillager show fastapi/fastapi\n  skillager show fastapi/fastapi --json\n  skillager show fastapi/fastapi --content",
     )
     p.add_argument("skill_id")
@@ -746,7 +747,9 @@ def cmd_collection_add(args: argparse.Namespace) -> int:
     else:
         print(f"{result['collection']['name']}: indexed {result['indexed']} skill(s)")
         if result.get("errors"):
-            print(f"errors: {len(result['errors'])}")
+            _print_discovery_errors(result["errors"])
+        skills = select_collection_skills(catalog_root(args), result["collection"]["name"], include_lint_blocked=True)
+        _print_collection_quarantine_note(skills)
         print("No skills were exposed to agents. Review collection skills once with `skillager setup`; project tags are optional curation for routers and stubs.")
     return 0
 
@@ -772,8 +775,15 @@ def cmd_collection_refresh(args: argparse.Namespace) -> int:
     else:
         print(f"{data['name']}: indexed {len(data.get('skills', []))} skill(s)")
         if data.get("errors"):
-            print(f"errors: {len(data['errors'])}")
+            _print_discovery_errors(data["errors"])
+        _print_collection_quarantine_note(data.get("skills", []))
     return 0
+
+
+def _print_collection_quarantine_note(skills: list[dict[str, Any]]) -> None:
+    count = sum(1 for skill in skills if _is_lint_quarantined(skill))
+    if count:
+        print(f"{count} skill(s) quarantined by lint; they will appear in `skillager setup` for review.")
 
 
 def cmd_collection_remove(args: argparse.Namespace) -> int:
@@ -1346,6 +1356,9 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
             print(f"  - Lint-blocked: {len(lint_blocked)} skill(s)")
     else:
         print("  - Owner review: no action needed")
+    lint_overrides = _lint_override_items(action)
+    if lint_overrides:
+        print(f"  - Lint overrides recorded this run: {len(lint_overrides)} (audited)")
     print(f"  - Blocked skills: {len(blocked)}" if blocked else "  - Blocked skills: none")
     print()
     print("What you have:")
@@ -1624,6 +1637,7 @@ def _build_visible_skill_view(
     )
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
+    lint_overrides = _active_lint_overrides(state_root, catalog_root, data.get("skills", []))
     saved_scope = _load_status_scope(state_root) if use_saved_scope else None
     scope_audience = saved_scope.get("audience") if saved_scope else None
     selected_include_global = (include_global or bool(saved_scope.get("include_global"))) if saved_scope else include_global
@@ -1676,10 +1690,34 @@ def _build_visible_skill_view(
         "project_exposure_counts": materialized_project_counts,
         "migration": migration,
         "tagging": tagging,
+        "lint_overrides": lint_overrides,
         "duplicate_content": duplicate_content_summary(skills),
         "readiness": readiness,
         "legacy_state": _legacy_project_state_report(state_root, project_dir=project_dir),
     }
+
+
+def _active_lint_overrides(state_root: Path, catalog_root: Path, skills: list[dict[str, Any]]) -> dict[str, Any]:
+    by_id = {str(skill.get("id")): skill for skill in skills if skill.get("id")}
+    by_approval_key = {str(skill.get("approval_key")): skill for skill in skills if skill.get("approval_key")}
+    ids: set[str] = set()
+    project_records = (load_trust(state_root).get("skills") or {})
+    for skill_id, record in project_records.items():
+        if _record_lint_override_active(record, by_id.get(str(skill_id))):
+            ids.add(str(skill_id))
+    global_records = (load_trust(catalog_root).get("global_approvals") or {})
+    for approval_key, record in global_records.items():
+        skill_id = record.get("skill_id")
+        skill = (by_id.get(str(skill_id)) if skill_id else None) or by_approval_key.get(str(approval_key))
+        if _record_lint_override_active(record, skill):
+            ids.add(str(skill.get("id") if skill else skill_id or approval_key))
+    return {"count": len(ids), "ids": sorted(ids)}
+
+
+def _record_lint_override_active(record: Any, skill: dict[str, Any] | None) -> bool:
+    if not isinstance(record, dict) or not record.get("lint_override") or not skill:
+        return False
+    return bool(record.get("content_hash") and record.get("content_hash") == skill.get("content_hash"))
 
 
 def _build_readiness(
@@ -2081,6 +2119,7 @@ def _doctor_state(view: dict[str, Any]) -> dict[str, Any]:
             "count": len(view["lint_blocked"]),
             "ids": [skill["id"] for skill in view["lint_blocked"]],
         },
+        "lint_overrides": view.get("lint_overrides") or {"count": 0, "ids": []},
         "authored_unreviewed": {
             "count": len(view["authored_unreviewed"]),
             "ids": [skill["id"] for skill in view["authored_unreviewed"]],
@@ -2104,11 +2143,16 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
         )
     if view["lint_blocked"]:
         count = len(view["lint_blocked"])
+        first_id = str(view["lint_blocked"][0]["id"])
         return _doctor_issue(
             "lint-blocked",
             DOCTOR_EXIT_LINT_BLOCKED,
             f"{count} skill(s) are lint-blocked. Fix the source or approve with an audited override.",
             "skillager review --include-lint-blocked --summary",
+            next_commands=[
+                "skillager review --include-lint-blocked --summary",
+                f"skillager review approve {first_id} --override-lint --reason \"<why>\"",
+            ],
         )
     if view["authored_unreviewed"]:
         count = len(view["authored_unreviewed"])
@@ -2246,6 +2290,10 @@ def _print_doctor_result(result: dict[str, Any], *, migration_details: bool = Fa
     print(f"  Review: {'ready' if readiness.get('review_ready') else 'needs review'}")
     print(f"  Artifacts: {_readiness_handoff_state(readiness)}")
     print(f"  Exposure: {_exposure_summary_text(exposure)}")
+    overrides = ((result.get("state") or {}).get("lint_overrides") or {})
+    override_ids = overrides.get("ids") or []
+    override_suffix = f" ({', '.join(override_ids)})" if override_ids else ""
+    print(f"  Lint overrides in effect: {int(overrides.get('count') or 0)}{override_suffix}")
     if migration_details:
         _print_migration_details(((result.get("state") or {}).get("migration") or {}))
     fix = result.get("fix")
@@ -3652,11 +3700,18 @@ def cmd_index(args: argparse.Namespace) -> int:
 def cmd_list(args: argparse.Namespace) -> int:
     if args.json and args.summary_json:
         raise ValueError("--json and --summary-json cannot be combined")
-    skills = _effective_project_skills(
+    inventory = _effective_project_skills(
         root(args),
         catalog_root=catalog_root(args),
+        include_lint_blocked=True,
     )
-    skills = _available_skills(skills)
+    hidden_lint_count = 0
+    if not args.include_lint_blocked and not args.json and not args.summary_json and sys.stdout.isatty():
+        hidden_lint_count = _hidden_lint_blocked_count(inventory, args)
+    if args.include_lint_blocked:
+        skills = [skill for skill in inventory if _is_available_skill(skill) or skill.get("trust") == "lint_blocked"]
+    else:
+        skills = _available_skills(inventory)
     if not args.include_global and not args.source:
         skills = [skill for skill in skills if skill.get("source", {}).get("type") != "global"]
     if args.no_packages and not args.source:
@@ -3677,6 +3732,8 @@ def cmd_list(args: argparse.Namespace) -> int:
     else:
         for skill in skills:
             print(f"{skill['id']}\t{skill.get('activation', '-')}\t{skill['source'].get('type')}\t{skill.get('summary', '-')}")
+        if hidden_lint_count:
+            print(f"{hidden_lint_count} lint-blocked skill(s) hidden; add --include-lint-blocked to see them.")
     return 0
 
 
@@ -3737,12 +3794,50 @@ def _available_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [skill for skill in skills if _is_available_skill(skill)]
 
 
+def _is_lint_quarantined(skill: dict[str, Any]) -> bool:
+    gates = skill.get("review_gates") or {}
+    return bool(skill.get("quarantined") or gates.get("lint") == "blocked" or skill.get("trust") == "lint_blocked")
+
+
+def _hidden_lint_blocked_count(skills: list[dict[str, Any]], args: argparse.Namespace) -> int:
+    if getattr(args, "include_lint_blocked", False):
+        return 0
+    candidates = []
+    for skill in skills:
+        if skill.get("trust") != "lint_blocked":
+            continue
+        if not args.include_global and not args.source and skill.get("source", {}).get("type") == "global":
+            continue
+        if args.no_packages and not args.source and skill.get("source", {}).get("type") in {"python-package", "npm-package", "cargo-package"}:
+            continue
+        if not _matches_hidden_lint_filters(skill, args):
+            continue
+        candidates.append(skill)
+    return len(candidates)
+
+
+def _matches_hidden_lint_filters(skill: dict[str, Any], args: argparse.Namespace) -> bool:
+    if getattr(args, "source", None) and skill.get("source", {}).get("type") != args.source:
+        return False
+    if getattr(args, "collection", None) and skill.get("source", {}).get("collection") != _selection_collection(args):
+        return False
+    if getattr(args, "trust", None) and skill.get("trust") != args.trust:
+        return False
+    if args.activation and skill.get("activation") != args.activation:
+        return False
+    if args.audience and not _matches_declared_audience(skill, args.audience):
+        return False
+    if args.package and skill.get("package") != args.package:
+        return False
+    return True
+
+
 def _compact_search_result(skill: dict[str, Any], *, agent: str | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": skill.get("id"),
         "name": skill.get("name"),
         "summary": skill.get("summary"),
-        "available": True,
+        "available": _is_available_skill(skill),
         "score": skill.get("score"),
         "reasons": skill.get("reasons", []),
         "exposure": skill.get("exposure", "hidden"),
@@ -3791,7 +3886,7 @@ def _compact_skill_metadata(skill: dict[str, Any], *, agent: str | None = None) 
         "id": skill.get("id"),
         "name": skill.get("name"),
         "summary": skill.get("summary"),
-        "available": True,
+        "available": _is_available_skill(skill),
         "source": skill.get("source", {}),
         "availability": skill.get("availability", []),
         "activation": skill.get("activation"),
@@ -3804,6 +3899,14 @@ def _compact_skill_metadata(skill: dict[str, Any], *, agent: str | None = None) 
         "agent_variant": skill.get("agent_variant"),
         "compatibility": _compact_compatibility(skill, agent=agent),
     }
+    return payload
+
+
+def _compact_lint_blocked_skill_metadata(skill: dict[str, Any]) -> dict[str, Any]:
+    payload = _compact_skill_metadata(skill)
+    payload["trust"] = "lint_blocked"
+    payload["review_gates"] = skill.get("review_gates") or {}
+    payload["lint"] = skill.get("lint") or {}
     return payload
 
 
@@ -3890,7 +3993,7 @@ def _compact_inventory_item(skill: dict[str, Any]) -> dict[str, Any]:
         "id": skill.get("id"),
         "name": skill.get("name"),
         "summary": skill.get("summary"),
-        "available": True,
+        "available": _is_available_skill(skill),
         "source": {
             key: value
             for key, value in source.items()
@@ -4084,10 +4187,18 @@ def _same_skill_variant(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 def cmd_show(args: argparse.Namespace) -> int:
     skill = _find_project_skill(root(args), args.skill_id, catalog_root=catalog_root(args), include_lint_blocked=True)
+    if skill.get("trust") == "lint_blocked":
+        if args.content:
+            raise ValueError(f"skill content is not available while lint-blocked: {args.skill_id}")
+        if args.json:
+            lint_payload: dict[str, Any] = {"skill": _public_full_skill_metadata(skill) if args.full_json else _compact_lint_blocked_skill_metadata(skill)}
+            print(json.dumps(lint_payload, indent=2, sort_keys=True))
+        else:
+            print(_format_skill(skill))
+            _print_lint_blocked([skill])
+        return 0
     if not _is_available_skill(skill):
         raise ValueError(f"skill is not available: {args.skill_id}; ask the user to run `skillager setup`")
-    if skill.get("trust") == "lint_blocked" and args.content:
-        raise ValueError(f"skill content is not available while lint-blocked: {args.skill_id}")
     if args.content and skill.get("trust") not in {"reviewed", "trusted", "pinned"}:
         raise ValueError(f"skill content is not available: {args.skill_id}; {_approval_hint(skill)}")
     if args.json:
@@ -4731,6 +4842,21 @@ def cmd_review(args: argparse.Namespace) -> int:
         include_lint_blocked=review_include_lint_blocked,
         include_global=args.include_global,
     )
+    hidden_lint_count = 0
+    if not review_include_lint_blocked:
+        with_lint = select_visible_skills(
+            data.get("skills", []),
+            skill_ids=args.skill_ids,
+            source=source,
+            collection=collection,
+            audience=args.audience,
+            package=args.package,
+            activation=args.activation,
+            include_blocked=args.include_blocked or action_includes_blocked,
+            include_lint_blocked=True,
+            include_global=args.include_global,
+        )
+        hidden_lint_count = sum(1 for skill in with_lint if skill.get("trust") == "lint_blocked")
     duplicate_context = select_visible_skills(
         data.get("skills", []),
         source=source,
@@ -4782,6 +4908,8 @@ def cmd_review(args: argparse.Namespace) -> int:
         print(json.dumps({"selected": [_public_full_skill_metadata(skill) for skill in skills], "summary": summary, "action": action}, indent=2, sort_keys=True))
     else:
         _print_review_report(skills, summary, action, compact=args.summary)
+        if hidden_lint_count:
+            print(f"{hidden_lint_count} lint-blocked skill(s) hidden; add --include-lint-blocked to see them.")
     return 0
 
 
@@ -5356,7 +5484,7 @@ def _format_skill(skill: dict[str, Any]) -> str:
         f"id: {skill['id']}",
         f"name: {skill.get('name', '-')}",
         f"summary: {skill.get('summary', '-')}",
-        "available: true",
+        f"available: {'true' if _is_available_skill(skill) else 'false'}",
         f"source: {skill['source'].get('type')}",
         f"availability: {', '.join(skill.get('availability', [])) or '-'}",
         f"activation: {skill.get('activation', '-')}",
@@ -5415,6 +5543,7 @@ def _print_review_report(
             if approved_ids:
                 line += f" (same content as approved {', '.join(approved_ids)})"
             print(line)
+        _print_lint_override_receipt(action)
     if action.get("skipped"):
         print(_style("Skipped:", "bold"))
         for item in action["skipped"]:
@@ -5483,6 +5612,7 @@ def _print_review_report_rich(
         for item in action.get("skipped", []):
             lines.append(f"[yellow]{item['skill_id']}[/yellow]: skipped ({item['reason']})")
         console.print(Panel("\n".join(lines), title="Review action", border_style="cyan"))
+    _print_lint_override_receipt(action)
     if compact:
         _print_lint_blocked(skills)
         _print_needs_review(skills)
@@ -5516,6 +5646,38 @@ def _print_review_duplicate_summary(summary: dict[str, Any]) -> None:
     )
 
 
+def _lint_override_items(action: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in action.get("changed", [])
+        if isinstance(item, dict) and item.get("lint_override")
+    ]
+
+
+def _print_lint_override_receipt(action: dict[str, Any]) -> None:
+    items = _lint_override_items(action)
+    if not items:
+        return
+    print(_style(f"Approved with audited lint override ({len(items)}):", "bold"))
+    for item in items:
+        override = item.get("lint_override") or {}
+        findings = override.get("findings") or []
+        finding_text = ", ".join(_lint_finding_identity(finding) for finding in findings if isinstance(finding, dict))
+        suffix = f"  [{finding_text}]" if finding_text else ""
+        skill_id = item.get("skill_id")
+        print(f"  - {skill_id}{suffix}")
+        print(f"    reason: {override.get('reason') or '-'}")
+        print("    revisit: skillager review --include-lint-blocked")
+        print(f"    revoke:  skillager review block {skill_id}")
+
+
+def _lint_finding_identity(item: dict[str, Any]) -> str:
+    code = item.get("code") or "lint"
+    field = item.get("field") or "-"
+    detail = item.get("detail") or "blocked by lint"
+    return f"{code} {field}: {detail}"
+
+
 def _print_lint_blocked(skills: list[dict[str, Any]]) -> None:
     blocked = [skill for skill in skills if skill.get("trust") == "lint_blocked"]
     if not blocked:
@@ -5523,10 +5685,15 @@ def _print_lint_blocked(skills: list[dict[str, Any]]) -> None:
     print()
     print(_style(f"Lint blocked ({len(blocked)})", "bold"))
     for skill in blocked:
-        print(f"  - {_style(skill['id'], 'bold')}")
+        print(f"  - {_style(skill['id'], 'bold')}   {_lint_blocked_path(skill)}")
         for item in (skill.get("lint") or {}).get("findings", [])[:3]:
-            print(f"    {item.get('severity')} {item.get('code')} {item.get('field')}: {item.get('detail')}")
-    print("  Fix the source, or approve with `--override-lint --reason <text>`.")
+            print(f"      block {_lint_finding_identity(item)}")
+        print("    fix:      edit the source above, then re-run `skillager setup`")
+        print(f"    override: skillager review approve {skill['id']} --override-lint --reason \"<why>\"")
+
+
+def _lint_blocked_path(skill: dict[str, Any]) -> str:
+    return str(skill.get("root") or skill.get("entrypoint") or "<unknown>")
 
 
 def _print_needs_review(skills: list[dict[str, Any]]) -> None:
@@ -5747,11 +5914,16 @@ def _interactive_setup(
     while True:
         selected = _current_selected_skills(state_root, selected_ids, catalog_root=catalog_root)
         candidates = [skill for skill in _unreviewed_skills(selected) if skill["id"] not in decided_ids]
-        if not candidates:
+        lint_candidates = [skill for skill in _lint_blocked_skills(selected) if skill["id"] not in decided_ids]
+        if not candidates and not lint_candidates:
             approved = _approved_skills(selected)
             if not approved:
                 print()
-                print("No approved skills in this setup selection.")
+                unresolved_lint = _lint_blocked_skills(selected)
+                if unresolved_lint:
+                    _print_lint_blocked(unresolved_lint)
+                else:
+                    print("No approved skills in this setup selection.")
                 return
             print()
             results = _materialize_reviewed_for_project(
@@ -5778,8 +5950,13 @@ def _interactive_setup(
         print(f"  {_style('3', 'red')}. Block all high-risk selected skills")
         print(f"  {_style('4', 'cyan')}. Install Skillager working skill for project scope (requires approved skills)")
         print(f"  {_style('5', 'dim')}. Exit")
+        if lint_candidates:
+            print(f"  {_style('6', 'yellow')}. Review {len(lint_candidates)} lint-blocked skill(s) (audited override)")
         choice = _interactive_input("> ").strip()
         if choice == "1":
+            if not candidates:
+                print("No unreviewed skills remain in this setup selection.")
+                continue
             decided_ids.update(_interactive_review_skills(state_root, candidates, catalog_root=catalog_root, global_scope=global_scope))
         elif choice == "2":
             low = [skill for skill in candidates if skill.get("scan", {}).get("risk") == "low"]
@@ -5821,8 +5998,17 @@ def _interactive_setup(
                 return
         elif choice == "5" or choice.lower() in {"q", "quit", "exit"}:
             return
+        elif choice == "6" and lint_candidates:
+            decided_ids.update(
+                _interactive_review_lint_blocked(
+                    state_root,
+                    lint_candidates,
+                    catalog_root=catalog_root,
+                    global_scope=global_scope,
+                )
+            )
         else:
-            print("Enter 1, 2, 3, 4, or 5.")
+            print("Enter 1, 2, 3, 4, 5, or 6." if lint_candidates else "Enter 1, 2, 3, 4, or 5.")
 
 
 def _current_selected_skills(state_root: Path, selected_ids: list[str], *, catalog_root: Path | None = None) -> list[dict[str, Any]]:
@@ -5839,6 +6025,10 @@ def _current_selected_skills(state_root: Path, selected_ids: list[str], *, catal
 
 def _unreviewed_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [skill for skill in skills if skill.get("trust") == "discovered"]
+
+
+def _lint_blocked_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [skill for skill in skills if skill.get("trust") == "lint_blocked"]
 
 
 def _approved_skills(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -5929,6 +6119,52 @@ def _interactive_review_skills(
         else:
             print(f"{skill['id']}: skipped; remains unreviewed")
     return decided
+
+
+def _interactive_review_lint_blocked(
+    state_root: Path,
+    skills: list[dict[str, Any]],
+    *,
+    catalog_root: Path | None = None,
+    global_scope: bool = True,
+) -> set[str]:
+    decided: set[str] = set()
+    for index, skill in enumerate(skills, start=1):
+        print()
+        print(_style(f"Review lint-blocked skill {index} of {len(skills)}", "bold"))
+        print(f"  {_style(skill['id'], 'bold')}")
+        _print_wrapped("  path: ", _lint_blocked_path(skill), width=_output_width(), break_long_words=True)
+        for item in (skill.get("lint") or {}).get("findings", [])[:3]:
+            print(f"  block {_lint_finding_identity(item)}")
+        choice = _interactive_input("Review decision? [o]verride / [s]kip / [b]lock / [q]uit (default: skip): ").strip().lower()
+        if choice in {"q", "quit", "exit"}:
+            return decided
+        decided.add(skill["id"])
+        if choice in {"o", "override"}:
+            reason = _prompt_lint_override_reason()
+            _print_action_result(
+                apply_review_action(
+                    state_root,
+                    [skill],
+                    override_lint=True,
+                    reason=reason,
+                    approval_root=catalog_root,
+                    global_scope=global_scope,
+                )
+            )
+        elif choice in {"b", "block"}:
+            _block_review_item(state_root, skill)
+        else:
+            print(f"{skill['id']}: skipped; remains lint-blocked")
+    return decided
+
+
+def _prompt_lint_override_reason() -> str:
+    while True:
+        reason = _interactive_input("Override reason (required): ").strip()
+        if reason:
+            return reason
+        print("Reason is required for audited lint override.")
 
 
 def _review_family_items(skills: list[dict[str, Any]], *, agent: str | None) -> list[list[dict[str, Any]]]:
@@ -6433,6 +6669,7 @@ def _interactive_input(prompt: str) -> str:
 def _print_action_result(action: dict[str, Any]) -> None:
     for item in action.get("changed", []):
         print(f"{item['skill_id']}: {_trust_label(item['state'])}")
+    _print_lint_override_receipt(action)
     for item in action.get("skipped", []):
         print(f"{item['skill_id']}: skipped ({item['reason']})")
 

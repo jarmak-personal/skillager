@@ -21,7 +21,7 @@ Availability is the eligibility gate. Agent-facing Skillager commands only surfa
 
 ## Safe Metadata Commands
 
-These commands do not expose full skill bodies. In a project, normal `list`, `search`, and `show` use effective project inventory: project skills, package/environment skills, and reviewed collection skills that are available to the current project. `list` hides global native skills by default; pass `--include-global` only when the user is asking about global inventory.
+These commands do not expose full skill bodies. In a project, normal `list`, `search`, and `show` use effective project inventory: project skills, package/environment skills, and reviewed collection skills that are available to the current project. `list` hides global native skills by default; pass `--include-global` only when the user is asking about global inventory. Plain human `list` and `review` output may include a trailing hint such as `N lint-blocked skill(s) hidden; add --include-lint-blocked to see them.` Treat that as owner-diagnostic guidance, not as available skill inventory.
 
 ```bash
 skillager working --agent codex --json
@@ -45,7 +45,7 @@ Project-aware JSON includes:
 - `agent_variant`: duplicate native-variant hints. Matching-agent variants are ranked first when the active agent is known, but alternatives remain visible and usable.
 - `compatibility`: negative-only compatibility metadata. Missing metadata means "assume usable." `problem` is set only when the skill explicitly excludes the requested `--agent`.
 
-Pending owner review means Skillager found skills outside the available set. Treat them as unavailable and ask the user to run setup when they want to make more skills available.
+Pending owner review means Skillager found skills outside the available set. Treat them as unavailable and ask the user to run setup when they want to make more skills available. If `show <id>` returns quarantined lint-blocked metadata, do not activate or request content; ask the user to fix the source or run the audited override command shown by Skillager.
 
 ## Compatibility
 

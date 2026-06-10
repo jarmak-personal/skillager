@@ -43,7 +43,7 @@ The standalone `skillager-lint` console script uses the same strict loader and m
 
 The standalone linter reads `SKILL.md` to validate the canonical entrypoint, infer compatibility warnings, and check description quality, but it never emits body text or body-derived names/summaries in findings or output.
 
-Lint-blocked skills are indexed only as quarantined records with safe derived fields, `trust: lint_blocked`, and safe lint findings. Skillager does not expose hostile manifest values through normal `search`, `list`, or `show` output.
+Lint-blocked skills are indexed only as quarantined records with safe derived fields, `trust: lint_blocked`, and safe lint findings. Skillager does not expose hostile manifest values through normal `search` or default `list` output. `show <id>` may display the quarantined metadata record and safe lint findings for diagnosis, but `show --content` remains refused while lint-blocked.
 
 Approving a lint-blocked skill requires:
 
@@ -51,7 +51,9 @@ Approving a lint-blocked skill requires:
 skillager review approve <skill-id> --override-lint --reason "<why this is acceptable>"
 ```
 
-For fully reviewed sources, `--bulk-approve` also approves selected lint-blocked skills and stores a standard audited shortcut reason. `--yolo` is the fun alias for the same bulk approval path.
+For fully reviewed sources, `--bulk-approve` also approves selected lint-blocked skills and stores a standard audited shortcut reason. `--yolo` is the fun alias for the same bulk approval path. Bulk shortcut overrides are disclosed in command output with the accepted finding, reason, revisit command, and revoke command.
+
+Interactive setup has a lint-blocked review lane. Its override path requires a non-empty user-supplied reason and stores the same audited lint override record as `review approve --override-lint`.
 
 The override is stored in `trust.json` with the reason, timestamp, content hash, and the accepted finding identities. Content changes or new blocking finding identities drop the skill back to `lint_blocked`.
 

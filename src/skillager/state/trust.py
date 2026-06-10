@@ -136,6 +136,15 @@ def _record_trust_info(
     if record.get("content_hash") and record.get("content_hash") != current_hash:
         return None
     lint_blocked = bool(blocking_findings(lint))
+    if state == "blocked":
+        info = {
+            "state": state,
+            "scope": scope,
+            "source": record.get("source"),
+        }
+        if record.get("reason"):
+            info["reason"] = record["reason"]
+        return info
     if lint_blocked and not valid_lint_override(record, lint):
         return None
     if state in TRUST_STATES - {"discovered", "lint_blocked"}:

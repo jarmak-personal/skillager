@@ -165,8 +165,25 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 patch("pathlib.Path.home", return_value=root),
                 chdir(root),
             ):
-                with redirect_stdout(StringIO()):
+                add_output = StringIO()
+                with redirect_stdout(add_output):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
+                add_text = add_output.getvalue()
+                self.assertIn("community: indexed 2 skill(s)", add_text)
+                self.assertIn("Errors: 1", add_text)
+                self.assertIn(str(bad), add_text)
+                self.assertIn("unknown manifest key", add_text)
+                self.assertIn("1 skill(s) quarantined by lint; they will appear in `skillager setup` for review.", add_text)
+                self.assertNotIn("errors: 1", add_text)
+
+                refresh_output = StringIO()
+                with redirect_stdout(refresh_output):
+                    self.assertEqual(main(["collection", "refresh", "community"]), 0)
+                refresh_text = refresh_output.getvalue()
+                self.assertIn("community: indexed 2 skill(s)", refresh_text)
+                self.assertIn("Errors: 1", refresh_text)
+                self.assertIn(str(bad), refresh_text)
+                self.assertIn("1 skill(s) quarantined by lint; they will appear in `skillager setup` for review.", refresh_text)
 
                 default_review = StringIO()
                 with redirect_stdout(default_review):

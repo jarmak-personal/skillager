@@ -37,6 +37,7 @@ class SkillagerDoctorTests(unittest.TestCase):
             self.assertTrue(data["readiness"]["can_proceed"])
             self.assertTrue(data["readiness"]["artifacts_ready"])
             self.assertIsNone(data["readiness"]["reason_code"])
+            self.assertEqual(data["state"]["lint_overrides"], {"count": 0, "ids": []})
 
     def test_doctor_clean_project_exits_zero(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -339,6 +340,68 @@ class SkillagerDoctorTests(unittest.TestCase):
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "lint-blocked")
             self.assertEqual(data["next"]["command"], "skillager review --include-lint-blocked --summary")
+            self.assertIn(
+                'skillager review approve project/linted --override-lint --reason "<why>"',
+                data["next"]["next_commands"],
+            )
+
+    def test_doctor_reports_active_lint_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "linted"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Linted\n\nUse linted guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                "schema: skillager.skill.v1\nsummary: lint bait\naudience:\n  - user\nactivation:\n  default: manual\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--no-packages", "--override-lint", "--reason", "fixture override", "--json"]), 0)
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["doctor", "--no-packages", "--json"]), 11)
+                human = StringIO()
+                with redirect_stdout(human):
+                    self.assertEqual(main(["doctor", "--no-packages"]), 11)
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["state"]["lint_overrides"], {"count": 1, "ids": ["project/linted"]})
+            self.assertIn("Lint overrides in effect: 1 (project/linted)", human.getvalue())
+
+    def test_doctor_tracks_lint_override_across_collection_rename(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "collection"
+            skill_dir = collection / "lintbait"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Lint Bait\n\nUse linted guidance.\n", encoding="utf-8")
+            (skill_dir / "skillager.yaml").write_text(
+                "schema: skillager.skill.v1\nsummary: lint bait\naudience:\n  - user\nactivation:\n  default: manual\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "oldcol"]), 0)
+                    self.assertEqual(main(["setup", "--no-packages", "--override-lint", "--reason", "fixture override", "--json"]), 0)
+                    self.assertEqual(main(["collection", "remove", "oldcol"]), 0)
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "newcol"]), 0)
+                output = StringIO()
+                with redirect_stdout(output):
+                    main(["doctor", "--no-packages", "--json"])
+            data = json.loads(output.getvalue())
+            self.assertEqual(data["state"]["lint_overrides"], {"count": 1, "ids": ["newcol/lintbait"]})
 
     def test_doctor_migration_review_exits_thirteen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

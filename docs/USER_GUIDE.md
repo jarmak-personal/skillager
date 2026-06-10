@@ -33,9 +33,9 @@ Run `skillager doctor --agent codex` when the state seems off or the agent is st
 - `trusted`: stronger user trust for recurring use.
 - `pinned`: approved for an exact content hash.
 - `blocked`: hidden from normal search, activation, and exposure.
-- `lint_blocked`: manifest or structure failed a blocking lint rule; hidden from normal list/search/show/expose flows until fixed or explicitly overridden.
+- `lint_blocked`: manifest or structure failed a blocking lint rule; hidden from normal list/search/expose flows until fixed or explicitly overridden. `show <id>` can display a quarantined metadata-only record and safe lint findings, but `show --content` remains blocked.
 
-Agent-facing commands hide `discovered` and `lint_blocked` skills from normal use. Use setup, review, doctor, or `review --collection <name> --include-lint-blocked --json` yourself when you want to inspect why a skill is not available.
+Agent-facing commands hide `discovered` and `lint_blocked` skills from normal use. Use setup, review, doctor, `show <id>`, or `review --collection <name> --include-lint-blocked --json` yourself when you want to inspect why a skill is not available.
 
 For diagnostics, full JSON and review output split this into `approval` plus `review_gates`: scan risk, lint status, signature verification status, and availability reason. For example, an unreviewed low-risk signed skill may show `approval=unreviewed scan=low lint=ok signature=not_checked availability=blocked_until_review`.
 
@@ -60,6 +60,8 @@ skillager review approve <skill-id> --override-lint --reason "Reviewed manifest 
 ```
 
 The override is tied to the current content hash and finding identities. Content changes or new blocking lint findings require a new review.
+
+Interactive setup has a separate lint-blocked review lane. Choosing an override requires a non-empty reason and stores the same audited override as the CLI command above. When setup or review approves a lint-blocked skill with `--override-lint`, `--bulk-approve`, or `--yolo`, output includes an "Approved with audited lint override" receipt with the finding, reason, revisit command, and revoke command. `doctor` also reports how many lint overrides are currently in effect.
 
 ## Useful Commands
 
@@ -101,7 +103,7 @@ skillager expose <skill-id> --mode stub --agent codex --scope project
 
 Use a tag router for a named reusable group, or pass explicit skill IDs for a deterministic ad-hoc router without creating a tag. Router exposure writes compact available metadata only, not full skill bodies, and skips unavailable or incompatible members. The expose output and JSON give the router exposure id/slug; activate a listed skill with `skillager activate <skill-id> --from-router <router-slug>`.
 
-Use `--json` when another program needs stable output. `working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, `tag list --json`, and `search --json` are compact and available-only for agent use; pass `--full-json` for explicit user-directed Skillager diagnostics where available. Agents should use `working --agent <agent> --json`, `search --agent <agent> --json`, `list --summary-json --agent <agent>`, and project tag metadata to build their own candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `doctor --json` and `setup --summary-json` for owner-run diagnostics and setup automation.
+Use `--json` when another program needs stable output. `working --agent <agent> --json`, normal `list --json`, `show --json`, `tag show --json`, `tag list --json`, and `search --json` are compact and available-only for agent use; pass `--full-json` for explicit user-directed Skillager diagnostics where available. `show --json` for a lint-blocked ID returns quarantined metadata and safe lint findings, not content. Agents should use `working --agent <agent> --json`, `search --agent <agent> --json`, `list --summary-json --agent <agent>`, and project tag metadata to build their own candidate slate before deciding whether router, stub, native, or no new exposure fits the task. Use `doctor --json` and `setup --summary-json` for owner-run diagnostics and setup automation.
 
 For a project-local automation smoke flow:
 
@@ -118,11 +120,11 @@ Skillager does not require git. In a plain directory, it treats the current dire
 
 Legacy in-tree `<project>/.skillager/` trust state is ignored by ordinary commands. If you are upgrading from an older Skillager version, review any old decisions you still trust, remove the obsolete legacy state after review, and rerun setup so current content hashes are reviewed through the normal flow.
 
-Use `--bulk-approve` only for fully trusted sources. It marks all selected skills reviewed, including medium, high-risk, and lint-blocked findings, and records the current content hashes. For lint-blocked skills it writes an audited shortcut override reason. `--yolo` is the fun alias for the same serious bulk approval path.
+Use `--bulk-approve` only for fully trusted sources. It marks all selected skills reviewed, including medium, high-risk, and lint-blocked findings, and records the current content hashes. For lint-blocked skills it writes an audited shortcut override reason and prints the override receipt. `--yolo` is the fun alias for the same serious bulk approval path.
 
 Use `skillager setup --fresh` to clear only project-local trust decisions for the selected setup scope. Reusable global approvals still apply if the source key and content hash match. Use `skillager setup --fresh-project --agent codex` when you want to reset project-local Skillager state and refresh Codex working artifacts in one run: it clears project-local decisions, project tags, legacy session records, and saved setup scope for the selected scope. It reports, but does not delete, retained reusable global approvals, global catalog collections, and exposed skill files.
 
-`skillager list` shows the effective project inventory and hides global native skills unless you pass `--include-global`. Use `skillager list --no-packages` when you want local project, registered collection, and project-tag inventory without installed package skills. Use `skillager list --summary-json --agent codex` when an agent needs compact orientation: it includes counts, every listed skill ID, and duplicate native-variant hints. Use `skillager list --json --full-json` only for verbose Skillager diagnostics.
+`skillager list` shows the effective project inventory and hides global native skills unless you pass `--include-global`. Plain TTY output says when lint-blocked skills are hidden; pass `--include-lint-blocked` to include quarantined metadata-only rows. Use `skillager list --no-packages` when you want local project, registered collection, and project-tag inventory without installed package skills. Use `skillager list --summary-json --agent codex` when an agent needs compact orientation: it includes counts, every listed skill ID, and duplicate native-variant hints. Use `skillager list --json --full-json` only for verbose Skillager diagnostics.
 
 Collection repositories are user-global catalog inventory for source administration, review, refresh, and debugging. Ordinary `skillager setup` includes registered collection skills; `skillager setup --collection <name> --agent codex` narrows review to one collection. For a fully trusted collection, use `skillager setup --collection <name> --bulk-approve --agent codex`; `--yolo` is the optional alias. After review, available collection skills are searchable from any project using the same catalog. Use project-local tags when you want task/project curation or router/stub exposure.
 
