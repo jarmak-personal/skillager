@@ -20,7 +20,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - uses: actions/dependency-review-action@v5.0.0
 
   codeql:
@@ -30,7 +30,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - uses: github/codeql-action/init@v4.37.0
         with:
           languages: python
