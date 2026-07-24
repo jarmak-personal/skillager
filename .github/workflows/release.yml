@@ -594,7 +594,7 @@ jobs:
 
       - name: Publish to PyPI
         if: steps.pypi.outputs.exists != 'true'
-        uses: pypa/gh-action-pypi-publish@v1.14.0
+        uses: pypa/gh-action-pypi-publish@v1.14.1
         with:
           packages-dir: dist-package/
 
