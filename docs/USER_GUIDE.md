@@ -60,6 +60,22 @@ Creation and direct edits produce a pending exact hash. Pending library content 
 
 `library status`, `where`, and plain `edit` are read-only. Plain `edit` prints `SKILL.md`; `edit --open` launches `$EDITOR`. `where` reports canonical ownership, working/accepted/HEAD hashes, Git state, and exposures in the current project without printing the body. Any out-of-band content change immediately stops matching the accepted hash and returns the skill to pending.
 
+### Import An External Skill
+
+Import is the one-way boundary for adopting a discovered external skill as your own:
+
+```bash
+skillager import workflows/pr-review --json
+skillager import workflows/pr-review --as pr-review --yes
+skillager import --refresh lib/pr-review --json
+```
+
+The preview identifies the source, exact hash, destination, scanner/lint state, and whether owner review is required without writing library files. `--yes` confirms that reviewed hash for a non-interactive import. Blocking lint or high scanner risk requires `--override-lint --reason "..."`; blocked sources must be unblocked separately. Name collisions refuse unless you choose a free `--as` name.
+
+After confirmation, Skillager discovers and rehashes the source again under the library mutation lock. It copies only the selected skill directory—not its surrounding Python/npm/Cargo package—and excludes evidence, generated sidecars, caches, symlinks, and transient editor files using the same rules as content hashing and exposure. The origin remains unchanged. The library copy records its source key, source skill ID, imported hash, source type, and timestamp in `.skillager/provenance.json`.
+
+`import --refresh` never applies upstream changes. It reports whether the upstream, library, both, or neither changed from the imported base and provides a metadata-only file comparison. If the source was deleted, renamed, or now resolves to a different identity, refresh reports degradation while the accepted owned copy stays usable.
+
 ## Manifest Lint
 
 `skillager.yaml` is structured metadata only. Skill identity and searchable prose come from `SKILL.md`, not from manifest free text.
@@ -91,6 +107,9 @@ skillager library new <name>
 skillager edit lib/<name>
 skillager library accept lib/<name> --yes
 skillager where lib/<name> --json
+skillager import <external-skill-id> --json
+skillager import <external-skill-id> --as <name> --yes
+skillager import --refresh lib/<name> --json
 skillager setup --agent codex
 skillager setup --fresh
 skillager setup --fresh-project --agent codex

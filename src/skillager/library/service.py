@@ -185,13 +185,19 @@ def accept_library_skill(
         if identity.git_mode == "system":
             git = repository_status(layout.root, mode=identity.git_mode)
             target = Path(skill["root"])
-            changes = path_changes(git, layout.root, target)
+            commit_targets = [target]
+            provenance = load_library_provenance(layout)
+            if isinstance(provenance, dict) and normalized in provenance.get("skills", {}):
+                commit_targets.append(layout.provenance_path)
+            changes = _merge_path_changes(
+                *(path_changes(git, layout.root, path) for path in commit_targets)
+            )
             _require_safe_git_mutation(git, allow_target_staged=True, target_changes=changes)
             head_hash = head_content_hash(layout.root, target)
             if any(changes.values()) or head_hash != working_hash:
                 commit = commit_paths(
                     layout.root,
-                    [target],
+                    commit_targets,
                     f"Accept library skill {normalized}",
                     allow_staged_paths=True,
                 )
@@ -623,6 +629,13 @@ def _acceptance_state(skill: dict[str, Any], *, working_hash: str, accepted_hash
 
 def _empty_path_changes() -> dict[str, list[str]]:
     return {"conflicts": [], "staged": [], "unstaged": [], "untracked": []}
+
+
+def _merge_path_changes(*changes: dict[str, list[str]]) -> dict[str, list[str]]:
+    return {
+        key: sorted({path for change in changes for path in change.get(key, [])})
+        for key in ("conflicts", "staged", "unstaged", "untracked")
+    }
 
 
 def _new_skill_template(name: str) -> str:

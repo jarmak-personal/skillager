@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from ..compatibility import compatibility_problem, compatibility_warnings
-from ..signing import is_evidence_file
 from ..simple_yaml import dumps, load_mapping
+from ..skills.tree import iter_content_files
 from ..trust import content_hash
 
 MATERIALIZED_SCHEMA = "skillager.materialized.v1"
@@ -881,14 +881,9 @@ def _stub_sidecar(skill: dict[str, Any], *, agent: str, scope: str, materialized
 
 
 def _copy_skill_tree(source: Path, target: Path) -> None:
-    for path in source.rglob("*"):
-        if path.is_symlink():
-            continue
-        if not path.is_file():
-            continue
+    source = source.resolve()
+    for path in iter_content_files(source):
         relative = path.relative_to(source)
-        if _copy_excluded(relative):
-            continue
         destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, destination)
@@ -905,17 +900,6 @@ def _collision_safe_target(target: Path, skill_id: str) -> Path:
     if data.get("source_id") in {None, skill_id}:
         return target
     return target.with_name(f"{target.name}-{_slug_hash(skill_id)}")
-
-
-def _copy_excluded(relative: Path) -> bool:
-    if is_evidence_file(relative):
-        return True
-    for part in relative.parts:
-        if part in {".git", "__pycache__", ".pytest_cache", "skillager.materialized.yaml"}:
-            return True
-        if part.endswith(".pyc") or part.endswith(".pyo"):
-            return True
-    return False
 
 
 def _is_customized(sidecar: Path, target: Path) -> bool:

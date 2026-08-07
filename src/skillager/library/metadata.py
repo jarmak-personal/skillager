@@ -49,12 +49,54 @@ def write_empty_provenance(layout: LibraryLayout) -> None:
     write_user_json(layout.provenance_path, empty_provenance())
 
 
+def write_library_provenance(layout: LibraryLayout, data: dict[str, Any]) -> None:
+    if data.get("schema") != LIBRARY_PROVENANCE_SCHEMA or not isinstance(data.get("skills"), dict):
+        raise ValueError("invalid library provenance metadata")
+    write_user_json(layout.provenance_path, data)
+
+
+def set_import_provenance(
+    layout: LibraryLayout,
+    name: str,
+    *,
+    source_key: str,
+    source_skill: str,
+    source_hash: str,
+    source_type: str,
+    imported_at: str,
+    expected: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    data = load_library_provenance(layout)
+    if data is None:
+        raise ValueError(f"library provenance metadata is missing: {layout.provenance_path}")
+    if expected is not None and data != expected:
+        raise ValueError("library provenance changed during import; review and retry")
+    skills = data["skills"]
+    if name in skills:
+        raise ValueError(f"library provenance already exists for: {name}")
+    entry = {
+        "artifact_kind": "skill",
+        "imported_from": {
+            "source_key": source_key,
+            "skill_id": source_skill,
+            "content_hash": source_hash,
+            "source_type": source_type,
+        },
+        "imported_at": imported_at,
+    }
+    skills[name] = entry
+    write_library_provenance(layout, data)
+    return entry
+
+
 __all__ = [
     "LIBRARY_PROVENANCE_SCHEMA",
     "empty_provenance",
     "load_library_identity",
     "load_library_provenance",
     "new_library_identity",
+    "set_import_provenance",
     "write_empty_provenance",
     "write_library_identity",
+    "write_library_provenance",
 ]

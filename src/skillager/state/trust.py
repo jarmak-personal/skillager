@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import configparser
 import re
@@ -12,15 +11,9 @@ from urllib.parse import urlparse
 from ..library.model import LIBRARY_NAMESPACE, normalize_library_id, normalize_skill_name
 from ..lint import blocking_findings, valid_lint_override
 from ..schema import TRUST_STATES
-from ..signing import is_evidence_file
+from ..skills.tree import content_path_excluded, iter_content_files
 from ..statefiles import mutate_user_json, read_user_json, write_user_json
 
-DEFAULT_HASH_EXCLUDES = {
-    ".git",
-    "__pycache__",
-    ".pytest_cache",
-    "skillager.materialized.yaml",
-}
 APPROVED_TRUST_STATES = {"reviewed", "trusted", "pinned"}
 PRESERVED_BLOCK_APPROVAL_KEY = "previous_approval"
 
@@ -52,7 +45,7 @@ def content_hash_entries(entries: Iterable[tuple[str, bytes]]) -> str:
         relative_path = Path(relative)
         if relative_path.is_absolute() or ".." in relative_path.parts:
             raise ValueError(f"content hash entry must be a safe relative path: {relative}")
-        if _excluded(relative_path):
+        if content_path_excluded(relative_path):
             continue
         canonical = relative_path.as_posix()
         digest.update(canonical.encode("utf-8"))
@@ -63,28 +56,7 @@ def content_hash_entries(entries: Iterable[tuple[str, bytes]]) -> str:
 
 
 def _hashable_files(root: Path) -> list[Path]:
-    files: list[Path] = []
-    for path in root.rglob("*"):
-        if path.is_symlink():
-            continue
-        if not path.is_file():
-            continue
-        relative = path.relative_to(root)
-        if _excluded(relative):
-            continue
-        files.append(path)
-    return sorted(files, key=lambda item: item.relative_to(root).as_posix())
-
-
-def _excluded(relative: Path) -> bool:
-    if is_evidence_file(relative):
-        return True
-    for part in relative.parts:
-        if part in DEFAULT_HASH_EXCLUDES:
-            return True
-        if part.endswith(".pyc") or part.endswith(".pyo"):
-            return True
-    return any(fnmatch.fnmatch(relative.as_posix(), pattern) for pattern in ("*.tmp", "*.swp", "*~"))
+    return iter_content_files(root)
 
 
 def trust_path(state_root: Path) -> Path:

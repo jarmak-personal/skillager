@@ -20,6 +20,14 @@ Library ownership does not grant body availability. Every new or edited `lib/<na
 
 Acceptance previews scanner and lint metadata, recomputes the hash under a bounded lock, and requires explicit confirmation. Blocking lint or high scanner risk requires `--override-lint --reason "..."`, stored as an audited exact-hash override. Git-backed libraries commit the selected skill path before trust is recorded and refuse conflicts, in-progress repository operations, and unrelated staged changes. Adding a remote does not alter approval identity: library approvals use `library:<library_id>#<skill-name>` plus the accepted content hash.
 
+## Import Boundary
+
+Import is the only Skillager operation that turns an external skill into an owned library skill. Preview is read-only. After explicit confirmation, Skillager re-resolves and rehashes the source, applies the same scanner/lint and audited-override rules as authored acceptance, and only then prepares a filtered candidate outside the library. Source changes invalidate the preview.
+
+Only the canonical content tree crosses the boundary: regular files below the selected skill root, excluding evidence, generated materialization sidecars, Git/cache data, symlinks, bytecode, and transient editor files. Skillager neither imports nor executes the surrounding package. The candidate hash must reproduce the reviewed source hash before it moves into the library. Git commit precedes trust recording; a later failure leaves a pending copy with an explicit `library accept` repair path. The external origin is never modified or approved as a side effect.
+
+Import provenance stores a source identity, source skill ID, imported hash, source type, and timestamp. Refresh resolves that identity and compares hashes without applying files. Missing or changed provenance degrades refresh only and never makes the owned copy unavailable.
+
 ## Static Scanner
 
 The scanner runs locally and does not use an agent. It scans the full skill directory, including `SKILL.md`, supporting docs, scripts, templates, and references.

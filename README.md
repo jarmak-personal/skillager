@@ -78,6 +78,8 @@ Metadata commands stay metadata-only: `working`, `list`, `search`, `show` withou
 | Create a pending personal skill | `skillager library new my-skill` |
 | Locate or edit a personal skill | `skillager where lib/my-skill` / `skillager edit lib/my-skill` |
 | Accept the exact current personal-skill hash | `skillager library accept lib/my-skill --yes` |
+| Adopt a discovered external skill | `skillager import workflows/pr-review --yes` |
+| Preview imported-skill upstream drift | `skillager import --refresh lib/pr-review --json` |
 | Repair Skillager working artifacts | `skillager doctor --agent codex --fix` |
 | Approve a skill | `skillager review approve workflows/pr-review` |
 | Expose a tag as a router | `skillager expose --tag workflows --mode router --agent codex --scope project` |
@@ -113,6 +115,16 @@ skillager expose lib/orbital-review --mode stub --agent codex --scope project
 `library new` never overwrites an existing skill. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates a path-scoped Git commit when Git is enabled. `where`, `library status`, and plain `edit` are metadata-only and read-only; `edit --open` launches `$EDITOR` and may make an accepted skill pending.
 
 The machine-readable contracts are versioned as `skillager.library-init.v1`, `skillager.library-status.v1`, `skillager.library-new.v1`, `skillager.library-accept.v1`, and `skillager.where.v1`.
+
+Adopt one project, collection, environment, package, editable-source, or native skill through the explicit import boundary:
+
+```bash
+skillager import workflows/pr-review --json
+skillager import workflows/pr-review --as pr-review --yes
+skillager import --refresh lib/pr-review --json
+```
+
+The first command is a read-only preview. Import re-resolves and rehashes the origin after confirmation, copies only the canonical agent-visible tree, records provenance, commits the skill and provenance paths when Git is enabled, and accepts only the resulting library hash. It never imports or executes the surrounding package and never modifies the origin. `import --refresh` is preview-only: it compares the imported base, current upstream, and owned library hashes, and degrades safely if the upstream source was removed or renamed. Its JSON contracts are `skillager.import.v1` and `skillager.import-refresh.v1`.
 
 ## Collections
 
