@@ -60,6 +60,9 @@ def materialize_skills(
         if skill.get("trust") == "lint_blocked":
             results.append(_result(skill, None, "skipped", "lint-blocked"))
             continue
+        if _is_pending_library_skill(skill):
+            results.append(_result(skill, None, "skipped", "pending library hash; run `skillager library accept` first"))
+            continue
         if reviewed_only and skill.get("trust") not in TRUSTED_STATES:
             results.append(_result(skill, None, "skipped", _unreviewed_reason(skill)))
             continue
@@ -83,6 +86,11 @@ def _unreviewed_reason(skill: dict[str, Any]) -> str:
     if skill.get("authored") and skill.get("scan", {}).get("risk") == "low":
         return f"not available; to approve authored skill after owner review: skillager review approve {skill.get('id')}"
     return f"not available; owner review first: skillager review {skill.get('id')}"
+
+
+def _is_pending_library_skill(skill: dict[str, Any]) -> bool:
+    source = skill.get("source") or {}
+    return source.get("ownership") == "library" and skill.get("trust") not in TRUSTED_STATES
 
 
 def materialize_router(

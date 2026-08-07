@@ -4165,6 +4165,8 @@ def cmd_activate(args: argparse.Namespace) -> int:
         raise ValueError(
             f"skill is lint-blocked: {args.skill_id}; inspect setup/review output, then fix the source or approve with --override-lint --reason"
         )
+    if (skill.get("source") or {}).get("ownership") == "library" and skill.get("trust") not in TRUSTED_STATES:
+        raise ValueError(f"library skill has a pending hash: {args.skill_id}; run `skillager library accept {args.skill_id}` first")
     if args.from_router:
         _validate_router_activation(root(args), catalog_root(args), args.from_router, skill)
     if args.from_stub:

@@ -6,9 +6,10 @@ import configparser
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlparse
 
+from ..library.model import LIBRARY_NAMESPACE, normalize_library_id, normalize_skill_name
 from ..lint import blocking_findings, valid_lint_override
 from ..schema import TRUST_STATES
 from ..signing import is_evidence_file
@@ -40,6 +41,24 @@ def content_hash(path: Path) -> str:
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(65536), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def content_hash_entries(entries: Iterable[tuple[str, bytes]]) -> str:
+    """Hash an in-memory tree with the same public identity as ``content_hash``."""
+
+    digest = hashlib.sha256()
+    for relative, payload in sorted(entries, key=lambda item: item[0]):
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError(f"content hash entry must be a safe relative path: {relative}")
+        if _excluded(relative_path):
+            continue
+        canonical = relative_path.as_posix()
+        digest.update(canonical.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(payload)
+        digest.update(b"\0")
     return digest.hexdigest()
 
 
@@ -168,6 +187,7 @@ def set_trust(
     *,
     lint: dict[str, Any] | None = None,
     lint_override: dict[str, Any] | None = None,
+    risk_override: dict[str, Any] | None = None,
     reason: str | None = None,
     approval_key: str | None = None,
     approval_root: Path | None = None,
@@ -189,6 +209,8 @@ def set_trust(
         record["approval_key"] = approval_key
     if lint_override:
         record["lint_override"] = lint_override
+    if risk_override:
+        record["risk_override"] = risk_override
     if reason:
         record["reason"] = reason
     def mutation(data: dict[str, Any]) -> dict[str, Any]:
@@ -291,6 +313,14 @@ def approval_key_for(
     entrypoint: str | Path | None = None,
 ) -> str | None:
     source = source or {}
+    if source.get("ownership") == "library":
+        library_id = normalize_library_id(source.get("library_id"))
+        raw_name = source.get("library_skill")
+        if not isinstance(raw_name, str) and skill_id.startswith(f"{LIBRARY_NAMESPACE}/"):
+            raw_name = skill_id.split("/", 1)[1]
+        if not isinstance(raw_name, str):
+            raise ValueError("library source metadata requires a relative skill name")
+        return f"library:{library_id}#{normalize_skill_name(raw_name)}"
     root_path = _existing_path(root)
     entrypoint_path = _existing_path(entrypoint)
     package = str(source.get("package") or "").strip()

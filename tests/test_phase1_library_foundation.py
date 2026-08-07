@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,10 +13,11 @@ from uuid import uuid4
 from skillager.catalog.impl import add_collection, load_collections, register_library_collection, remove_collection
 from skillager.commands.context import catalog_root, root
 from skillager.library.model import LibraryIdentity, LibraryLayout, LibraryRegistration, normalize_skill_name
+from skillager.library.git import head_content_hash
 from skillager.library.paths import load_library_registration
 from skillager.state.locking import ResourceLockTimeout, resource_lock
 from skillager.state.statefiles import read_user_json, write_user_json
-from skillager.state.trust import load_trust
+from skillager.state.trust import approval_key_for, content_hash, load_trust
 
 
 class SkillagerResourceLockTests(unittest.TestCase):
@@ -173,6 +175,56 @@ class SkillagerLibraryModelTests(unittest.TestCase):
             (layout.skills / "escape").symlink_to(outside, target_is_directory=True)
             with self.assertRaisesRegex(ValueError, "escapes the library"):
                 layout.skill_root("escape")
+
+    def test_library_approval_key_uses_identity_and_name_not_path_or_remote(self) -> None:
+        library_id = str(uuid4())
+        source = {
+            "ownership": "library",
+            "library_id": library_id,
+            "library_skill": "orbital-review",
+            "remote": "https://example.invalid/first.git",
+        }
+        first = approval_key_for("lib/orbital-review", "/first/library/skills/orbital-review", source)
+        source["remote"] = "ssh://example.invalid/second.git"
+        second = approval_key_for("lib/orbital-review", "/moved/library/skills/orbital-review", source)
+        self.assertEqual(first, f"library:{library_id}#orbital-review")
+        self.assertEqual(second, first)
+
+
+class SkillagerLibraryGitTests(unittest.TestCase):
+
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_head_hash_matches_worktree_hash_and_ignores_symlinks(self) -> None:
+        if not hasattr(os, "symlink"):
+            self.skipTest("symlinks unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            root_path = Path(tmp)
+            library = root_path / "library"
+            skill = library / "skills" / "linked-skill"
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text("# Linked Skill\n\nUse linked workflow guidance.\n", encoding="utf-8")
+            (skill / "binary.dat").write_bytes(b"\x00\xfflibrary\n")
+            outside = root_path / "outside.txt"
+            outside.write_text("outside bytes must not affect identity\n", encoding="utf-8")
+            (skill / "outside-link").symlink_to(outside)
+            subprocess.run(["git", "init", "--quiet"], cwd=library, check=True)
+            subprocess.run(["git", "add", "skills/linked-skill"], cwd=library, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Library Test",
+                    "-c",
+                    "user.email=library@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "linked skill",
+                ],
+                cwd=library,
+                check=True,
+            )
+            self.assertEqual(head_content_hash(library, skill), content_hash(skill))
 
 
 class SkillagerReservedLibraryCollectionTests(unittest.TestCase):

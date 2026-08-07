@@ -43,6 +43,23 @@ Approvals for portable sources, such as git-backed skill repositories, registere
 
 Direct native skills are not automatically approved. If you place a skill in a project or global agent skill directory, Skillager discovers and scans it, but it remains `discovered` until reviewed. For self-authored project skills, create `.agents/skills/<slug>/SKILL.md` manually or with your authoring tools, then run setup and review the discovered content before approval.
 
+## Personal Library
+
+The personal library is the canonical home for skills you own. It defaults to `~/.skillager/library`, uses an ordinary Git repository unless you choose `--no-git`, and stays usable as plain skill directories without Skillager.
+
+```bash
+skillager library init
+skillager library new orbital-review
+skillager edit lib/orbital-review
+skillager library accept lib/orbital-review --yes
+skillager where lib/orbital-review --json
+skillager expose lib/orbital-review --mode stub --agent codex --scope project
+```
+
+Creation and direct edits produce a pending exact hash. Pending library content is visible through path and diagnostic metadata, but Skillager will not emit or copy its body through `show --content`, activation, native/stub exposure, or routers—even with generic unreviewed or force flags. Run `library accept` after reviewing the current files. Non-interactive acceptance requires `--yes`; lint-blocking or high-risk findings additionally require `--override-lint --reason "..."`. When Git is enabled, Skillager commits only the selected skill path before recording acceptance and refuses conflicts, in-progress repository operations, or unrelated staged files.
+
+`library status`, `where`, and plain `edit` are read-only. Plain `edit` prints `SKILL.md`; `edit --open` launches `$EDITOR`. `where` reports canonical ownership, working/accepted/HEAD hashes, Git state, and exposures in the current project without printing the body. Any out-of-band content change immediately stops matching the accepted hash and returns the skill to pending.
+
 ## Manifest Lint
 
 `skillager.yaml` is structured metadata only. Skill identity and searchable prose come from `SKILL.md`, not from manifest free text.
@@ -68,6 +85,12 @@ Interactive setup has a separate lint-blocked review lane. Choosing an override 
 ```bash
 skillager doctor
 skillager working --agent codex --json
+skillager library init
+skillager library status --json
+skillager library new <name>
+skillager edit lib/<name>
+skillager library accept lib/<name> --yes
+skillager where lib/<name> --json
 skillager setup --agent codex
 skillager setup --fresh
 skillager setup --fresh-project --agent codex

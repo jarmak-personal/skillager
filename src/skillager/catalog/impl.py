@@ -15,6 +15,7 @@ from ..library.model import (
     LibraryLayout,
     LibraryRegistration,
     normalize_library_id,
+    normalize_skill_name,
 )
 from ..review_gates import apply_review_metadata
 from ..scan import scan_path
@@ -141,8 +142,11 @@ def refresh_collection(state_root: Path, name: str) -> dict[str, Any]:
         raise KeyError(f"collection not found: {name}")
     root = Path(collection["path"]).expanduser().resolve()
     old_index = _load_collection_index(state_root, name)
-    skills, errors = _index_collection_skills(state_root, name, root)
+    skills, errors = _index_collection_skills(state_root, name, root, collection=collection)
     data = {"schema": "skillager.collection-index.v1", "name": name, "path": str(root), "skills": skills, "errors": errors}
+    if collection.get("kind") == LIBRARY_COLLECTION_KIND:
+        data["kind"] = LIBRARY_COLLECTION_KIND
+        data["library_id"] = collection.get("library_id")
     _migrate_collection_references(state_root, name, old_index, data)
     collection_index_dir(state_root).mkdir(parents=True, exist_ok=True)
     _collection_index_path(state_root, name).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -574,17 +578,29 @@ def _apply_approval_metadata(entry: dict[str, Any], approval_key: str | None, tr
         entry["trust_scope"] = trust["scope"]
 
 
-def _index_collection_skills(state_root: Path, name: str, root: Path) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+def _index_collection_skills(
+    state_root: Path,
+    name: str,
+    root: Path,
+    *,
+    collection: dict[str, Any] | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     skills: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
+    source = _collection_source(name, root, collection)
+    library_id = source.get("library_id")
     try:
         skill_dirs = _skill_dirs(root)
     except OSError as exc:
         return [], [{"path": str(root), "error": str(exc)}]
     for skill_dir in skill_dirs:
         try:
-            source = {"type": "collection", "collection": name, "path": str(root)}
-            skill = _collection_skill(load_skill_from_dir(skill_dir, source), collection=name, collection_root=root)
+            skill = _collection_skill(
+                load_skill_from_dir(skill_dir, source),
+                collection=name,
+                collection_root=root,
+                library_id=library_id,
+            )
             digest = content_hash(skill.root)
             scan = scan_path(skill.root, allow_tools=False)
             lint = lint_skill(skill)
@@ -600,11 +616,15 @@ def _index_collection_skills(state_root: Path, name: str, root: Path) -> tuple[l
             entry["audience_guess"] = classify_audience(skill)
             skills.append(entry)
         except (SchemaError, OSError, ValueError) as exc:
-            source = {"type": "collection", "collection": name, "path": str(root)}
             quarantined = quarantine_skill_from_dir(skill_dir, source, exc)
             if quarantined:
                 try:
-                    q_skill = _collection_quarantined(quarantined, collection=name, collection_root=root)
+                    q_skill = _collection_quarantined(
+                        quarantined,
+                        collection=name,
+                        collection_root=root,
+                        library_id=library_id,
+                    )
                 except ValueError:
                     q_skill = quarantined
                 digest = content_hash(q_skill.root)
@@ -624,21 +644,54 @@ def _index_collection_skills(state_root: Path, name: str, root: Path) -> tuple[l
     return skills, errors
 
 
-def _collection_skill(skill: Skill, *, collection: str, collection_root: Path) -> Skill:
+def _collection_skill(
+    skill: Skill,
+    *,
+    collection: str,
+    collection_root: Path,
+    library_id: object | None = None,
+) -> Skill:
     relative_id = _collection_relative_id(skill.root, collection_root, root_leaf=skill.id.rsplit("/", 1)[-1])
+    if library_id is not None:
+        relative_id = _library_relative_id(skill.root, collection_root)
     source = dict(skill.source)
     source["collection"] = collection
+    if library_id is not None:
+        source["library_skill"] = relative_id
     return replace(skill, id=f"{collection}/{relative_id}", source=source, package=collection)
 
 
-def _collection_quarantined(skill: QuarantinedSkill, *, collection: str, collection_root: Path) -> QuarantinedSkill:
+def _collection_quarantined(
+    skill: QuarantinedSkill,
+    *,
+    collection: str,
+    collection_root: Path,
+    library_id: object | None = None,
+) -> QuarantinedSkill:
     relative_id = _collection_relative_id(skill.root, collection_root, root_leaf=skill.id.rsplit("/", 1)[-1])
+    if library_id is not None:
+        relative_id = _library_relative_id(skill.root, collection_root)
     source = dict(skill.source)
     source["collection"] = collection
+    if library_id is not None:
+        source["library_skill"] = relative_id
     return replace(skill, id=f"{collection}/{relative_id}", source=source)
 
 
 def _load_or_refresh_collection_index(state_root: Path, name: str) -> dict[str, Any]:
+    collection = load_collections(state_root).get("collections", {}).get(name)
+    if isinstance(collection, dict) and collection.get("kind") == LIBRARY_COLLECTION_KIND:
+        root = Path(collection["path"]).expanduser().resolve()
+        skills, errors = _index_collection_skills(state_root, name, root, collection=collection)
+        return {
+            "schema": "skillager.collection-index.v1",
+            "name": name,
+            "path": str(root),
+            "kind": LIBRARY_COLLECTION_KIND,
+            "library_id": collection.get("library_id"),
+            "skills": skills,
+            "errors": errors,
+        }
     path = _collection_index_path(state_root, name)
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
@@ -690,6 +743,29 @@ def _collection_relative_id(skill_root: Path, collection_root: Path, *, root_lea
     if not parts:
         raise ValueError("collection skill path must be below collection root")
     return "/".join(parts)
+
+
+def _library_relative_id(skill_root: Path, collection_root: Path) -> str:
+    relative = skill_root.resolve().relative_to(collection_root.resolve())
+    if len(relative.parts) != 1:
+        raise ValueError("library skills must be direct children of the library skills directory")
+    name = normalize_skill_name(relative.name)
+    if name != relative.name:
+        raise ValueError("library skill directory must use its canonical slug")
+    return name
+
+
+def _collection_source(name: str, root: Path, collection: dict[str, Any] | None) -> dict[str, Any]:
+    source: dict[str, Any] = {"type": "collection", "collection": name, "path": str(root)}
+    if isinstance(collection, dict) and collection.get("kind") == LIBRARY_COLLECTION_KIND:
+        source.update(
+            {
+                "ownership": "library",
+                "library_id": normalize_library_id(collection.get("library_id")),
+                "library_root": str(Path(collection.get("library_root") or root.parent).expanduser().resolve()),
+            }
+        )
+    return source
 
 
 def _id_part(value: str) -> str:

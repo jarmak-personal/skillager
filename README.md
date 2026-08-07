@@ -75,6 +75,9 @@ Metadata commands stay metadata-only: `working`, `list`, `search`, `show` withou
 | Diagnose state | `skillager doctor --agent codex` |
 | Initialize your personal library | `skillager library init` |
 | Inspect personal library and Git state | `skillager library status --json` |
+| Create a pending personal skill | `skillager library new my-skill` |
+| Locate or edit a personal skill | `skillager where lib/my-skill` / `skillager edit lib/my-skill` |
+| Accept the exact current personal-skill hash | `skillager library accept lib/my-skill --yes` |
 | Repair Skillager working artifacts | `skillager doctor --agent codex --fix` |
 | Approve a skill | `skillager review approve workflows/pr-review` |
 | Expose a tag as a router | `skillager expose --tag workflows --mode router --agent codex --scope project` |
@@ -97,6 +100,19 @@ skillager library init --no-git
 ```
 
 Initialization can adopt an existing directory without moving files. Existing skill bodies are indexed as pending metadata: initialization does not approve them, reveal their contents, or expose them to an agent. `library status` is read-only and reports identity, path, Git health, and an optional skill's working hash.
+
+Create, edit, and accept an owned skill with an exact-hash workflow:
+
+```bash
+skillager library new orbital-review
+skillager edit lib/orbital-review
+skillager library accept lib/orbital-review --yes
+skillager expose lib/orbital-review --mode stub --agent codex --scope project
+```
+
+`library new` never overwrites an existing skill. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates a path-scoped Git commit when Git is enabled. `where`, `library status`, and plain `edit` are metadata-only and read-only; `edit --open` launches `$EDITOR` and may make an accepted skill pending.
+
+The machine-readable contracts are versioned as `skillager.library-init.v1`, `skillager.library-status.v1`, `skillager.library-new.v1`, `skillager.library-accept.v1`, and `skillager.where.v1`.
 
 ## Collections
 

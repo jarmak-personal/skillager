@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import os
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..catalog.impl import load_collections, refresh_collection, register_library_collection
-from ..schema import load_skill_from_dir
-from ..state.locking import resource_lock
-from ..trust import content_hash
-from .git import commit_paths, git_available, initialize_repository, repository_status
+from ..catalog.impl import load_collections, refresh_collection, register_library_collection, select_collection_skills
+from ..lint import blocking_findings
+from ..simple_yaml import load_mapping
+from ..state.locking import resource_lock, resource_locks
+from ..trust import approval_key_for, load_trust, make_lint_override, set_trust
+from .git import commit_paths, git_available, head_content_hash, initialize_repository, path_changes, repository_status
 from .metadata import (
     load_library_identity,
     load_library_provenance,
@@ -21,6 +25,9 @@ from .paths import default_library_root, load_library_registration
 
 LIBRARY_INIT_SCHEMA = "skillager.library-init.v1"
 LIBRARY_STATUS_SCHEMA = "skillager.library-status.v1"
+LIBRARY_NEW_SCHEMA = "skillager.library-new.v1"
+LIBRARY_ACCEPT_SCHEMA = "skillager.library-accept.v1"
+LIBRARY_WHERE_SCHEMA = "skillager.where.v1"
 
 
 def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: bool = False) -> dict[str, Any]:
@@ -88,7 +95,173 @@ def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: 
     }
 
 
-def library_status(catalog_root: Path, *, skill_name: str | None = None) -> dict[str, Any]:
+def new_library_skill(catalog_root: Path, name: str) -> dict[str, Any]:
+    normalized = normalize_skill_name(name)
+    with resource_locks([catalog_root / "library-mutation", catalog_root / f"library-skill-{normalized}"]):
+        registration, identity = _require_library_identity(catalog_root)
+        layout = registration.layout
+        target = layout.skill_root(normalized)
+        if target.exists() or target.is_symlink():
+            raise ValueError(f"library skill already exists: {LIBRARY_NAMESPACE}/{normalized}")
+        git = repository_status(layout.root, mode=identity.git_mode)
+        _require_safe_git_mutation(git, allow_target_staged=False)
+        with tempfile.TemporaryDirectory(prefix="skillager-library-new-", dir=layout.root.parent) as tmp:
+            candidate = Path(tmp) / normalized
+            candidate.mkdir()
+            skill_path = candidate / "SKILL.md"
+            skill_path.write_text(_new_skill_template(normalized), encoding="utf-8")
+            os.replace(candidate, target)
+        commit = None
+        if identity.git_mode == "system":
+            commit = commit_paths(layout.root, [target], f"Add library skill {normalized}")
+        index = refresh_collection(catalog_root, LIBRARY_NAMESPACE)
+        skill = _library_skill_entry(catalog_root, normalized)
+        return {
+            "schema": LIBRARY_NEW_SCHEMA,
+            "status": "pending",
+            "skill": _compact_library_skill(skill),
+            "commit": commit,
+            "indexed": len(index.get("skills", [])),
+            "next_commands": [
+                f"skillager edit {LIBRARY_NAMESPACE}/{normalized}",
+                f"skillager library accept {LIBRARY_NAMESPACE}/{normalized}",
+            ],
+        }
+
+
+def library_acceptance_preview(catalog_root: Path, skill_name: str, *, project_dir: Path | None = None) -> dict[str, Any]:
+    registration, identity = _require_library_identity(catalog_root)
+    skill = _library_skill_entry(catalog_root, skill_name)
+    approval_key = _library_approval_key(skill)
+    git = repository_status(registration.layout.root, mode=identity.git_mode)
+    changes = path_changes(git, registration.layout.root, Path(skill["root"])) if identity.git_mode == "system" else _empty_path_changes()
+    lint_blocked = bool(blocking_findings(skill.get("lint")))
+    high_risk = skill.get("scan", {}).get("risk") == "high"
+    return {
+        "schema": LIBRARY_ACCEPT_SCHEMA,
+        "status": "preview",
+        "will_accept": False,
+        "skill": _compact_library_skill(skill),
+        "approval_key": approval_key,
+        "lint": _compact_lint(skill.get("lint")),
+        "scan": _compact_scan(skill.get("scan")),
+        "requires_override": lint_blocked or high_risk,
+        "git": {
+            "mode": git["mode"],
+            "head": git.get("head"),
+            "operation": git.get("operation"),
+            **changes,
+        },
+        "where": library_where(catalog_root, skill_name, project_dir=project_dir)["skill"],
+    }
+
+
+def accept_library_skill(
+    catalog_root: Path,
+    skill_name: str,
+    *,
+    expected_hash: str,
+    override_lint: bool = False,
+    reason: str | None = None,
+    project_dir: Path | None = None,
+) -> dict[str, Any]:
+    normalized = normalize_skill_name(skill_name)
+    resources = [catalog_root / "library-mutation", catalog_root / f"library-skill-{normalized}"]
+    with resource_locks(resources):
+        registration, identity = _require_library_identity(catalog_root)
+        layout = registration.layout
+        skill = _library_skill_entry(catalog_root, normalized)
+        working_hash = str(skill["content_hash"])
+        if working_hash != expected_hash:
+            raise ValueError("library skill changed since the acceptance preview; review it again and rerun `library accept`")
+        lint_override, risk_override = _acceptance_overrides(
+            skill,
+            override_lint=override_lint,
+            reason=reason,
+        )
+        approval_key = _library_approval_key(skill)
+        commit = None
+        head_hash = None
+        if identity.git_mode == "system":
+            git = repository_status(layout.root, mode=identity.git_mode)
+            target = Path(skill["root"])
+            changes = path_changes(git, layout.root, target)
+            _require_safe_git_mutation(git, allow_target_staged=True, target_changes=changes)
+            head_hash = head_content_hash(layout.root, target)
+            if any(changes.values()) or head_hash != working_hash:
+                commit = commit_paths(
+                    layout.root,
+                    [target],
+                    f"Accept library skill {normalized}",
+                    allow_staged_paths=True,
+                )
+                head_hash = head_content_hash(layout.root, target)
+            if head_hash != working_hash:
+                raise ValueError("library Git HEAD does not reproduce the accepted Skillager content hash")
+        record = set_trust(
+            catalog_root,
+            skill["id"],
+            "reviewed",
+            working_hash,
+            skill["source"],
+            lint=skill.get("lint"),
+            lint_override=lint_override,
+            risk_override=risk_override,
+            reason=(reason or "").strip() or None,
+            approval_key=approval_key,
+            approval_root=catalog_root,
+            global_scope=True,
+        )
+        refresh_collection(catalog_root, LIBRARY_NAMESPACE)
+        where = library_where(catalog_root, normalized, project_dir=project_dir)["skill"]
+        return {
+            "schema": LIBRARY_ACCEPT_SCHEMA,
+            "status": "accepted",
+            "will_accept": True,
+            "skill": where,
+            "approval": {
+                "state": record["state"],
+                "scope": record["scope"],
+                "content_hash": record["content_hash"],
+                "approval_key": approval_key,
+                "lint_override": record.get("lint_override"),
+                "risk_override": record.get("risk_override"),
+            },
+            "commit": commit,
+        }
+
+
+def library_where(catalog_root: Path, skill_name: str, *, project_dir: Path | None = None) -> dict[str, Any]:
+    registration, identity = _require_library_identity(catalog_root)
+    git = repository_status(registration.layout.root, mode=identity.git_mode)
+    skill = _skill_status(
+        catalog_root,
+        registration,
+        identity,
+        skill_name,
+        git,
+        project_dir=project_dir,
+    )
+    return {"schema": LIBRARY_WHERE_SCHEMA, "skill": skill}
+
+
+def library_skill_path(catalog_root: Path, skill_name: str) -> Path:
+    registration, _identity = _require_library_identity(catalog_root)
+    skill = _library_skill_entry(catalog_root, skill_name)
+    target = Path(skill["entrypoint"])
+    try:
+        target.resolve().relative_to(registration.layout.skills.resolve())
+    except ValueError as exc:
+        raise ValueError(f"library skill path escapes the registered library: {target}") from exc
+    return target.resolve()
+
+
+def library_status(
+    catalog_root: Path,
+    *,
+    skill_name: str | None = None,
+    project_dir: Path | None = None,
+) -> dict[str, Any]:
     registration = _registered_library_or_conflict(catalog_root)
     if registration is None:
         return {
@@ -131,9 +304,15 @@ def library_status(catalog_root: Path, *, skill_name: str | None = None) -> dict
         warnings.append(str(git["error"]))
     if git.get("conflicts"):
         warnings.append("library Git repository has unresolved conflicts")
+    if git.get("operation"):
+        warnings.append(f"library Git repository has an in-progress {git['operation']} operation")
     names, path_warnings = _library_skill_names(layout)
     warnings.extend(path_warnings)
-    selected = _skill_status(layout, skill_name, git) if skill_name is not None else None
+    selected = (
+        _skill_status(catalog_root, registration, identity, skill_name, git, project_dir=project_dir)
+        if skill_name is not None and identity is not None
+        else None
+    )
     return {
         "schema": LIBRARY_STATUS_SCHEMA,
         "status": "ready" if not warnings else "degraded",
@@ -166,6 +345,21 @@ def _registered_library_or_conflict(catalog_root: Path) -> LibraryRegistration |
     return load_library_registration(catalog_root)
 
 
+def _require_library_identity(catalog_root: Path) -> tuple[LibraryRegistration, LibraryIdentity]:
+    registration = _registered_library_or_conflict(catalog_root)
+    if registration is None:
+        raise ValueError("personal skill library is not initialized; run `skillager library init`")
+    _require_library_layout(registration.layout)
+    identity = load_library_identity(registration.layout)
+    if identity is None:
+        raise ValueError(f"library identity is missing: {registration.layout.identity_path}")
+    if identity.library_id != registration.library_id:
+        raise ValueError("library identity does not match the catalog registration")
+    if load_library_provenance(registration.layout) is None:
+        raise ValueError(f"library provenance metadata is missing: {registration.layout.provenance_path}")
+    return registration, identity
+
+
 def _validate_registered_library(registration: LibraryRegistration, identity: LibraryIdentity | None) -> None:
     _require_library_layout(registration.layout)
     if identity is None:
@@ -186,6 +380,8 @@ def _validate_identity_git(identity: LibraryIdentity, layout: LibraryLayout) -> 
             raise ValueError("Git-backed library path is not its own Git working tree")
         if status["conflicts"]:
             raise ValueError("library Git repository has unresolved conflicts")
+        if status["operation"]:
+            raise ValueError(f"library Git repository has an in-progress {status['operation']} operation")
         if status["staged"]:
             raise ValueError("library Git repository has staged changes; commit or unstage them before initializing")
 
@@ -235,29 +431,51 @@ def _library_skill_names(layout: LibraryLayout) -> tuple[list[str], list[str]]:
     return names, warnings
 
 
-def _skill_status(layout: LibraryLayout, value: str, git: dict[str, Any]) -> dict[str, Any]:
-    name = normalize_skill_name(value)
-    root = layout.skill_root(name)
-    if root.is_symlink() or not root.is_dir() or not (root / "SKILL.md").is_file():
-        raise ValueError(f"library skill not found: {LIBRARY_NAMESPACE}/{name}")
-    source = {
-        "type": "library",
-        "collection": LIBRARY_NAMESPACE,
-        "library_root": str(layout.root),
-    }
-    skill = load_skill_from_dir(root, source)
-    prefix = f"skills/{name}/"
-    git_paths = {
-        key: [path for path in git.get(key, []) if path == f"skills/{name}" or path.startswith(prefix)]
-        for key in ("conflicts", "staged", "unstaged", "untracked")
-    }
+def _skill_status(
+    catalog_root: Path,
+    registration: LibraryRegistration,
+    identity: LibraryIdentity,
+    value: str,
+    git: dict[str, Any],
+    *,
+    project_dir: Path | None,
+) -> dict[str, Any]:
+    skill = _library_skill_entry(catalog_root, value)
+    root = Path(skill["root"])
+    approval_key = _library_approval_key(skill)
+    approval = load_trust(catalog_root).get("global_approvals", {}).get(approval_key)
+    accepted_hash = approval.get("content_hash") if isinstance(approval, dict) else None
+    working_hash = str(skill["content_hash"])
+    head_hash = head_content_hash(registration.layout.root, root) if identity.git_mode == "system" and git.get("repository") else None
+    git_paths = path_changes(git, registration.layout.root, root) if identity.git_mode == "system" else _empty_path_changes()
+    acceptance = _acceptance_state(skill, working_hash=working_hash, accepted_hash=accepted_hash)
+    if git.get("operation") or git_paths["conflicts"]:
+        state = "conflicted"
+    elif identity.git_mode == "disabled":
+        state = "no_git"
+    elif acceptance != "accepted":
+        state = "pending"
+    elif head_hash != working_hash or any(git_paths.values()):
+        state = "accepted_uncommitted"
+    else:
+        state = "clean"
     return {
-        "id": f"{LIBRARY_NAMESPACE}/{name}",
-        "name": skill.name,
-        "summary": skill.summary,
+        "id": skill["id"],
+        "name": skill.get("name") or skill["id"],
+        "summary": skill.get("summary"),
         "path": str(root),
-        "working_hash": content_hash(root),
+        "entrypoint": skill.get("entrypoint"),
+        "ownership": "library",
+        "status": state,
+        "acceptance": acceptance,
+        "working_hash": working_hash,
+        "accepted_hash": accepted_hash,
+        "head_hash": head_hash,
+        "approval_key": approval_key,
+        "lint": _compact_lint(skill.get("lint")),
+        "scan": _compact_scan(skill.get("scan")),
         "git": git_paths,
+        "exposures": _library_exposures(project_dir, str(skill["id"])),
     }
 
 
@@ -269,6 +487,7 @@ def _missing_git_status(mode: str) -> dict[str, Any]:
         "clean": None,
         "branch": None,
         "head": None,
+        "operation": None,
         "conflicts": [],
         "staged": [],
         "unstaged": [],
@@ -278,9 +497,199 @@ def _missing_git_status(mode: str) -> dict[str, Any]:
     }
 
 
+def _library_skill_entry(catalog_root: Path, value: str) -> dict[str, Any]:
+    name = normalize_skill_name(value)
+    skill_id = f"{LIBRARY_NAMESPACE}/{name}"
+    skills = select_collection_skills(
+        catalog_root,
+        LIBRARY_NAMESPACE,
+        trust_root=catalog_root,
+        approval_root=catalog_root,
+        include_blocked=True,
+        include_lint_blocked=True,
+    )
+    for skill in skills:
+        if skill.get("id") == skill_id:
+            return skill
+    raise ValueError(f"library skill not found: {skill_id}")
+
+
+def _library_approval_key(skill: dict[str, Any]) -> str:
+    key = skill.get("approval_key") or approval_key_for(
+        str(skill["id"]),
+        skill.get("root"),
+        skill.get("source"),
+        entrypoint=skill.get("entrypoint"),
+    )
+    if not isinstance(key, str) or not key.startswith("library:"):
+        raise ValueError(f"library skill is missing a stable approval key: {skill.get('id')}")
+    return key
+
+
+def _compact_library_skill(skill: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": skill.get("id"),
+        "name": skill.get("name"),
+        "summary": skill.get("summary"),
+        "path": skill.get("root"),
+        "working_hash": skill.get("content_hash"),
+        "trust": skill.get("trust"),
+        "approval_key": _library_approval_key(skill),
+    }
+
+
+def _compact_lint(lint: dict[str, Any] | None) -> dict[str, Any]:
+    lint = lint or {"status": "ok", "findings": []}
+    return {
+        "status": lint.get("status", "ok"),
+        "blocking_count": len(blocking_findings(lint)),
+        "findings": [
+            {key: item.get(key) for key in ("code", "severity", "field", "detail", "rule_key") if item.get(key) is not None}
+            for item in lint.get("findings", [])
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _compact_scan(scan: dict[str, Any] | None) -> dict[str, Any]:
+    scan = scan or {"risk": "unknown", "findings": []}
+    return {
+        "risk": scan.get("risk", "unknown"),
+        "finding_count": len(scan.get("findings", [])),
+        "findings": [
+            {key: item.get(key) for key in ("code", "severity", "path", "line", "message") if item.get(key) is not None}
+            for item in scan.get("findings", [])
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _acceptance_overrides(
+    skill: dict[str, Any],
+    *,
+    override_lint: bool,
+    reason: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    blocking = blocking_findings(skill.get("lint"))
+    high_risk = skill.get("scan", {}).get("risk") == "high"
+    if override_lint and not (reason or "").strip():
+        raise ValueError("--reason is required with --override-lint")
+    if (blocking or high_risk) and not override_lint:
+        causes = []
+        if blocking:
+            causes.append("lint-blocking findings")
+        if high_risk:
+            causes.append("high-risk scanner findings")
+        raise ValueError(f"library acceptance has {' and '.join(causes)}; use --override-lint --reason <text>")
+    lint_override = make_lint_override(reason or "", skill.get("lint") or {}) if blocking else None
+    risk_override = None
+    if high_risk:
+        risk_override = {
+            "reason": (reason or "").strip(),
+            "at": datetime.now(timezone.utc).isoformat(),
+            "findings": _compact_scan(skill.get("scan"))["findings"],
+        }
+    return lint_override, risk_override
+
+
+def _require_safe_git_mutation(
+    git: dict[str, Any],
+    *,
+    allow_target_staged: bool,
+    target_changes: dict[str, list[str]] | None = None,
+) -> None:
+    if git.get("mode") == "disabled":
+        return
+    if not git.get("available") or not git.get("repository"):
+        raise ValueError(git.get("error") or "Git-backed library repository is unavailable")
+    if git.get("conflicts"):
+        raise ValueError("library Git repository has unresolved conflicts")
+    if git.get("operation"):
+        raise ValueError(f"library Git repository has an in-progress {git['operation']} operation")
+    staged = list(git.get("staged") or [])
+    if staged:
+        target_staged = set((target_changes or {}).get("staged", []))
+        if not allow_target_staged or any(path not in target_staged for path in staged):
+            raise ValueError("library Git repository has unrelated staged changes; commit or unstage them first")
+
+
+def _acceptance_state(skill: dict[str, Any], *, working_hash: str, accepted_hash: object) -> str:
+    if skill.get("trust") == "blocked":
+        return "blocked"
+    if blocking_findings(skill.get("lint")) and skill.get("trust") == "lint_blocked":
+        return "lint_blocked"
+    return "accepted" if accepted_hash == working_hash and skill.get("trust") in {"reviewed", "trusted", "pinned"} else "pending"
+
+
+def _empty_path_changes() -> dict[str, list[str]]:
+    return {"conflicts": [], "staged": [], "unstaged": [], "untracked": []}
+
+
+def _new_skill_template(name: str) -> str:
+    title = " ".join(part.capitalize() for part in name.split("-"))
+    return "\n".join(
+        [
+            f"# {title}",
+            "",
+            "Use this skill when the task clearly matches this workflow.",
+            "",
+            "## Instructions",
+            "",
+            "- Replace this placeholder with the workflow, constraints, and examples.",
+            "- Keep activation guidance specific enough that agents know when not to use it.",
+            "",
+        ]
+    )
+
+
+def _library_exposures(project_dir: Path | None, skill_id: str) -> list[dict[str, Any]]:
+    if project_dir is None:
+        return []
+    project = project_dir.resolve()
+    roots = {
+        "codex": [project / ".agents" / "skills", project / ".agents" / "codex" / "skills", project / ".codex" / "skills"],
+        "claude": [project / ".claude" / "skills", project / ".agents" / "claude" / "skills"],
+    }
+    exposures: list[dict[str, Any]] = []
+    for default_agent, bases in roots.items():
+        for base in bases:
+            if not base.is_dir():
+                continue
+            for sidecar in base.glob("*/skillager.materialized.yaml"):
+                try:
+                    data = load_mapping(sidecar)
+                except Exception:
+                    continue
+                source_type = data.get("source_type")
+                is_router_member = source_type == "skillager-router" and skill_id in set(data.get("skill_ids") or [])
+                is_direct = (data.get("source_id") or data.get("id")) == skill_id
+                if not (is_router_member or is_direct):
+                    continue
+                kind = "router" if is_router_member else "stub" if source_type == "skillager-stub" else "native"
+                exposures.append(
+                    {
+                        "agent": data.get("agent") or default_agent,
+                        "scope": data.get("scope") or "project",
+                        "kind": kind,
+                        "path": str(sidecar.parent.resolve()),
+                        "source_hash": None if is_router_member else data.get("source_hash"),
+                        "router": data.get("router_slug") if is_router_member else None,
+                    }
+                )
+    return sorted(exposures, key=lambda item: (str(item["agent"]), str(item["kind"]), str(item["path"])))
+
+
 __all__ = [
     "LIBRARY_INIT_SCHEMA",
+    "LIBRARY_ACCEPT_SCHEMA",
+    "LIBRARY_NEW_SCHEMA",
     "LIBRARY_STATUS_SCHEMA",
+    "LIBRARY_WHERE_SCHEMA",
+    "accept_library_skill",
     "initialize_library",
+    "library_acceptance_preview",
+    "library_skill_path",
     "library_status",
+    "library_where",
+    "new_library_skill",
 ]

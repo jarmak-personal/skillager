@@ -247,6 +247,24 @@ def apply_review_action(
     override_lint_only = override_lint and not any((accept_low, bulk_approve, review_action, trust_state, block_high))
     for skill in skills:
         risk = skill.get("scan", {}).get("risk")
+        library_acceptance_requested = bool(
+            (skill.get("source") or {}).get("ownership") == "library"
+            and (
+                review_action in {"approve", "pin"}
+                or bulk_approve
+                or trust_state
+                or override_lint_only
+                or accept_low
+            )
+        )
+        if library_acceptance_requested:
+            skipped.append(
+                {
+                    "skill_id": skill["id"],
+                    "reason": f"library skills use the commit-before-acceptance flow: skillager library accept {skill['id']}",
+                }
+            )
+            continue
         lint_override = None
         if skill.get("trust") == "lint_blocked":
             if override_lint or bulk_approve:

@@ -11,6 +11,7 @@ Availability is the eligibility gate. Agent-facing Skillager commands only surfa
 - Start resumed work with `skillager working --agent <agent> --json`; only mention it when readiness requires user action or the task calls for Skillager curation.
 - If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent <agent>` before guessing. Re-run working after repairs if readiness changes.
 - Do not run `skillager setup` or `skillager review ...` unless the user asked for setup or approval changes.
+- Treat `library init`, `library new`, `library accept`, and `edit --open` as user-authorized mutations. Do not run them merely because a pending library skill is discovered.
 - Do not run `skillager expose` until you have asked what the user plans to do and can justify the narrow router, stub, or native exposure.
 - You may add available skills to project-local tags and create scoped router/stub/native exposure after the user states their task. Report what changed.
 - Do not run `skillager activate` or `skillager show --content` for unavailable skills. Ask the user to run setup when Skillager says a skill is unavailable.
@@ -26,6 +27,9 @@ These commands do not expose full skill bodies. In a project, normal `list`, `se
 ```bash
 skillager working --agent codex --json
 skillager library status --json
+skillager library status lib/<name> --json
+skillager where lib/<name> --json
+skillager edit lib/<name>
 skillager list --summary-json --agent codex
 skillager show <skill-id> --json
 skillager search "<user goal>" --json
@@ -34,7 +38,7 @@ skillager tag list --json
 ```
 
 Use `review --collection <name> --summary` or `review --collection <name> --json` only for owner-directed collection review/diagnostics. For project work, prefer the normal project-aware commands above.
-`library status` is metadata-only and read-only. `library init` writes a user-level library and must reflect explicit user intent; initialization never approves or exposes bodies already present below the library's `skills/` directory.
+`library status`, `where`, and plain `edit` are metadata-only and read-only. Plain `edit` prints the canonical `SKILL.md` path; only `edit --open` launches an editor. `library init`, `library new`, and `library accept` write user-level state and must reflect explicit user intent. Initialization and creation never approve or expose bodies, and generic `--force` or `--include-unreviewed` flags cannot bypass a pending library hash. Ask the user to review and run `skillager library accept lib/<name> --yes` when they want the exact current body made available.
 `working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, `tag list --json`, and `search --json` are intentionally compact for agent use. Do not use `--full-json` during normal project work; reserve it for explicit user-directed Skillager diagnostics.
 Project-aware JSON includes:
 

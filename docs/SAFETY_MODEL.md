@@ -14,6 +14,12 @@ Skillager is a review and activation gate. It reduces accidental context exposur
 - Copy skills into project-local native directories so users can inspect and customize them.
 - Preserve content hashes so changed skills require fresh review.
 
+## Personal Library Acceptance
+
+Library ownership does not grant body availability. Every new or edited `lib/<name>` skill remains pending until `skillager library accept` records its exact current tree hash. Pending bodies stay unavailable through `show --content`, activation, native/stub exposure, and routers; generic force or include-unreviewed flags do not bypass this boundary.
+
+Acceptance previews scanner and lint metadata, recomputes the hash under a bounded lock, and requires explicit confirmation. Blocking lint or high scanner risk requires `--override-lint --reason "..."`, stored as an audited exact-hash override. Git-backed libraries commit the selected skill path before trust is recorded and refuse conflicts, in-progress repository operations, and unrelated staged changes. Adding a remote does not alter approval identity: library approvals use `library:<library_id>#<skill-name>` plus the accepted content hash.
+
 ## Static Scanner
 
 The scanner runs locally and does not use an agent. It scans the full skill directory, including `SKILL.md`, supporting docs, scripts, templates, and references.
