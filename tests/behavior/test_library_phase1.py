@@ -9,7 +9,7 @@ from tests.behavior.support import make_basic_workspace
 
 class PersonalLibraryPhase1BehaviorTests(unittest.TestCase):
 
-    def test_collection_cli_reserves_lib_namespace_without_exposing_library_commands(self) -> None:
+    def test_collection_cli_reserves_lib_namespace_for_library_commands(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _, cli = make_basic_workspace(root)
@@ -21,4 +21,4 @@ class PersonalLibraryPhase1BehaviorTests(unittest.TestCase):
             self.assertEqual(result.code, 2)
             self.assertEqual(result.stdout, "")
             self.assertIn("collection name 'lib' is reserved for the personal skill library", result.stderr)
-            self.assertNotIn("library", cli.run("--help").stdout.split("commands:")[-1])
+            self.assertIn("library", cli.run("--help").stdout.split("commands:")[-1])

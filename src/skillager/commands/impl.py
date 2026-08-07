@@ -76,6 +76,7 @@ from .context import (
     legacy_project_state_report as _legacy_project_state_report,
     root,
 )
+from .library import add_library_parser
 
 
 HANDOFF_REASON_AGENT_REQUIRED = "agent_required"
@@ -183,6 +184,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_setup_parser(sub)
     add_doctor_parser(sub)
     add_working_parser(sub)
+    add_library_parser(sub)
     add_collection_parser(sub)
     add_tag_parser(sub)
 

@@ -11,7 +11,7 @@ Skillager is a local CLI for discovering, reviewing, searching, and exposing age
 discover -> review -> search metadata -> expose only what the task needs
 ```
 
-Skills can come from project folders, Python environments, npm packages, Cargo crates, native agent skill directories, or shared collections. Skillager keeps them searchable after review, then writes native, stub, or router skills for the agent when you choose to expose them.
+Skills can come from your personal library, project folders, Python environments, npm packages, Cargo crates, native agent skill directories, or shared collections. Skillager keeps them searchable after review, then writes native, stub, or router skills for the agent when you choose to expose them.
 
 ## Quickstart
 
@@ -21,6 +21,9 @@ uv tool install skillager
 
 # Optional: register a personal/team collection, such as Superpowers.
 skillager collection add ~/skills/workflows --name workflows
+
+# Optional: initialize the canonical library for skills you own.
+skillager library init
 
 # Run per project.
 skillager setup --agent codex
@@ -70,6 +73,8 @@ Metadata commands stay metadata-only: `working`, `list`, `search`, `show` withou
 | --- | --- |
 | Review or refresh a project | `skillager setup --agent codex` |
 | Diagnose state | `skillager doctor --agent codex` |
+| Initialize your personal library | `skillager library init` |
+| Inspect personal library and Git state | `skillager library status --json` |
 | Repair Skillager working artifacts | `skillager doctor --agent codex --fix` |
 | Approve a skill | `skillager review approve workflows/pr-review` |
 | Expose a tag as a router | `skillager expose --tag workflows --mode router --agent codex --scope project` |
@@ -78,9 +83,24 @@ Metadata commands stay metadata-only: `working`, `list`, `search`, `show` withou
 
 Read-only allowlist examples for agent permission prompts: [`codex`](examples/codex-allowlist.json), [`claude`](examples/claude-allowlist.json). Keep mutating commands user-run unless you intentionally delegate them.
 
+## Personal Library
+
+The personal library is the canonical home for skills you own. By default it lives at `~/.skillager/library`, uses an ordinary Git repository for history, and is registered internally as the protected `lib` collection.
+
+```bash
+skillager library init
+skillager library status
+
+# Choose the location once, or explicitly operate without Git history.
+skillager library init --path ~/skills/personal
+skillager library init --no-git
+```
+
+Initialization can adopt an existing directory without moving files. Existing skill bodies are indexed as pending metadata: initialization does not approve them, reveal their contents, or expose them to an agent. `library status` is read-only and reports identity, path, Git health, and an optional skill's working hash.
+
 ## Collections
 
-Collections are user-global skill sources. A collection can be a personal repo, a company-maintained repo, or a public skill repo like [Superpowers](https://github.com/obra/superpowers). Tags are project-local curation, usually maintained by the agent after setup.
+Collections are external user-global skill sources. A collection can be a company-maintained repo or a public skill repo like [Superpowers](https://github.com/obra/superpowers). Use the personal library for canonical skills you own. Tags are project-local curation, usually maintained by the agent after setup.
 
 ```bash
 skillager collection add ~/skills/workflows --name workflows

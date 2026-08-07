@@ -25,6 +25,7 @@ These commands do not expose full skill bodies. In a project, normal `list`, `se
 
 ```bash
 skillager working --agent codex --json
+skillager library status --json
 skillager list --summary-json --agent codex
 skillager show <skill-id> --json
 skillager search "<user goal>" --json
@@ -33,6 +34,7 @@ skillager tag list --json
 ```
 
 Use `review --collection <name> --summary` or `review --collection <name> --json` only for owner-directed collection review/diagnostics. For project work, prefer the normal project-aware commands above.
+`library status` is metadata-only and read-only. `library init` writes a user-level library and must reflect explicit user intent; initialization never approves or exposes bodies already present below the library's `skills/` directory.
 `working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, `tag list --json`, and `search --json` are intentionally compact for agent use. Do not use `--full-json` during normal project work; reserve it for explicit user-directed Skillager diagnostics.
 Project-aware JSON includes:
 
