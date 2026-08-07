@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from ..lint import blocking_findings, valid_lint_override
 from ..schema import TRUST_STATES
 from ..signing import is_evidence_file
-from ..statefiles import read_user_json, write_user_json
+from ..statefiles import mutate_user_json, read_user_json, write_user_json
 
 DEFAULT_HASH_EXCLUDES = {
     ".git",
@@ -179,31 +179,33 @@ def set_trust(
         raise ValueError("lint-blocked skills require --override-lint --reason")
     use_global = bool(global_scope and approval_key and approval_root)
     target_root: Path = approval_root if use_global and approval_root is not None else state_root
-    data = load_trust(target_root)
     record: dict[str, Any] = {
         "state": state,
         "content_hash": current_hash,
         "source": source,
         "scope": "global" if use_global else "project",
     }
-    if state == "blocked" and not use_global:
-        previous = _preserved_block_approval(data.setdefault("skills", {}).get(skill_id), current_hash, lint=lint)
-        if previous:
-            record[PRESERVED_BLOCK_APPROVAL_KEY] = previous
     if approval_key:
         record["approval_key"] = approval_key
     if lint_override:
         record["lint_override"] = lint_override
     if reason:
         record["reason"] = reason
-    if use_global:
-        record["skill_id"] = skill_id
-        data.setdefault("global_approvals", {})[approval_key] = record
-        save_trust(target_root, data)
-        return data["global_approvals"][approval_key]
-    data.setdefault("skills", {})[skill_id] = record
-    save_trust(target_root, data)
-    return data["skills"][skill_id]
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        stored = dict(record)
+        if state == "blocked" and not use_global:
+            previous = _preserved_block_approval(data.setdefault("skills", {}).get(skill_id), current_hash, lint=lint)
+            if previous:
+                stored[PRESERVED_BLOCK_APPROVAL_KEY] = previous
+        if use_global:
+            assert approval_key is not None
+            stored["skill_id"] = skill_id
+            data.setdefault("global_approvals", {})[approval_key] = stored
+            return dict(stored)
+        data.setdefault("skills", {})[skill_id] = stored
+        return dict(stored)
+
+    return mutate_user_json(trust_path(target_root), {"skills": {}}, mutation)
 
 
 def unblock_trust(
@@ -215,25 +217,21 @@ def unblock_trust(
     approval_key: str | None = None,
     approval_root: Path | None = None,
 ) -> dict[str, Any]:
-    data = load_trust(state_root)
-    skills = data.setdefault("skills", {})
-    record = skills.get(skill_id)
-    if not isinstance(record, dict) or record.get("state") != "blocked":
-        return _effective_unblocked_info(
-            state_root,
-            skill_id,
-            current_hash,
-            lint=lint,
-            approval_key=approval_key,
-            approval_root=approval_root,
-        )
-    previous = _preserved_block_approval(record, current_hash, lint=lint)
-    if previous:
-        skills[skill_id] = previous
-        save_trust(state_root, data)
-        return skills[skill_id]
-    del skills[skill_id]
-    save_trust(state_root, data)
+    def mutation(data: dict[str, Any]) -> dict[str, Any] | None:
+        skills = data.setdefault("skills", {})
+        record = skills.get(skill_id)
+        if not isinstance(record, dict) or record.get("state") != "blocked":
+            return None
+        previous = _preserved_block_approval(record, current_hash, lint=lint)
+        if previous:
+            skills[skill_id] = previous
+            return dict(previous)
+        del skills[skill_id]
+        return None
+
+    restored = mutate_user_json(trust_path(state_root), {"skills": {}}, mutation)
+    if restored is not None:
+        return restored
     return _effective_unblocked_info(
         state_root,
         skill_id,
@@ -459,26 +457,36 @@ def make_lint_override(reason: str, lint: dict[str, Any]) -> dict[str, Any]:
 
 
 def clear_trust(state_root: Path, skill_ids: list[str]) -> int:
-    data = load_trust(state_root)
-    skills = data.setdefault("skills", {})
-    removed = 0
-    for skill_id in skill_ids:
-        if skill_id in skills:
-            del skills[skill_id]
-            removed += 1
-    if removed:
-        save_trust(state_root, data)
-    return removed
+    def mutation(data: dict[str, Any]) -> int:
+        skills = data.setdefault("skills", {})
+        removed = 0
+        for skill_id in skill_ids:
+            if skill_id in skills:
+                del skills[skill_id]
+                removed += 1
+        return removed
+
+    return mutate_user_json(trust_path(state_root), {"skills": {}}, mutation)
 
 
 def clear_global_approvals(approval_root: Path, approval_keys: list[str]) -> int:
-    data = load_trust(approval_root)
-    approvals = data.setdefault("global_approvals", {})
-    removed = 0
-    for approval_key in approval_keys:
-        if approval_key in approvals:
-            del approvals[approval_key]
-            removed += 1
-    if removed:
-        save_trust(approval_root, data)
-    return removed
+    def mutation(data: dict[str, Any]) -> int:
+        approvals = data.setdefault("global_approvals", {})
+        removed = 0
+        for approval_key in approval_keys:
+            if approval_key in approvals:
+                del approvals[approval_key]
+                removed += 1
+        return removed
+
+    return mutate_user_json(trust_path(approval_root), {"skills": {}}, mutation)
+
+
+def merge_global_approvals(approval_root: Path, approvals: dict[str, Any]) -> int:
+    def mutation(data: dict[str, Any]) -> int:
+        target = data.setdefault("global_approvals", {})
+        for key, record in approvals.items():
+            target[key] = record
+        return len(approvals)
+
+    return mutate_user_json(trust_path(approval_root), {"skills": {}}, mutation)

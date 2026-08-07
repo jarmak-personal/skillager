@@ -3,8 +3,14 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
+
+from .locking import DEFAULT_LOCK_TIMEOUT, resource_lock
+
+
+MutationResult = TypeVar("MutationResult")
 
 
 def read_user_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:
@@ -33,6 +39,24 @@ def write_user_json(path: Path, data: dict[str, Any]) -> None:
     finally:
         if tmp_path is not None and tmp_path.exists():
             tmp_path.unlink()
+
+
+def mutate_user_json(
+    path: Path,
+    default: dict[str, Any],
+    mutation: Callable[[dict[str, Any]], MutationResult],
+    *,
+    lock_timeout: float = DEFAULT_LOCK_TIMEOUT,
+) -> MutationResult:
+    """Apply one atomic read-modify-write mutation under a cross-process lock."""
+
+    with resource_lock(path, timeout=lock_timeout):
+        data = read_user_json(path, default)
+        previous = deepcopy(data)
+        result = mutation(data)
+        if data != previous:
+            write_user_json(path, data)
+        return result
 
 
 def _assert_user_owned_regular_file(path: Path) -> None:

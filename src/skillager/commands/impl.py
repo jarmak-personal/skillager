@@ -53,7 +53,7 @@ from ..materialize import (
 from ..materialize import materialize_router
 from ..materialize import target_dir, working_source_hash
 from ..manifest import init_manifests
-from ..paths import catalog_state_root, find_project_root, legacy_project_state_root, project_state_root, state_root
+from ..paths import find_project_root, project_state_root, state_root
 from ..render import render_skill
 from ..review import (
     annotate_duplicate_content,
@@ -69,7 +69,13 @@ from ..search import search as search_index
 from ..selection import select_visible_skills
 from ..signing import verify_oms_signature
 from ..simple_yaml import YamlError, load_mapping
-from ..trust import content_hash, load_trust, save_trust, set_trust
+from ..trust import content_hash, load_trust, merge_global_approvals, save_trust, set_trust
+from .context import (
+    catalog_root,
+    current_project_dir as _current_project_dir,
+    legacy_project_state_report as _legacy_project_state_report,
+    root,
+)
 
 
 HANDOFF_REASON_AGENT_REQUIRED = "agent_required"
@@ -632,33 +638,6 @@ def add_review_actions(parser: argparse.ArgumentParser, *, setup: bool = False) 
     parser.add_argument("--reason", help="Required reason when --override-lint is used.")
 
 
-def root(args: argparse.Namespace) -> Path:
-    cached = getattr(args, "_skillager_state_root", None)
-    if cached:
-        return cached
-    if args.state_dir:
-        resolved = args.state_dir.resolve()
-    else:
-        resolved = state_root()
-        if os.environ.get("SKILLAGER_STATE_DIR") is None:
-            _warn_legacy_project_state(resolved)
-    setattr(args, "_skillager_state_root", resolved)
-    return resolved
-
-
-def _current_project_dir() -> Path:
-    return (find_project_root() or Path.cwd()).resolve()
-
-
-def catalog_root(args: argparse.Namespace) -> Path:
-    if getattr(args, "catalog_state_dir", None):
-        return args.catalog_state_dir.resolve()
-    stored = project_tags.load_tags(_current_project_dir()).get("catalog_state_dir")
-    if stored:
-        return Path(stored).expanduser().resolve()
-    return catalog_state_root()
-
-
 def _selection_source(args: argparse.Namespace) -> str | None:
     collection = getattr(args, "collection", None)
     source = getattr(args, "source", None)
@@ -696,48 +675,6 @@ def _review_action_from_args(args: argparse.Namespace) -> str | None:
         args.skill_ids = tokens[1:]
         return tokens[0]
     return None
-
-
-def _warn_legacy_project_state(new_state_root: Path) -> None:
-    legacy_state = _legacy_project_state_report(new_state_root)
-    if not legacy_state.get("present"):
-        return
-    legacy = legacy_state["path"]
-    print(
-        f"skillager: ignoring legacy in-tree state at {legacy}; using {new_state_root}. "
-        "Remove the legacy directory after review, then rerun `skillager setup`; Skillager no longer migrates legacy state in place.",
-        file=sys.stderr,
-    )
-
-
-def _legacy_project_state_report(new_state_root: Path, *, project_dir: Path | None = None) -> dict[str, Any]:
-    if os.environ.get("SKILLAGER_STATE_DIR") is not None:
-        return {"present": False}
-    legacy = legacy_project_state_root(project_dir)
-    if not legacy or not legacy.exists():
-        return {"present": False}
-    try:
-        if legacy.resolve() == new_state_root.resolve():
-            return {"present": False}
-    except OSError:
-        pass
-    entries = _legacy_project_state_entries(legacy)
-    if not entries:
-        return {"present": False}
-    return {
-        "present": True,
-        "path": str(legacy),
-        "entries": entries,
-        "action": "remove-legacy-state-and-rerun-setup",
-        "migration": "not-supported",
-    }
-
-
-def _legacy_project_state_entries(legacy: Path) -> list[str]:
-    try:
-        return sorted(entry.name for entry in legacy.iterdir() if entry.name != "tags.json")
-    except OSError:
-        return [legacy.name]
 
 
 def cmd_collection_add(args: argparse.Namespace) -> int:
@@ -1070,11 +1007,7 @@ def cmd_state_import_global_approvals(args: argparse.Namespace) -> int:
     print(f"Catalog state: {catalog_root(args)}")
     _print_trust_records(approvals, title="Reusable global approvals to import")
     _require_interactive_confirmation("Import these reusable global approvals into the user catalog? [y/N] ")
-    data = load_trust(catalog_root(args))
-    target = data.setdefault("global_approvals", {})
-    for key, record in approvals.items():
-        target[key] = record
-    save_trust(catalog_root(args), data)
+    merge_global_approvals(catalog_root(args), approvals)
     print(f"Imported {len(approvals)} reusable global approval(s).")
     return 0
 

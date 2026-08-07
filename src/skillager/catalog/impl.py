@@ -9,13 +9,21 @@ from typing import Any
 
 from ..audience import classify_audience
 from ..lint import lint_skill
+from ..library.model import (
+    LIBRARY_COLLECTION_KIND,
+    LIBRARY_NAMESPACE,
+    LibraryLayout,
+    LibraryRegistration,
+    normalize_library_id,
+)
 from ..review_gates import apply_review_metadata
 from ..scan import scan_path
 from ..schema import QuarantinedSkill, SchemaError, Skill, load_skill_from_dir, quarantine_skill_from_dir
 from ..search import search as search_skills
 from ..selection import select_visible_skills
 from ..signing import signature_info
-from ..trust import approval_key_for, content_hash, load_trust, save_trust, trust_info
+from ..statefiles import mutate_user_json, read_user_json, write_user_json
+from ..trust import approval_key_for, content_hash, trust_info, trust_path
 
 COLLECTION_MIGRATIONS_SCHEMA = "skillager.collection-migrations.v1"
 IGNORED_SKILL_DIR_NAMES = {
@@ -58,39 +66,72 @@ def collection_migrations_path(state_root: Path) -> Path:
 
 
 def load_collections(state_root: Path) -> dict[str, Any]:
-    path = collections_path(state_root)
-    if not path.exists():
-        return {"collections": {}}
-    return json.loads(path.read_text(encoding="utf-8"))
+    return read_user_json(collections_path(state_root), {"collections": {}})
 
 
 def save_collections(state_root: Path, data: dict[str, Any]) -> None:
-    state_root.mkdir(parents=True, exist_ok=True)
-    collections_path(state_root).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_user_json(collections_path(state_root), data)
 
 
 def add_collection(state_root: Path, name: str, path: Path) -> dict[str, Any]:
     name = _slug(name)
+    if name == LIBRARY_NAMESPACE:
+        raise ValueError("collection name 'lib' is reserved for the personal skill library")
     root = path.expanduser().resolve()
     if not root.exists():
         raise ValueError(f"collection path does not exist: {root}")
-    data = load_collections(state_root)
-    data.setdefault("collections", {})[name] = {"name": name, "path": str(root)}
-    save_collections(state_root, data)
+
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        record = {"name": name, "path": str(root)}
+        data.setdefault("collections", {})[name] = record
+        return dict(record)
+
+    collection = mutate_user_json(collections_path(state_root), {"collections": {}}, mutation)
     index = refresh_collection(state_root, name)
-    return {"collection": data["collections"][name], "indexed": len(index.get("skills", [])), "errors": index.get("errors", [])}
+    return {"collection": collection, "indexed": len(index.get("skills", [])), "errors": index.get("errors", [])}
 
 
 def remove_collection(state_root: Path, name: str) -> bool:
     name = _slug(name)
-    data = load_collections(state_root)
-    removed = data.setdefault("collections", {}).pop(name, None) is not None
+
+    def mutation(data: dict[str, Any]) -> bool:
+        collections = data.setdefault("collections", {})
+        current = collections.get(name)
+        if isinstance(current, dict) and current.get("kind") == LIBRARY_COLLECTION_KIND:
+            raise ValueError("the personal skill library cannot be removed with `collection remove`")
+        return collections.pop(name, None) is not None
+
+    removed = mutate_user_json(collections_path(state_root), {"collections": {}}, mutation)
     if removed:
-        save_collections(state_root, data)
         index_path = _collection_index_path(state_root, name)
         if index_path.exists():
             index_path.unlink()
     return removed
+
+
+def register_library_collection(state_root: Path, library_root: Path, library_id: str) -> dict[str, Any]:
+    layout = LibraryLayout.from_root(library_root)
+    if not layout.root.is_dir():
+        raise ValueError(f"library root does not exist: {layout.root}")
+    if layout.skills.is_symlink() or not layout.skills.is_dir():
+        raise ValueError(f"library skills path must be a non-symlinked directory: {layout.skills}")
+    registration = LibraryRegistration(library_id=normalize_library_id(library_id), layout=layout)
+    desired = registration.to_mapping()
+
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        collections = data.setdefault("collections", {})
+        current = collections.get(LIBRARY_NAMESPACE)
+        if current is None:
+            collections[LIBRARY_NAMESPACE] = desired
+            return dict(desired)
+        if not isinstance(current, dict) or current.get("kind") != LIBRARY_COLLECTION_KIND:
+            raise ValueError("collection name 'lib' is already in use; remove or rename it before initializing the personal library")
+        existing = LibraryRegistration.from_mapping(current)
+        if existing != registration:
+            raise ValueError("a different personal skill library is already registered")
+        return dict(current)
+
+    return mutate_user_json(collections_path(state_root), {"collections": {}}, mutation)
 
 
 def refresh_collection(state_root: Path, name: str) -> dict[str, Any]:
@@ -438,26 +479,26 @@ def apply_collection_trust_migrations(state_root: Path, catalog_root: Path) -> i
     ]
     if not id_migrations:
         return 0
-    data = load_trust(state_root)
-    skills = data.setdefault("skills", {})
-    changed = 0
-    for migration in id_migrations:
-        old_id = migration.get("old_id")
-        new_id = migration.get("new_id")
-        old_hash = migration.get("old_content_hash")
-        new_hash = migration.get("new_content_hash")
-        if not old_id or not new_id or old_id == new_id or not old_hash or old_hash != new_hash:
-            continue
-        record = skills.get(old_id)
-        if not record or record.get("content_hash") != old_hash:
-            continue
-        if skills.get(new_id) == record:
-            continue
-        skills[new_id] = dict(record)
-        changed += 1
-    if changed:
-        save_trust(state_root, data)
-    return changed
+    def mutation(data: dict[str, Any]) -> int:
+        skills = data.setdefault("skills", {})
+        changed = 0
+        for migration in id_migrations:
+            old_id = migration.get("old_id")
+            new_id = migration.get("new_id")
+            old_hash = migration.get("old_content_hash")
+            new_hash = migration.get("new_content_hash")
+            if not old_id or not new_id or old_id == new_id or not old_hash or old_hash != new_hash:
+                continue
+            record = skills.get(old_id)
+            if not record or record.get("content_hash") != old_hash:
+                continue
+            if skills.get(new_id) == record:
+                continue
+            skills[new_id] = dict(record)
+            changed += 1
+        return changed
+
+    return mutate_user_json(trust_path(state_root), {"skills": {}}, mutation)
 
 
 def attach_project_tag(state_root: Path, tag: str, *, catalog_root: Path | None = None) -> dict[str, Any]:
@@ -707,43 +748,41 @@ def _migrate_collection_references(
 
 
 def _migrate_trust(state_root: Path, old_entries: list[dict[str, Any]], new_by_root: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    data = load_trust(state_root)
-    skills = data.setdefault("skills", {})
-    migrated = []
-    needs_review = []
-    changed = False
-    for old_id, record in list(skills.items()):
-        record_hash = record.get("content_hash")
-        if not record_hash:
-            continue
-        candidates = [entry for entry in old_entries if entry.get("id") == old_id and entry.get("content_hash") == record_hash]
-        if not candidates:
-            continue
-        if len(candidates) > 1:
-            needs_review.append({"old_id": old_id, "reason": "ambiguous old ID/content hash"})
-            continue
-        old = candidates[0]
-        old_root = old.get("root")
-        new = new_by_root.get(old_root) if isinstance(old_root, str) else None
-        if not new or new.get("id") == old_id:
-            continue
-        if new.get("content_hash") != record_hash:
-            needs_review.append(
-                {
-                    "old_id": old_id,
-                    "new_id": new.get("id"),
-                    "old_content_hash": record_hash,
-                    "new_content_hash": new.get("content_hash"),
-                    "reason": "content changed since last collection refresh",
-                }
-            )
-            continue
-        skills[new["id"]] = dict(record)
-        migrated.append({"old_id": old_id, "new_id": new["id"], "content_hash": record_hash})
-        changed = True
-    if changed:
-        save_trust(state_root, data)
-    return {"trust_migrated": migrated, "needs_review": needs_review}
+    def mutation(data: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+        skills = data.setdefault("skills", {})
+        migrated = []
+        needs_review = []
+        for old_id, record in list(skills.items()):
+            record_hash = record.get("content_hash")
+            if not record_hash:
+                continue
+            candidates = [entry for entry in old_entries if entry.get("id") == old_id and entry.get("content_hash") == record_hash]
+            if not candidates:
+                continue
+            if len(candidates) > 1:
+                needs_review.append({"old_id": old_id, "reason": "ambiguous old ID/content hash"})
+                continue
+            old = candidates[0]
+            old_root = old.get("root")
+            new = new_by_root.get(old_root) if isinstance(old_root, str) else None
+            if not new or new.get("id") == old_id:
+                continue
+            if new.get("content_hash") != record_hash:
+                needs_review.append(
+                    {
+                        "old_id": old_id,
+                        "new_id": new.get("id"),
+                        "old_content_hash": record_hash,
+                        "new_content_hash": new.get("content_hash"),
+                        "reason": "content changed since last collection refresh",
+                    }
+                )
+                continue
+            skills[new["id"]] = dict(record)
+            migrated.append({"old_id": old_id, "new_id": new["id"], "content_hash": record_hash})
+        return {"trust_migrated": migrated, "needs_review": needs_review}
+
+    return mutate_user_json(trust_path(state_root), {"skills": {}}, mutation)
 
 
 def _migrate_tags(state_root: Path, old_entries: list[dict[str, Any]], new_by_root: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
