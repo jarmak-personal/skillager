@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..skills.tree import content_path_excluded
 from ..trust import content_hash_entries
 
 
@@ -15,6 +17,13 @@ CONFLICT_CODES = {"AA", "AU", "DD", "DU", "UA", "UD", "UU"}
 
 class LibraryGitError(RuntimeError):
     """Raised when a library Git operation cannot complete safely."""
+
+
+@dataclass(frozen=True)
+class GitTreeFile:
+    path: str
+    mode: str
+    content: bytes
 
 
 def git_available() -> bool:
@@ -188,6 +197,67 @@ def head_content_hash(root: Path, path: Path) -> str | None:
     return content_hash_entries(entries) if entries else None
 
 
+def git_path_history(root: Path, path: Path) -> list[dict[str, str]]:
+    """Return newest-first commits that changed one library-relative path."""
+
+    root = root.resolve()
+    relative = _relative_path(root, path)
+    result = _run_git(root, "log", "--format=%H%x1f%aI%x1f%s%x1e", "--", relative)
+    if result.returncode != 0:
+        raise LibraryGitError(_git_error(f"could not read Git history for {relative}", result))
+    commits: list[dict[str, str]] = []
+    for raw_record in result.stdout.split("\x1e"):
+        record = raw_record.strip("\r\n")
+        if not record:
+            continue
+        fields = record.split("\x1f", maxsplit=2)
+        if len(fields) != 3:
+            raise LibraryGitError(f"could not parse Git history for {relative}")
+        commit, committed_at, subject = fields
+        commits.append({"commit": commit, "committed_at": committed_at, "subject": subject})
+    return commits
+
+
+def git_tree_files(root: Path, path: Path, commit: str) -> list[GitTreeFile]:
+    """Reconstruct one eligible regular-file tree from a verified Git commit."""
+
+    root = root.resolve()
+    relative = _relative_path(root, path).rstrip("/")
+    verified = _run_git(root, "rev-parse", "--verify", f"{commit}^{{commit}}")
+    if verified.returncode != 0:
+        raise LibraryGitError(_git_error("historical Git commit is unavailable", verified))
+    resolved_commit = verified.stdout.strip()
+    if resolved_commit != commit:
+        raise LibraryGitError("historical Git commit identity changed during lookup")
+    listed = _run_git_bytes(root, "ls-tree", "-r", "-z", commit, "--", relative)
+    if listed.returncode != 0:
+        raise LibraryGitError(_git_bytes_error(f"could not read {relative} at {commit}", listed))
+    prefix = f"{relative}/"
+    files: list[GitTreeFile] = []
+    for tree_entry in (item for item in listed.stdout.split(b"\0") if item):
+        metadata, separator, raw_name = tree_entry.partition(b"\t")
+        fields = metadata.split(b" ")
+        if not separator or len(fields) != 3:
+            raise LibraryGitError(f"could not parse historical tree entry at {commit}")
+        mode, object_type, object_id = fields
+        name = raw_name.decode("utf-8", errors="surrogateescape")
+        if not name.startswith(prefix):
+            raise LibraryGitError(f"historical tree path escapes selected skill: {name}")
+        relative_name = name[len(prefix) :]
+        relative_path = Path(relative_name)
+        if mode in {b"120000", b"160000"} or object_type != b"blob":
+            raise LibraryGitError(f"historical skill contains an unsafe symlink or submodule: {relative_name}")
+        if mode not in {b"100644", b"100755"}:
+            raise LibraryGitError(f"historical skill contains an unsupported file mode: {relative_name}")
+        if content_path_excluded(relative_path):
+            continue
+        shown = _run_git_bytes(root, "cat-file", "blob", object_id.decode("ascii"))
+        if shown.returncode != 0:
+            raise LibraryGitError(_git_bytes_error(f"could not read historical file {relative_name}", shown))
+        files.append(GitTreeFile(path=relative_name, mode=mode.decode("ascii"), content=shown.stdout))
+    return sorted(files, key=lambda item: item.path)
+
+
 def path_changes(status: dict[str, Any], root: Path, path: Path) -> dict[str, list[str]]:
     relative = _relative_path(root.resolve(), path).rstrip("/")
     prefix = f"{relative}/"
@@ -324,7 +394,10 @@ __all__ = [
     "FALLBACK_GIT_EMAIL",
     "FALLBACK_GIT_NAME",
     "LibraryGitError",
+    "GitTreeFile",
     "commit_paths",
+    "git_path_history",
+    "git_tree_files",
     "git_available",
     "head_content_hash",
     "initialize_repository",

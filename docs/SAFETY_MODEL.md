@@ -28,6 +28,14 @@ Only the canonical content tree crosses the boundary: regular files below the se
 
 Import provenance stores a source identity, source skill ID, imported hash, source type, and timestamp. Refresh resolves that identity and compares hashes without applying files. Missing or changed provenance degrades refresh only and never makes the owned copy unavailable.
 
+## Content-Addressed History
+
+Git stores library history, but Git commit IDs are never accepted as Skillager version identities. History walks only the selected skill path, reconstructs eligible regular files from Git objects, rejects symlinks, submodules, unsafe paths, and unsupported modes, then verifies the full Skillager content hash. Commits producing the same agent-visible hash are deduplicated. History, status, `where`, restore previews, and `diff --stat` remain metadata-only; plain `library diff` is explicitly content-bearing.
+
+Restore is append-only. It resolves a unique Skillager content-hash prefix, reconstructs and scans the tree outside the library, rechecks the selected historical commit and current working hash under the mutation lock, and then creates a new descendant commit. It never runs reset, checkout over the worktree, rebase, force-push, fetch, pull, or another remote/history-rewriting operation. Trust is recorded only after the new commit succeeds. Git or trust failure leaves an exact pending tree with a documented `library accept` repair path.
+
+Conflicts, in-progress operations, unrelated staged files, missing or ambiguous hashes, changed previews, unsafe historical trees, and current symlinks or excluded files fail closed. A transaction-only tree fingerprint also catches executable-mode changes that do not affect the public Skillager content hash. No-Git libraries explicitly report history as unavailable without affecting ordinary authored/imported library use.
+
 ## Static Scanner
 
 The scanner runs locally and does not use an agent. It scans the full skill directory, including `SKILL.md`, supporting docs, scripts, templates, and references.

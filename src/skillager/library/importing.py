@@ -7,15 +7,12 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog.impl import refresh_collection, select_collection_skills
-from ..lint import lint_skill
-from ..review_gates import apply_review_metadata
-from ..scan import scan_path
-from ..schema import QuarantinedSkill, SchemaError, load_skill_from_dir, quarantine_skill_from_dir
 from ..skills.index import build_index
 from ..skills.tree import content_tree_manifest, copy_content_tree
 from ..state.locking import resource_locks
 from ..state.statefiles import read_user_json
 from ..trust import APPROVED_TRUST_STATES, approval_key_for, content_hash, set_trust
+from .candidate import index_library_candidate
 from .git import LibraryGitError, commit_paths, path_changes, repository_status
 from .metadata import load_library_provenance, set_import_provenance
 from .model import LIBRARY_NAMESPACE, normalize_skill_name
@@ -132,7 +129,7 @@ def import_library_skill(
                 raise ValueError("import source does not contain a regular canonical SKILL.md")
             if content_hash(source_root) != expected_hash:
                 raise ValueError("import source changed while it was being copied; no library files were written")
-            candidate_entry = _index_import_candidate(candidate, registration.library_id, name)
+            candidate_entry = index_library_candidate(candidate, layout, registration.library_id, name)
             if candidate_entry["content_hash"] != expected_hash:
                 raise ValueError("filtered import tree does not reproduce the reviewed source content hash")
             lint_override, risk_override = _acceptance_overrides(
@@ -344,34 +341,6 @@ def _resolve_external_skill(project_state: Path, catalog_root: Path, skill_id: s
         paths = ", ".join(sorted(str(Path(skill["root"]).resolve()) for skill in candidates))
         raise ValueError(f"external skill ID is ambiguous across discovered sources: {skill_id} ({paths})")
     return candidates[0]
-
-
-def _index_import_candidate(candidate: Path, library_id: str, name: str) -> dict[str, Any]:
-    source = {
-        "type": "collection",
-        "collection": LIBRARY_NAMESPACE,
-        "path": str(candidate.parent),
-        "ownership": "library",
-        "library_id": library_id,
-        "library_root": str(candidate.parent.parent),
-        "library_skill": name,
-    }
-    try:
-        skill = load_skill_from_dir(candidate, source)
-    except (SchemaError, OSError, ValueError) as exc:
-        quarantined = quarantine_skill_from_dir(candidate, source, exc)
-        if quarantined is None:
-            raise ValueError(f"import candidate is not a valid skill: {exc}") from exc
-        skill = quarantined
-    digest = content_hash(candidate)
-    scan = scan_path(candidate, allow_tools=False)
-    lint = skill.lint if isinstance(skill, QuarantinedSkill) else lint_skill(skill)
-    entry = skill.to_index(digest, scan, "discovered")
-    entry["id"] = f"{LIBRARY_NAMESPACE}/{name}"
-    entry["source"] = source
-    entry["lint"] = lint
-    apply_review_metadata(entry)
-    return entry
 
 
 def _source_key(skill: dict[str, Any]) -> str:

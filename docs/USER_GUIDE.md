@@ -76,6 +76,23 @@ After confirmation, Skillager discovers and rehashes the source again under the 
 
 `import --refresh` never applies upstream changes. It reports whether the upstream, library, both, or neither changed from the imported base and provides a metadata-only file comparison. If the source was deleted, renamed, or now resolves to a different identity, refresh reports degradation while the accepted owned copy stays usable.
 
+### Version History And Restore
+
+Git-backed libraries expose verified Skillager versions without treating Git commit IDs as content identities:
+
+```bash
+skillager library history lib/orbital-review --json
+skillager library diff lib/orbital-review --from <content-hash> --to <content-hash> --stat
+skillager library diff lib/orbital-review --from <content-hash> --to <content-hash>
+skillager library restore lib/orbital-review --to <content-hash> --yes
+```
+
+History walks only the selected skill path, reconstructs eligible regular files from each commit, verifies their full Skillager content hash, and deduplicates commits with the same agent-visible tree. Its output includes unique short hashes, commit IDs and times, known operations, and HEAD/current/accepted markers without body text. Git commit IDs are never accepted in place of Skillager content hashes.
+
+`library diff` defaults to comparing Git HEAD with the working tree. With `--to` but no `--from`, it compares the selected version with its predecessor. `--stat` reports only paths and counts; plain diff is intentionally content-bearing and suitable for direct human review.
+
+Restore is preview-first. After confirmation it reconstructs the version outside the library, re-runs scanner/lint checks, verifies the exact hash and transaction tree fingerprint again under the library lock, replaces the selected working tree, and creates a new descendant commit. Blocking or high-risk historical versions require `--override-lint --reason "..."`. Conflicts, in-progress Git operations, changed previews, unsafe historical symlinks, current symlinks or excluded files, missing hashes, and unavailable history refuse before mutation. Preserve or remove noncanonical current files before restoring. No-Git libraries remain usable but report history-dependent commands as unavailable.
+
 ## Manifest Lint
 
 `skillager.yaml` is structured metadata only. Skill identity and searchable prose come from `SKILL.md`, not from manifest free text.
@@ -110,6 +127,9 @@ skillager where lib/<name> --json
 skillager import <external-skill-id> --json
 skillager import <external-skill-id> --as <name> --yes
 skillager import --refresh lib/<name> --json
+skillager library history lib/<name> --json
+skillager library diff lib/<name> --from <hash> --to <hash> --stat
+skillager library restore lib/<name> --to <hash> --yes
 skillager setup --agent codex
 skillager setup --fresh
 skillager setup --fresh-project --agent codex

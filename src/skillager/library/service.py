@@ -91,6 +91,7 @@ def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: 
         "errors": index.get("errors", []),
         "library": status["library"],
         "git": status["git"],
+        "history": status["history"],
         "warnings": status["warnings"],
     }
 
@@ -276,6 +277,7 @@ def library_status(
             "initialized": False,
             "library": None,
             "git": None,
+            "history": {"available": False, "reason": "not-initialized"},
             "counts": {"skills": 0},
             "skill": None,
             "warnings": [],
@@ -306,6 +308,7 @@ def library_status(
 
     git_mode = identity.git_mode if identity is not None else "disabled"
     git = repository_status(layout.root, mode=git_mode) if layout.root.is_dir() else _missing_git_status(git_mode)
+    history = _history_availability(identity, git) if identity is not None else {"available": False, "reason": "identity-missing"}
     if git.get("error"):
         warnings.append(str(git["error"]))
     if git.get("conflicts"):
@@ -333,6 +336,7 @@ def library_status(
             "registration": "valid" if identity is not None and identity.library_id == registration.library_id else "mismatch",
         },
         "git": git,
+        "history": history,
         "counts": {"skills": len(names)},
         "skill": selected,
         "warnings": warnings,
@@ -481,8 +485,25 @@ def _skill_status(
         "lint": _compact_lint(skill.get("lint")),
         "scan": _compact_scan(skill.get("scan")),
         "git": git_paths,
+        "history": _history_availability(identity, git),
         "exposures": _library_exposures(project_dir, str(skill["id"])),
     }
+
+
+def _history_availability(identity: LibraryIdentity, git: dict[str, Any]) -> dict[str, Any]:
+    if identity.git_mode == "disabled":
+        return {"available": False, "reason": "no-git"}
+    if not git.get("available"):
+        return {"available": False, "reason": "git-unavailable"}
+    if not git.get("repository"):
+        return {"available": False, "reason": "repository-unavailable"}
+    if git.get("conflicts"):
+        return {"available": False, "reason": "conflicted"}
+    if git.get("operation"):
+        return {"available": False, "reason": f"operation-in-progress:{git['operation']}"}
+    if not git.get("head"):
+        return {"available": False, "reason": "no-commits"}
+    return {"available": True, "reason": None}
 
 
 def _missing_git_status(mode: str) -> dict[str, Any]:
