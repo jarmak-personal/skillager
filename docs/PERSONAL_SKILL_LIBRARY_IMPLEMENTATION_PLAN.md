@@ -302,6 +302,7 @@ skillager working --agent <agent> --json
 skillager reconcile [<skill>] [--json]
 skillager reconcile keep-local <skill> --yes
 skillager reconcile quarantine <skill> --yes
+skillager reconcile repair <skill> --yes
 skillager reconcile promote <skill> --yes
 skillager reconcile rollback <skill> --yes
 skillager reconcile import <skill> --as <name> --yes
@@ -650,6 +651,13 @@ User checkpoint:
 
 The core promise is complete: edit where the skill is being used, promote once, and
 recover any managed library version without losing project-local work.
+
+Phase 6 implementation note (2026-08-07): delivered the metadata-only
+`skillager.reconcile.v1` inventory, exact-hash keep-local decisions, recoverable
+project quarantine and exposure-scoped blocks, generated stub/router repair,
+fast-forward-only library promotion, edited-external import, and verified historical
+exposure rollback. All mutation paths rehash after confirmation under shared bounded
+resource locks; dirty repair/rollback targets are preserved before replacement.
 
 ### Phase 7 — Variants, Sync, And Pins
 

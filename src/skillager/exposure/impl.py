@@ -11,7 +11,8 @@ from typing import Any
 from ..compatibility import compatibility_problem, compatibility_warnings
 from ..simple_yaml import dumps, load_mapping
 from ..skills.tree import content_tree_fingerprint, iter_content_files
-from ..trust import content_hash
+from ..state.locking import resource_lock
+from ..trust import content_hash, content_hash_entries
 
 MATERIALIZED_SCHEMA = "skillager.materialized.v1"
 TRUSTED_STATES = {"reviewed", "trusted", "pinned"}
@@ -432,6 +433,12 @@ def materialize_router_one(
     router_skill = _router_skill(tag, skills, router_slug=router_slug, router_kind=router_kind)
     with _target_lock(target):
         sidecar = target / "skillager.materialized.yaml"
+        actual_router_slug = router_slug or target.name
+        rendered = render_router_skill(tag, skills, agent=agent, router_slug=actual_router_slug, router_kind=router_kind)
+        prospective_hash = _single_file_content_hash(rendered)
+        decisions = _exposure_decisions(sidecar)
+        if prospective_hash in decisions.get("exposure_blocked_hashes", []):
+            return _result(router_skill, target, "skipped", "exact exposure hash is blocked; use reconcile to choose a recovery action", agent=agent, scope=scope)
         if target.exists():
             if _is_customized(sidecar, target) and not force:
                 return _result(router_skill, target, "skipped", "target has local customizations", agent=agent, scope=scope)
@@ -442,25 +449,21 @@ def materialize_router_one(
         if target.exists():
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
-        actual_router_slug = router_slug or target.name
-        (target / "SKILL.md").write_text(
-            render_router_skill(tag, skills, agent=agent, router_slug=actual_router_slug, router_kind=router_kind),
-            encoding="utf-8",
-        )
+        (target / "SKILL.md").write_text(rendered, encoding="utf-8")
         materialized_hash = content_hash(target)
+        sidecar_data = _router_sidecar(
+            tag,
+            skills,
+            agent=agent,
+            scope=scope,
+            materialized_hash=materialized_hash,
+            materialized_fingerprint=content_tree_fingerprint(target),
+            router_slug=actual_router_slug,
+            router_kind=router_kind,
+        )
+        sidecar_data.update(decisions)
         sidecar.write_text(
-            dumps(
-                _router_sidecar(
-                    tag,
-                    skills,
-                    agent=agent,
-                    scope=scope,
-                    materialized_hash=materialized_hash,
-                    materialized_fingerprint=content_tree_fingerprint(target),
-                    router_slug=actual_router_slug,
-                    router_kind=router_kind,
-                )
-            ),
+            dumps(sidecar_data),
             encoding="utf-8",
         )
         return _result(router_skill, target, "materialized", None, agent=agent, scope=scope)
@@ -545,6 +548,11 @@ def materialize_stub_one(
 ) -> dict[str, Any]:
     with _target_lock(target):
         sidecar = target / "skillager.materialized.yaml"
+        rendered = render_stub_skill(skill)
+        prospective_hash = _single_file_content_hash(rendered)
+        decisions = _exposure_decisions(sidecar)
+        if prospective_hash in decisions.get("exposure_blocked_hashes", []):
+            return _result(skill, target, "skipped", "exact exposure hash is blocked; use reconcile to choose a recovery action", agent=agent, scope=scope)
         if target.exists():
             if _is_customized(sidecar, target) and not force:
                 return _result(skill, target, "skipped", "target has local customizations", agent=agent, scope=scope)
@@ -555,18 +563,18 @@ def materialize_stub_one(
         if target.exists():
             shutil.rmtree(target)
         target.mkdir(parents=True, exist_ok=True)
-        (target / "SKILL.md").write_text(render_stub_skill(skill), encoding="utf-8")
+        (target / "SKILL.md").write_text(rendered, encoding="utf-8")
         materialized_hash = content_hash(target)
+        sidecar_data = _stub_sidecar(
+            skill,
+            agent=agent,
+            scope=scope,
+            materialized_hash=materialized_hash,
+            materialized_fingerprint=content_tree_fingerprint(target),
+        )
+        sidecar_data.update(decisions)
         sidecar.write_text(
-            dumps(
-                _stub_sidecar(
-                    skill,
-                    agent=agent,
-                    scope=scope,
-                    materialized_hash=materialized_hash,
-                    materialized_fingerprint=content_tree_fingerprint(target),
-                )
-            ),
+            dumps(sidecar_data),
             encoding="utf-8",
         )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
@@ -640,6 +648,9 @@ def materialize_one(
             return _result(skill, target, "already_native", "existing unmanaged native skill", agent=agent, scope=scope)
         target_skill = target / "SKILL.md"
         sidecar = target / "skillager.materialized.yaml"
+        decisions = _exposure_decisions(sidecar)
+        if skill.get("content_hash") in decisions.get("exposure_blocked_hashes", []):
+            return _result(skill, target, "skipped", "exact exposure hash is blocked; use reconcile to choose a recovery action", agent=agent, scope=scope)
         if target.exists():
             if _is_customized(sidecar, target) and not force:
                 return _result(skill, target, "skipped", "target has local customizations", agent=agent, scope=scope)
@@ -652,16 +663,16 @@ def materialize_one(
         target.mkdir(parents=True, exist_ok=True)
         _copy_skill_tree(Path(skill["root"]), target)
         materialized_hash = content_hash(target)
+        sidecar_data = _sidecar(
+            skill,
+            agent=agent,
+            scope=scope,
+            materialized_hash=materialized_hash,
+            materialized_fingerprint=content_tree_fingerprint(target),
+        )
+        sidecar_data.update(decisions)
         sidecar.write_text(
-            dumps(
-                _sidecar(
-                    skill,
-                    agent=agent,
-                    scope=scope,
-                    materialized_hash=materialized_hash,
-                    materialized_fingerprint=content_tree_fingerprint(target),
-                )
-            ),
+            dumps(sidecar_data),
             encoding="utf-8",
         )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
@@ -819,18 +830,8 @@ def _slug_hash(skill_id: str) -> str:
 @contextlib.contextmanager
 def _target_lock(target: Path):
     target.parent.mkdir(parents=True, exist_ok=True)
-    lock = target.parent / ".skillager-materialize.lock"
-    with lock.open("a+b") as handle:
-        try:
-            import fcntl
-
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        except ImportError:
-            yield
+    with resource_lock(target):
+        yield
 
 
 def _sidecar(
@@ -1027,6 +1028,28 @@ def _source_hash_matches(sidecar: Path, source_hash: object) -> bool:
     except Exception:
         return False
     return data.get("source_hash") == source_hash
+
+
+def _single_file_content_hash(content: str) -> str:
+    return content_hash_entries([("SKILL.md", content.encode("utf-8"))])
+
+
+def _exposure_decisions(sidecar: Path) -> dict[str, Any]:
+    if sidecar.is_symlink() or not sidecar.is_file():
+        return {}
+    try:
+        data = load_mapping(sidecar)
+    except Exception:
+        return {}
+    decisions: dict[str, Any] = {}
+    blocked = data.get("exposure_blocked_hashes")
+    if isinstance(blocked, list):
+        decisions["exposure_blocked_hashes"] = [str(value) for value in blocked]
+    for key in ("quarantine_path", "quarantined_at", "pin_hash"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            decisions[key] = value
+    return decisions
 
 
 def _result(

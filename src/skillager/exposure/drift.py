@@ -37,6 +37,31 @@ def scan_project_exposures(
 ) -> dict[str, Any]:
     """Classify live current-project exposure targets without mutating state."""
 
+    records = list_project_exposures(
+        project_dir,
+        agent=agent,
+        catalog_root=catalog_root,
+    )
+    counts = {key: 0 for key in _COUNT_KEYS.values()}
+    for record in records:
+        counts[_COUNT_KEYS[record["status"]]] += 1
+    items = [record for record in records if record["status"] in ACTIONABLE_EXPOSURE_STATES]
+    return {
+        "schema": EXPOSURE_CHANGES_SCHEMA,
+        **counts,
+        "items": sorted(items, key=lambda item: (str(item.get("agent")), str(item.get("target")))),
+        "fully_deleted_targets": "undetectable_without_ledger",
+    }
+
+
+def list_project_exposures(
+    project_dir: Path,
+    *,
+    agent: str | None = None,
+    catalog_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Return every discoverable current-project exposure classification."""
+
     registration = _library_registration(catalog_root)
     records: list[dict[str, Any]] = []
     seen: set[Path] = set()
@@ -70,17 +95,7 @@ def scan_project_exposures(
                         records.append(record)
                 elif (target / "SKILL.md").is_file() and target.name != "skillager-working":
                     records.append(_unmanaged_record(target, agent=root_agent))
-
-    counts = {key: 0 for key in _COUNT_KEYS.values()}
-    for record in records:
-        counts[_COUNT_KEYS[record["status"]]] += 1
-    items = [record for record in records if record["status"] in ACTIONABLE_EXPOSURE_STATES]
-    return {
-        "schema": EXPOSURE_CHANGES_SCHEMA,
-        **counts,
-        "items": sorted(items, key=lambda item: (str(item.get("agent")), str(item.get("target")))),
-        "fully_deleted_targets": "undetectable_without_ledger",
-    }
+    return sorted(records, key=lambda item: (str(item.get("agent")), str(item.get("target"))))
 
 
 def classify_exposure_target(
@@ -309,5 +324,6 @@ __all__ = [
     "ACTIONABLE_EXPOSURE_STATES",
     "EXPOSURE_CHANGES_SCHEMA",
     "classify_exposure_target",
+    "list_project_exposures",
     "scan_project_exposures",
 ]

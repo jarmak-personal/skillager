@@ -80,6 +80,7 @@ from .context import (
 )
 from .library import add_library_parser
 from .importing import add_import_parser
+from .reconcile import add_reconcile_parser
 
 
 HANDOFF_REASON_AGENT_REQUIRED = "agent_required"
@@ -189,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_working_parser(sub)
     add_library_parser(sub)
     add_import_parser(sub)
+    add_reconcile_parser(sub)
     add_collection_parser(sub)
     add_tag_parser(sub)
 

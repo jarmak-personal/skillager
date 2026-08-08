@@ -28,6 +28,15 @@ At the end of interactive setup, Skillager asks which agent target you use and i
 
 The check is metadata-only and read-only. It does not refresh collections, resolve library head freshness, write index entries, update sidecars, or alter target files. It reuses persisted fingerprints when valid and computes in memory otherwise. A fingerprint is only a performance hint based on eligible relative paths, sizes, and modification times; approval and exposure mutations always recompute full content hashes. Because there is no exposure ledger, a fully deleted exposure directory is not discoverable—partial deletion remains visible while its sidecar directory exists.
 
+Use read-only reconciliation when you want source-aware next actions without changing readiness or files:
+
+```bash
+skillager reconcile --agent codex --json
+skillager reconcile lib/orbital-review --agent codex --json
+```
+
+Unlike `working`, `reconcile` may resolve the accepted personal-library head and verified history because it is an explicit lifecycle command. Its inventory remains metadata-only and read-only.
+
 Setup does not expose every approved skill by default. Approval makes a skill available for consideration; tagging and exposure are reversible project ergonomics based on what you are doing.
 
 Run `skillager doctor --agent codex` when the state seems off or the agent is stuck. Use `skillager doctor --agent codex --fix` to repair first-party working artifacts and project notes. `doctor` does not approve skills or expose third-party skills; it reports the exact setup, repair, lint, or migration action to run. Use `skillager doctor --json` when you want a broader machine-readable diagnostic report. These commands avoid printing skill bodies.
@@ -99,6 +108,33 @@ History walks only the selected skill path, reconstructs eligible regular files 
 
 Restore is preview-first. After confirmation it reconstructs the version outside the library, re-runs scanner/lint checks, verifies the exact hash and transaction tree fingerprint again under the library lock, replaces the selected working tree, and creates a new descendant commit. Blocking or high-risk historical versions require `--override-lint --reason "..."`. Conflicts, in-progress Git operations, changed previews, unsafe historical symlinks, current symlinks or excluded files, missing hashes, and unavailable history refuse before mutation. Preserve or remove noncanonical current files before restoring. No-Git libraries remain usable but report history-dependent commands as unavailable.
 
+### Reconcile An Exposed Edit
+
+When a native, stub, or router copy changes in the current project, inspect it first:
+
+```bash
+skillager reconcile <skill-id> --agent codex --json
+```
+
+The inventory reports the target's drift state, ownership, mode, source freshness/history, and valid actions without body text. If the same skill is exposed to both agents, select one with `--agent codex` or `--agent claude`.
+
+Available explicit choices are:
+
+```bash
+skillager reconcile keep-local <skill-id> --agent codex --yes
+skillager reconcile quarantine <skill-id> --agent codex --yes
+skillager reconcile repair <skill-id> --agent codex --yes
+skillager reconcile promote lib/<name> --agent codex --yes
+skillager reconcile rollback lib/<name> --agent codex --yes
+skillager reconcile import <external-id> --as <name> --agent codex --yes
+```
+
+`keep-local` applies to the exact current hash; a subsequent edit is reported again. `quarantine` moves the complete target directory to the recoverable project-local `.skillager-quarantine/exposures/` tree, leaves an agent-invisible sidecar tombstone, and exposure-blocks the selected hash. A later accepted source hash can be exposed normally, but the blocked exact hash cannot be silently rewritten. `repair` is limited to generated stubs and routers and quarantines edited bytes before regeneration.
+
+`promote` is limited to edited native personal-library exposures. It is fast-forward-only: the library's accepted working tree and Git HEAD must still equal the sidecar's base hash. Divergence reports both file comparisons and performs no merge or write. A successful promotion copies only canonical agent-visible files, re-runs lint/static checks, creates a path-scoped commit, records acceptance, and marks the existing exposure current. Use `reconcile import` instead for an edited external native exposure; provenance keeps the upstream source ID and base hash while the edited copy becomes a new accepted `lib/<name>` skill.
+
+`rollback` restores a native library exposure to its sidecar-recorded source hash from verified Git history. Any dirty target is quarantined before replacement. External and no-Git exposures report rollback as unavailable without changing files. Bare action commands preview only; interactive confirmation or `--yes` is required to mutate. Promote/import lint-blocking or high-risk content also requires `--override-lint --reason "..."`.
+
 ## Manifest Lint
 
 `skillager.yaml` is structured metadata only. Skill identity and searchable prose come from `SKILL.md`, not from manifest free text.
@@ -136,6 +172,13 @@ skillager import --refresh lib/<name> --json
 skillager library history lib/<name> --json
 skillager library diff lib/<name> --from <hash> --to <hash> --stat
 skillager library restore lib/<name> --to <hash> --yes
+skillager reconcile --agent codex --json
+skillager reconcile keep-local <skill-id> --agent codex --yes
+skillager reconcile quarantine <skill-id> --agent codex --yes
+skillager reconcile repair <skill-id> --agent codex --yes
+skillager reconcile promote lib/<name> --agent codex --yes
+skillager reconcile rollback lib/<name> --agent codex --yes
+skillager reconcile import <external-id> --as <name> --agent codex --yes
 skillager setup --agent codex
 skillager setup --fresh
 skillager setup --fresh-project --agent codex

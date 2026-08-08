@@ -359,6 +359,7 @@ skillager working --agent <a> --json     # + exposure_changes block, advisory on
 skillager reconcile [<skill>] [--json]   # read-only view
 skillager reconcile keep-local <skill> --yes
 skillager reconcile quarantine <skill> --yes
+skillager reconcile repair <skill> --yes             # generated stubs/routers only
 skillager reconcile rollback <skill> --yes       # library-sourced only
 skillager reconcile promote <skill>              # library-sourced only
 skillager reconcile import <skill> --as <name>   # external local edit -> library

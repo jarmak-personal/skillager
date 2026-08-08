@@ -62,6 +62,9 @@ class SkillagerReadPurityTests(unittest.TestCase):
                 self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-packages"]), 0)
                 self.assertEqual(main(["tag", "create", "demo"]), 0)
                 self.assertEqual(main(["tag", "add", "demo", "project/demo"]), 0)
+                self.assertEqual(main(["expose", "project/demo", "--agent", "codex"]), 0)
+            exposed = project / ".agents" / "skills" / "project-demo" / "SKILL.md"
+            exposed.write_text("# Locally Edited Demo\n\nPreview this reconciliation only.\n", encoding="utf-8")
             (state / "index.json").unlink()
 
             before = snapshot_tree(state, catalog, cache, project)
@@ -73,6 +76,9 @@ class SkillagerReadPurityTests(unittest.TestCase):
                 ["tag", "show", "demo", "--json"],
                 ["tag", "list", "--json"],
                 ["doctor", "--agent", "codex", "--no-packages", "--json"],
+                ["reconcile", "--agent", "codex", "--json"],
+                ["reconcile", "project/demo", "--agent", "codex", "--json"],
+                ["reconcile", "keep-local", "project/demo", "--agent", "codex", "--json"],
             ]
             with (
                 patch.dict(os.environ, env),

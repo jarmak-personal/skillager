@@ -67,7 +67,7 @@ skillager expose --tag workflows --mode router --agent codex --scope project
 skillager activate workflows/pr-review --from-router workflows
 ```
 
-Metadata commands stay metadata-only: `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, `doctor`, and summary JSON do not print full skill bodies.
+Metadata commands stay metadata-only: `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, `doctor`, read-only `reconcile`, and summary JSON do not print full skill bodies.
 
 ## Common Commands
 
@@ -84,6 +84,11 @@ Metadata commands stay metadata-only: `working`, `list`, `search`, `show` withou
 | Preview imported-skill upstream drift | `skillager import --refresh lib/pr-review --json` |
 | Inspect verified personal-skill versions | `skillager library history lib/pr-review --json` |
 | Restore a verified version as a new commit | `skillager library restore lib/pr-review --to <content-hash> --yes` |
+| Inspect current-project exposure changes | `skillager reconcile --agent codex --json` |
+| Keep an exact project-local edit | `skillager reconcile keep-local lib/pr-review --yes` |
+| Promote an edited library exposure | `skillager reconcile promote lib/pr-review --yes` |
+| Adopt an edited external exposure | `skillager reconcile import workflows/pr-review --as pr-review-local --yes` |
+| Recover an exposure from library history | `skillager reconcile rollback lib/pr-review --yes` |
 | Repair Skillager working artifacts | `skillager doctor --agent codex --fix` |
 | Approve a skill | `skillager review approve workflows/pr-review` |
 | Expose a tag as a router | `skillager expose --tag workflows --mode router --agent codex --scope project` |
@@ -140,6 +145,24 @@ skillager library restore lib/pr-review --to <hash> --yes
 ```
 
 History is path-specific, deduplicates commits with identical agent-visible content, and never prints bodies. `diff --stat` is also metadata-only; plain `diff` is deliberately content-bearing. Restore accepts a unique content-hash prefix, reconstructs and verifies that exact historical tree outside the library, re-runs lint/static checks, and creates a new descendant commit before recording acceptance. It never resets, checks out over the worktree, rewrites history, or contacts remotes. No-Git libraries report history as unavailable while remaining otherwise usable. History and restore JSON use `skillager.library-history.v1` and `skillager.library-restore.v1`.
+
+### Reconcile Project Edits
+
+`working` detects exposure drift; `reconcile` is the explicit edit-anywhere workflow:
+
+```bash
+skillager reconcile --agent codex --json
+skillager reconcile lib/pr-review --agent codex --json
+skillager reconcile keep-local lib/pr-review --agent codex --yes
+skillager reconcile promote lib/pr-review --agent codex --yes
+skillager reconcile rollback lib/pr-review --agent codex --yes
+```
+
+Bare `reconcile` and action previews are read-only and metadata-only. `keep-local` records only the exact customized hash, so another edit reappears as drift. `quarantine` moves every target file to a recoverable `.skillager-quarantine/exposures/` directory outside agent-visible roots and blocks that exact hash for the exposure; ordinary re-exposure cannot silently restore it. `repair` regenerates edited stubs and routers while first preserving their local bytes in quarantine.
+
+For a native library exposure, `promote` succeeds only when the accepted library working tree and Git HEAD still equal the exposure's recorded base. It scans and accepts the edited exposure as a new path-scoped library commit, then advances the sidecar. Divergence reports both base-to-library and base-to-exposure file changes and leaves both sides untouched. For an edited external native exposure, use `reconcile import ... --as <name>`; the external source remains unchanged. `rollback` reconstructs the exposure's recorded source hash from verified library Git history and quarantines a dirty target before replacement. No-Git and external rollback report unavailable without writing.
+
+Every mutation recomputes full hashes after confirmation under bounded resource locks. Non-interactive writes require `--yes`; blocking lint or high scanner risk on promote/import additionally requires `--override-lint --reason "..."`. Reconcile JSON uses `skillager.reconcile.v1`, `skillager.reconcile-action.v1`, and action-specific `skillager.reconcile-promote.v1`, `skillager.reconcile-import.v1`, and `skillager.reconcile-rollback.v1` schemas.
 
 ## Collections
 
