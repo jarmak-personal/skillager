@@ -435,7 +435,14 @@ def setup_environment(
     global_scope: bool = False,
 ) -> dict[str, Any]:
     review_include_lint_blocked = include_lint_blocked or override_lint or bulk_approve or yolo
-    data = build_index(state_root, paths, include_packages=include_packages, approval_root=approval_root, extra_paths=extra_paths)
+    data = build_index(
+        state_root,
+        paths,
+        include_packages=include_packages,
+        approval_root=approval_root,
+        extra_paths=extra_paths,
+        reuse_cache=False,
+    )
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
     skipped_global = 0

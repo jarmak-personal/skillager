@@ -4,11 +4,14 @@ This document is for coding agents reading a project that uses Skillager.
 
 Projects may expose a first-party `skillager-working` skill. Treat `skillager working --agent <agent> --json` as the readiness contract for Skillager-managed projects: run it after context resets, keep no-action readiness out of the user conversation, then curate available skills only when the user's task calls for a narrow router, stub, or native skill.
 
+The working contract is `skillager.working.v2`. `exposure_changes` is advisory current-project state and does not change readiness or exit status. Current and intentionally kept-local targets are counted but omitted from its item list; actionable items identify local edits, partial missing targets, exposure-scoped blocks, malformed sidecars, and unmanaged native skills. Each item includes `ownership` so later reconciliation can distinguish library-owned from external sources. Fully deleted targets are explicitly undetectable without a ledger.
+
 Availability is the eligibility gate. Agent-facing Skillager commands only surface skills the owner has made available. Choose among them by task relevance; do not ask for or reason about scanner, review, or trust diagnostics unless the user is explicitly doing Skillager administration.
 
 ## Rules
 
 - Start resumed work with `skillager working --agent <agent> --json`; only mention it when readiness requires user action or the task calls for Skillager curation.
+- Treat `exposure_changes` as advisory. Mention drift only when it is relevant to the user's task or they ask about exposure/version state; do not treat it as approval or a readiness failure.
 - If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent <agent>` before guessing. Re-run working after repairs if readiness changes.
 - Do not run `skillager setup` or `skillager review ...` unless the user asked for setup or approval changes.
 - Treat `library init`, `library new`, `library accept`, `library restore ... --yes`, `import ... --yes`, and `edit --open` as user-authorized mutations. Do not run them merely because a pending, historical, or useful external skill is discovered.
@@ -55,6 +58,7 @@ Project-aware JSON includes:
 - `authored_pending_owner_review`: status count for user-local authored skills that are not available yet.
 - `agent_variant`: duplicate native-variant hints. Matching-agent variants are ranked first when the active agent is known, but alternatives remain visible and usable.
 - `compatibility`: negative-only compatibility metadata. Missing metadata means "assume usable." `problem` is set only when the skill explicitly excludes the requested `--agent`.
+- `exposure_changes`: metadata-only current-project drift counts and actionable items. It never contains skill bodies and never resolves source freshness.
 
 Pending owner review means Skillager found skills outside the available set. Treat them as unavailable and ask the user to run setup when they want to make more skills available. If `show <id>` returns quarantined lint-blocked metadata, do not activate or request content; ask the user to fix the source or run the audited override command shown by Skillager.
 

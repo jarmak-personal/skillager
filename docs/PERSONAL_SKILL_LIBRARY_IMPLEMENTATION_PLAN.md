@@ -608,6 +608,12 @@ Performance gate:
   than total skill bytes. Record before/after measurements; avoid a brittle fixed
   millisecond assertion in CI.
 
+Phase 5 implementation measurement (2026-08-07, local macOS development machine):
+a 3.8 MiB eligible tree with 41 files took 1.54–1.58 seconds for a cold `working`
+across three runs and 0.15–0.16 seconds with a persisted fingerprint hit. The test
+suite asserts the skipped hash/scan/lint calls rather than these machine-specific
+times.
+
 ### Phase 6 — Reconciliation And The Edit-Anywhere Loop
 
 Deliver in two internal slices while keeping one coherent command namespace.

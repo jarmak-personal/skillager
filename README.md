@@ -37,6 +37,8 @@ skillager working --agent codex --json
 
 `setup` discovers local/project skills, package-provided skills, collections, and native agent skills. It scans them and only makes content available after your review. Skillager is installed once as a user tool; it does not need to live inside every project environment.
 
+`working --json` uses the `skillager.working.v2` schema. Its advisory `exposure_changes` block reports current-project managed copies that are locally edited, intentionally kept local, partially missing, blocked, malformed, or unmanaged. Drift does not change readiness or the command's exit code, and normal human output stays quiet. Fully deleted exposure directories cannot be detected because Skillager intentionally keeps no cross-project exposure ledger.
+
 ## Core Model
 
 Skillager keeps these choices separate:

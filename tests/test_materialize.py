@@ -13,6 +13,8 @@ from support import chdir
 from skillager.cli import _print_expose_results, build_parser, main
 from skillager.index import build_index, load_index
 from skillager.materialize import materialize_skills
+from skillager.simple_yaml import load_mapping
+from skillager.skills.tree import content_tree_fingerprint
 from skillager.trust import content_hash, set_trust
 
 
@@ -416,6 +418,9 @@ class SkillagerMaterializeTests(unittest.TestCase):
             self.assertFalse((target / "skill.oms.sig").exists())
             self.assertFalse((target / "skill-card.md").exists())
             self.assertTrue((target / "skillager.materialized.yaml").exists())
+            sidecar = load_mapping(target / "skillager.materialized.yaml")
+            self.assertEqual(sidecar["ownership"], "external")
+            self.assertEqual(sidecar["materialized_fingerprint"], content_tree_fingerprint(target))
 
     def test_expose_json_result_uses_exposure_vocabulary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

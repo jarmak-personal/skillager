@@ -37,6 +37,7 @@ from ..collections import (
     select_collection_skills,
 )
 from ..families import agent_variant_family_key, canonical_agent_variant_slug
+from ..exposure.drift import scan_project_exposures
 from ..index import build_index, find_skill, load_index
 from ..materialize import (
     AGENT_NOTE,
@@ -69,6 +70,7 @@ from ..search import search as search_index
 from ..selection import select_visible_skills
 from ..signing import verify_oms_signature
 from ..simple_yaml import YamlError, load_mapping
+from ..skills.tree import content_tree_fingerprint
 from ..trust import content_hash, load_trust, merge_global_approvals, save_trust, set_trust
 from .context import (
     catalog_root,
@@ -115,7 +117,7 @@ DOCTOR_EXIT_MANUAL_REPAIR = 14
 SETUP_BOOTSTRAP_REASON_NO_APPROVED = "no_approved_skills"
 SETUP_BOOTSTRAP_REASON_DISABLED = "working_artifacts_disabled"
 SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED = "agent_not_specified"
-WORKING_RESULT_SCHEMA = "skillager.working.v1"
+WORKING_RESULT_SCHEMA = "skillager.working.v2"
 _WORKING_DRIFT_REASON_CODES = {
     "local customization": HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
     "target is not Skillager Working": HANDOFF_REASON_WORKING_WRONG_SOURCE,
@@ -1557,6 +1559,7 @@ def _build_visible_skill_view(
     include_packages: bool = True,
     include_global: bool = False,
     use_saved_scope: bool = True,
+    resolve_collection_freshness: bool = True,
 ) -> dict[str, Any]:
     data = build_index(
         state_root,
@@ -1571,6 +1574,7 @@ def _build_visible_skill_view(
         catalog_root=catalog_root,
         project_dir=project_dir,
         include_lint_blocked=True,
+        refresh_library=resolve_collection_freshness,
     )
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
@@ -1597,7 +1601,7 @@ def _build_visible_skill_view(
     materialized_project_counts = _materialized_project_counts(project_dir)
     unmaterialized_attached_tags = sorted(tag for tag in attached_tags if tag not in set(materialized_router_tags))
     migration = collection_migration_summary(catalog_root)
-    tagging = _status_tagging_summary(state_root, catalog_root)
+    tagging = _status_tagging_summary(state_root, catalog_root) if resolve_collection_freshness else {}
     readiness = _build_readiness(
         review_needed=review_needed,
         lint_blocked=lint_blocked,
@@ -1894,11 +1898,17 @@ def _build_working_result(
         include_packages=True,
         include_global=False,
         use_saved_scope=True,
+        resolve_collection_freshness=False,
     )
     diagnosis = _doctor_diagnosis(view, agent=agent)
     setup_complete = _working_setup_complete(state_root)
     pending_external = _working_pending_external_review(view["skills"])
     pending_owner_review_count = len(view["review_needed"]) + len(view["lint_blocked"])
+    exposure_changes = scan_project_exposures(
+        project_dir,
+        agent=agent,
+        catalog_root=catalog_root,
+    )
     return {
         "schema": WORKING_RESULT_SCHEMA,
         "status": diagnosis["status"],
@@ -1906,13 +1916,10 @@ def _build_working_result(
         "agent": agent,
         "setup_complete": setup_complete,
         "can_proceed": diagnosis["exit_code"] == DOCTOR_EXIT_READY,
-        "auto_approved_project_count": 0,
-        "auto_approved_project_skills": [],
         "pending_owner_review_count": pending_owner_review_count,
         "pending_external_review_count": len(pending_external),
         "pending_external_review": [_working_sync_item(skill) for skill in pending_external],
-        "new_external_review_count": 0,
-        "new_external_review": [],
+        "exposure_changes": exposure_changes,
         "readiness": view["readiness"],
         "next": {
             "command": diagnosis.get("command"),
@@ -2578,7 +2585,12 @@ def _working_artifact_status(project_dir: Path, *, agent: str) -> dict[str, Any]
         result["status"] = "stale"
         return result
     materialized_hash = data.get("materialized_hash")
-    if not isinstance(materialized_hash, str) or content_hash(target) != materialized_hash:
+    materialized_fingerprint = data.get("materialized_fingerprint")
+    current_matches = (
+        isinstance(materialized_fingerprint, str)
+        and content_tree_fingerprint(target) == materialized_fingerprint
+    )
+    if not isinstance(materialized_hash, str) or (not current_matches and content_hash(target) != materialized_hash):
         result["status"] = "drift"
         result["reason"] = "local customization"
         return result
@@ -4321,6 +4333,7 @@ def _collection_inventory_skills(
     collection: str | None = None,
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
+    refresh_library: bool = True,
 ) -> list[dict[str, Any]]:
     tag_membership = _project_tag_membership(project_dir)
     exposure = _project_exposure(project_dir)
@@ -4332,6 +4345,7 @@ def _collection_inventory_skills(
         approval_root=catalog_root,
         include_blocked=include_blocked,
         include_lint_blocked=include_lint_blocked,
+        refresh_library=refresh_library,
     ):
         item = _with_project_inventory_fields(skill, exposure)
         tags = tag_membership.get(item["id"], set())

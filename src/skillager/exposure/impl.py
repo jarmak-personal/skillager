@@ -10,7 +10,7 @@ from typing import Any
 
 from ..compatibility import compatibility_problem, compatibility_warnings
 from ..simple_yaml import dumps, load_mapping
-from ..skills.tree import iter_content_files
+from ..skills.tree import content_tree_fingerprint, iter_content_files
 from ..trust import content_hash
 
 MATERIALIZED_SCHEMA = "skillager.materialized.v1"
@@ -66,6 +66,10 @@ def materialize_skills(
         if reviewed_only and skill.get("trust") not in TRUSTED_STATES:
             results.append(_result(skill, None, "skipped", _unreviewed_reason(skill)))
             continue
+        authoritative_error = _authoritative_source_error(skill) if not dry_run else None
+        if authoritative_error:
+            results.append(_result(skill, None, "skipped", authoritative_error))
+            continue
         for agent in agents:
             target = target_dir(agent=agent, scope=scope, skill=skill, project_dir=project_dir)
             problem = compatibility_problem(skill, agent)
@@ -93,6 +97,20 @@ def _is_pending_library_skill(skill: dict[str, Any]) -> bool:
     return source.get("ownership") == "library" and skill.get("trust") not in TRUSTED_STATES
 
 
+def _authoritative_source_error(skill: dict[str, Any]) -> str | None:
+    root = skill.get("root")
+    expected = skill.get("content_hash")
+    if not isinstance(root, str) or not isinstance(expected, str):
+        return "source identity is incomplete; refresh inventory before exposure"
+    try:
+        actual = content_hash(Path(root))
+    except OSError:
+        return "source is unavailable; refresh inventory before exposure"
+    if actual != expected:
+        return "source changed since review; refresh inventory and review the new hash before exposure"
+    return None
+
+
 def materialize_router(
     tag: str | None,
     skills: list[dict[str, Any]],
@@ -111,6 +129,15 @@ def materialize_router(
     if router_kind == "explicit" and not router_slug:
         raise ValueError("explicit router requires a router slug")
     reviewed, skipped = _router_member_selection(skills)
+    if not dry_run:
+        unchanged: list[dict[str, Any]] = []
+        for skill in reviewed:
+            authoritative_error = _authoritative_source_error(skill)
+            if authoritative_error:
+                skipped.append(_result(skill, None, "skipped", authoritative_error))
+            else:
+                unchanged.append(skill)
+        reviewed = unchanged
     results: list[dict[str, Any]] = []
     for agent in agents:
         agent_reviewed, agent_skipped = _router_agent_member_selection(reviewed, agent=agent, scope=scope)
@@ -266,7 +293,17 @@ def materialize_working_skill_one(
         target.mkdir(parents=True, exist_ok=True)
         (target / "SKILL.md").write_text(render_working_skill(agent), encoding="utf-8")
         materialized_hash = content_hash(target)
-        sidecar.write_text(dumps(_working_sidecar(agent=agent, scope=scope, materialized_hash=materialized_hash)), encoding="utf-8")
+        sidecar.write_text(
+            dumps(
+                _working_sidecar(
+                    agent=agent,
+                    scope=scope,
+                    materialized_hash=materialized_hash,
+                    materialized_fingerprint=content_tree_fingerprint(target),
+                )
+            ),
+            encoding="utf-8",
+        )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
@@ -419,6 +456,7 @@ def materialize_router_one(
                     agent=agent,
                     scope=scope,
                     materialized_hash=materialized_hash,
+                    materialized_fingerprint=content_tree_fingerprint(target),
                     router_slug=actual_router_slug,
                     router_kind=router_kind,
                 )
@@ -519,7 +557,18 @@ def materialize_stub_one(
         target.mkdir(parents=True, exist_ok=True)
         (target / "SKILL.md").write_text(render_stub_skill(skill), encoding="utf-8")
         materialized_hash = content_hash(target)
-        sidecar.write_text(dumps(_stub_sidecar(skill, agent=agent, scope=scope, materialized_hash=materialized_hash)), encoding="utf-8")
+        sidecar.write_text(
+            dumps(
+                _stub_sidecar(
+                    skill,
+                    agent=agent,
+                    scope=scope,
+                    materialized_hash=materialized_hash,
+                    materialized_fingerprint=content_tree_fingerprint(target),
+                )
+            ),
+            encoding="utf-8",
+        )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
@@ -603,7 +652,18 @@ def materialize_one(
         target.mkdir(parents=True, exist_ok=True)
         _copy_skill_tree(Path(skill["root"]), target)
         materialized_hash = content_hash(target)
-        sidecar.write_text(dumps(_sidecar(skill, agent=agent, scope=scope, materialized_hash=materialized_hash)), encoding="utf-8")
+        sidecar.write_text(
+            dumps(
+                _sidecar(
+                    skill,
+                    agent=agent,
+                    scope=scope,
+                    materialized_hash=materialized_hash,
+                    materialized_fingerprint=content_tree_fingerprint(target),
+                )
+            ),
+            encoding="utf-8",
+        )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
@@ -773,8 +833,15 @@ def _target_lock(target: Path):
             yield
 
 
-def _sidecar(skill: dict[str, Any], *, agent: str, scope: str, materialized_hash: str) -> dict[str, Any]:
-    return {
+def _sidecar(
+    skill: dict[str, Any],
+    *,
+    agent: str,
+    scope: str,
+    materialized_hash: str,
+    materialized_fingerprint: str,
+) -> dict[str, Any]:
+    data = {
         "schema": MATERIALIZED_SCHEMA,
         "id": skill["id"],
         "source_id": skill["id"],
@@ -783,12 +850,16 @@ def _sidecar(skill: dict[str, Any], *, agent: str, scope: str, materialized_hash
         "source_entrypoint": skill.get("entrypoint"),
         "source_hash": skill.get("content_hash"),
         "materialized_hash": materialized_hash,
+        "materialized_fingerprint": materialized_fingerprint,
         "source_trust": skill.get("trust"),
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
         "scope": scope,
         "customized": False,
+        "ownership": _skill_ownership(skill),
     }
+    _add_source_library_id(data, skill)
+    return data
 
 
 def _working_skill(agent: str) -> dict[str, Any]:
@@ -811,7 +882,13 @@ def working_source_hash(agent: str) -> str:
     return hashlib.sha256(render_working_skill(agent).encode("utf-8")).hexdigest()[:16]
 
 
-def _working_sidecar(*, agent: str, scope: str, materialized_hash: str) -> dict[str, Any]:
+def _working_sidecar(
+    *,
+    agent: str,
+    scope: str,
+    materialized_hash: str,
+    materialized_fingerprint: str,
+) -> dict[str, Any]:
     return {
         "schema": MATERIALIZED_SCHEMA,
         "id": WORKING_SKILL_ID,
@@ -821,6 +898,7 @@ def _working_sidecar(*, agent: str, scope: str, materialized_hash: str) -> dict[
         "source_entrypoint": "generated",
         "source_hash": _working_source_hash(agent),
         "materialized_hash": materialized_hash,
+        "materialized_fingerprint": materialized_fingerprint,
         "source_trust": "reviewed",
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
@@ -836,6 +914,7 @@ def _router_sidecar(
     agent: str,
     scope: str,
     materialized_hash: str,
+    materialized_fingerprint: str,
     router_slug: str,
     router_kind: str,
 ) -> dict[str, Any]:
@@ -851,19 +930,28 @@ def _router_sidecar(
         "skill_ids": [skill["id"] for skill in skills],
         "source_hash": content_hashes(skills),
         "materialized_hash": materialized_hash,
+        "materialized_fingerprint": materialized_fingerprint,
         "source_trust": "reviewed",
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
         "scope": scope,
         "customized": False,
+        "ownership": "library" if skills and all(_skill_ownership(skill) == "library" for skill in skills) else "external",
     }
     if tag is not None:
         data["tag"] = tag
     return data
 
 
-def _stub_sidecar(skill: dict[str, Any], *, agent: str, scope: str, materialized_hash: str) -> dict[str, Any]:
-    return {
+def _stub_sidecar(
+    skill: dict[str, Any],
+    *,
+    agent: str,
+    scope: str,
+    materialized_hash: str,
+    materialized_fingerprint: str,
+) -> dict[str, Any]:
+    data = {
         "schema": MATERIALIZED_SCHEMA,
         "id": skill["id"],
         "source_id": skill["id"],
@@ -872,12 +960,26 @@ def _stub_sidecar(skill: dict[str, Any], *, agent: str, scope: str, materialized
         "source_entrypoint": skill.get("entrypoint"),
         "source_hash": skill.get("content_hash"),
         "materialized_hash": materialized_hash,
+        "materialized_fingerprint": materialized_fingerprint,
         "source_trust": skill.get("trust"),
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
         "scope": scope,
         "customized": False,
+        "ownership": _skill_ownership(skill),
     }
+    _add_source_library_id(data, skill)
+    return data
+
+
+def _skill_ownership(skill: dict[str, Any]) -> str:
+    return "library" if (skill.get("source") or {}).get("ownership") == "library" else "external"
+
+
+def _add_source_library_id(data: dict[str, Any], skill: dict[str, Any]) -> None:
+    library_id = (skill.get("source") or {}).get("library_id")
+    if _skill_ownership(skill) == "library" and library_id:
+        data["source_library_id"] = library_id
 
 
 def _copy_skill_tree(source: Path, target: Path) -> None:

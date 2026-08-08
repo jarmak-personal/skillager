@@ -22,6 +22,12 @@ Install Skillager as a global user tool with `uv tool install skillager` or `pip
 
 At the end of interactive setup, Skillager asks which agent target you use and installs a small first-party `skillager-working` skill into that agent's project skill directory. It can also expose a small one-by-one set of approved skills that you want available in every session. Restart the agent in the same project directory, then tell it what you plan to do. The agent runs `skillager working --agent <agent> --json` after context resets and can use available metadata to add useful skills to project-local tags and expose narrow native skills, stubs, a compact router skill for a tag or explicit skill set, or nothing.
 
+### Read-Only Exposure Drift
+
+`working --json` emits schema `skillager.working.v2` and an advisory `exposure_changes` block. It classifies live current-project native, stub, and router targets as current, locally edited, intentionally kept local, partially missing, exposure-blocked, malformed-sidecar, or unmanaged. Items include `ownership: library | external`; current and kept-local targets contribute only to counts. Drift never changes readiness, `can_proceed`, or the exit code, and normal non-JSON `working` remains quiet.
+
+The check is metadata-only and read-only. It does not refresh collections, resolve library head freshness, write index entries, update sidecars, or alter target files. It reuses persisted fingerprints when valid and computes in memory otherwise. A fingerprint is only a performance hint based on eligible relative paths, sizes, and modification times; approval and exposure mutations always recompute full content hashes. Because there is no exposure ledger, a fully deleted exposure directory is not discoverable—partial deletion remains visible while its sidecar directory exists.
+
 Setup does not expose every approved skill by default. Approval makes a skill available for consideration; tagging and exposure are reversible project ergonomics based on what you are doing.
 
 Run `skillager doctor --agent codex` when the state seems off or the agent is stuck. Use `skillager doctor --agent codex --fix` to repair first-party working artifacts and project notes. `doctor` does not approve skills or expose third-party skills; it reports the exact setup, repair, lint, or migration action to run. Use `skillager doctor --json` when you want a broader machine-readable diagnostic report. These commands avoid printing skill bodies.

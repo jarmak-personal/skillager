@@ -417,6 +417,7 @@ class SkillagerCoreTests(unittest.TestCase):
             self.assertEqual(first[0]["status"], "materialized")
             sidecar = loads((target / "skillager.materialized.yaml").read_text(encoding="utf-8"))
             self.assertEqual(sidecar["source_hash"], working_source_hash("codex"))
+            self.assertRegex(sidecar["materialized_fingerprint"], r"^[0-9a-f]{64}$")
             original = (target / "SKILL.md").read_text(encoding="utf-8")
             with patch("skillager.materialize.render_working_skill", return_value="# Skillager Working\n\nChanged protocol.\n"):
                 second = materialize_working_skill(agents=["codex"], project_dir=root)

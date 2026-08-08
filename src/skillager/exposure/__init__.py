@@ -13,6 +13,7 @@ from .impl import (
     target_dir,
     working_source_hash,
 )
+from .drift import classify_exposure_target, scan_project_exposures
 
 __all__ = [
     "AGENT_NOTE",
@@ -26,4 +27,6 @@ __all__ = [
     "render_working_skill",
     "target_dir",
     "working_source_hash",
+    "classify_exposure_target",
+    "scan_project_exposures",
 ]

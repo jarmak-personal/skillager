@@ -161,9 +161,16 @@ def select_collection_skills(
     approval_root: Path | None = None,
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
+    refresh_library: bool = True,
 ) -> list[dict[str, Any]]:
     return select_visible_skills(
-        _collection_skills(state_root, name, trust_root=trust_root, approval_root=approval_root),
+        _collection_skills(
+            state_root,
+            name,
+            trust_root=trust_root,
+            approval_root=approval_root,
+            refresh_library=refresh_library,
+        ),
         include_blocked=include_blocked,
         include_lint_blocked=include_lint_blocked,
     )
@@ -175,13 +182,14 @@ def _collection_skills(
     *,
     trust_root: Path | None = None,
     approval_root: Path | None = None,
+    refresh_library: bool = True,
 ) -> list[dict[str, Any]]:
     names = [_slug(name)] if name else sorted(load_collections(state_root).get("collections", {}))
     trust_root = trust_root or state_root
     approval_root = approval_root or trust_root
     skills: list[dict[str, Any]] = []
     for collection_name in names:
-        data = _load_or_refresh_collection_index(state_root, collection_name)
+        data = _load_or_refresh_collection_index(state_root, collection_name, refresh_library=refresh_library)
         for skill in data.get("skills", []):
             skill = dict(skill)
             if skill.get("id") and skill.get("content_hash"):
@@ -678,9 +686,19 @@ def _collection_quarantined(
     return replace(skill, id=f"{collection}/{relative_id}", source=source)
 
 
-def _load_or_refresh_collection_index(state_root: Path, name: str) -> dict[str, Any]:
+def _load_or_refresh_collection_index(state_root: Path, name: str, *, refresh_library: bool = True) -> dict[str, Any]:
     collection = load_collections(state_root).get("collections", {}).get(name)
     if isinstance(collection, dict) and collection.get("kind") == LIBRARY_COLLECTION_KIND:
+        if not refresh_library:
+            return _load_collection_index(state_root, name) or {
+                "schema": "skillager.collection-index.v1",
+                "name": name,
+                "path": str(Path(collection["path"]).expanduser().resolve()),
+                "kind": LIBRARY_COLLECTION_KIND,
+                "library_id": collection.get("library_id"),
+                "skills": [],
+                "errors": [],
+            }
         root = Path(collection["path"]).expanduser().resolve()
         skills, errors = _index_collection_skills(state_root, name, root, collection=collection)
         return {

@@ -36,6 +36,12 @@ Restore is append-only. It resolves a unique Skillager content-hash prefix, reco
 
 Conflicts, in-progress operations, unrelated staged files, missing or ambiguous hashes, changed previews, unsafe historical trees, and current symlinks or excluded files fail closed. A transaction-only tree fingerprint also catches executable-mode changes that do not affect the public Skillager content hash. No-Git libraries explicitly report history as unavailable without affecting ordinary authored/imported library use.
 
+## Incremental Index And Exposure Drift
+
+Skillager stores an advisory fingerprint with each local index entry. The fingerprint covers the same agent-visible file set as `content_hash`, but uses relative path, byte size, and nanosecond modification time rather than reading file bodies. A hit may reuse the prior full hash, scanner result, and lint result for metadata/readiness work. A miss recomputes all three. Approval paths bypass the advisory cache, and exposure paths recompute the source content hash before writing, so fingerprint equality never authorizes trust or mutation.
+
+New materialization sidecars record `materialized_fingerprint` and `ownership`. `working --json` compares only live current-project targets and emits metadata-only drift in `exposure_changes`; it does not refresh source/library state, change readiness, or write state, sidecars, or target files. Exact kept-local and exposure-blocked decisions take precedence over ordinary local-edit classification. Unreadable or incomplete sidecars fail into an explicit error state. Fully deleted exposure directories remain unknowable without a ledger; Skillager does not infer their existence from global state.
+
 ## Static Scanner
 
 The scanner runs locally and does not use an agent. It scans the full skill directory, including `SKILL.md`, supporting docs, scripts, templates, and references.

@@ -14,6 +14,10 @@ from ..scan import scan_path
 from ..schema import QuarantinedSkill
 from ..signing import signature_info
 from ..trust import approval_key_for, content_hash, trust_info
+from .tree import content_tree_fingerprint
+
+
+INDEX_VERSION = 2
 
 
 def index_path(state_root: Path) -> Path:
@@ -28,17 +32,35 @@ def build_index(
     approval_root: Path | None = None,
     extra_paths: list[Path] | None = None,
     persist: bool = True,
+    reuse_cache: bool = True,
 ) -> dict[str, Any]:
     approval_root = approval_root or state_root
+    cached = _load_cached_entries(state_root) if reuse_cache else {}
     skills, errors = discover(paths, include_packages=include_packages, extra_paths=extra_paths)
     entries = []
     for skill in skills:
-        digest = content_hash(skill.root)
-        scan = scan_path(skill.root, allow_tools=False)
-        lint = skill.lint if isinstance(skill, QuarantinedSkill) else lint_skill(skill)
+        fingerprint = content_tree_fingerprint(skill.root)
+        prior = cached.get(_cache_key(skill.root))
+        cache_hit = bool(
+            prior
+            and prior.get("tree_fingerprint") == fingerprint
+            and isinstance(prior.get("content_hash"), str)
+            and isinstance(prior.get("scan"), dict)
+            and isinstance(prior.get("lint"), dict)
+        )
+        if cache_hit:
+            assert prior is not None
+            digest = str(prior["content_hash"])
+            scan = dict(prior["scan"])
+            lint = dict(prior["lint"])
+        else:
+            digest = content_hash(skill.root)
+            scan = scan_path(skill.root, allow_tools=False)
+            lint = skill.lint if isinstance(skill, QuarantinedSkill) else lint_skill(skill)
         approval_key = approval_key_for(skill.id, skill.root, skill.source, entrypoint=skill.entrypoint)
         trust = trust_info(state_root, skill.id, digest, lint=lint, approval_key=approval_key, approval_root=approval_root)
         entry = skill.to_index(digest, scan, trust.get("state", "discovered"))
+        entry["tree_fingerprint"] = fingerprint
         entry["lint"] = lint
         signature = signature_info(skill.root)
         if signature:
@@ -53,11 +75,32 @@ def build_index(
         mark_authored_metadata(entry)
         entries.append(entry)
     entries.sort(key=lambda item: item["id"])
-    data = {"version": 1, "skills": entries, "errors": errors}
+    data = {"version": INDEX_VERSION, "skills": entries, "errors": errors}
     if persist:
         state_root.mkdir(parents=True, exist_ok=True)
         index_path(state_root).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return data
+
+
+def _load_cached_entries(state_root: Path) -> dict[str, dict[str, Any]]:
+    path = index_path(state_root)
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    if data.get("version") != INDEX_VERSION:
+        return {}
+    return {
+        _cache_key(Path(str(entry["root"]))): entry
+        for entry in data.get("skills", [])
+        if isinstance(entry, dict) and entry.get("root")
+    }
+
+
+def _cache_key(root: Path) -> str:
+    return str(root.expanduser().resolve())
 
 
 def load_index(state_root: Path, *, approval_root: Path | None = None, persist_missing: bool = True) -> dict[str, Any]:

@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from skillager.simple_yaml import load_mapping
 from tests.behavior.support import BODY_SENTINEL, CliResult, make_basic_workspace
 
 
@@ -131,6 +132,10 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             stub = project / ".agents" / "skills" / "lib-orbital-review" / "SKILL.md"
             self.assertTrue(stub.is_file())
             self.assertNotIn(BODY_SENTINEL, stub.read_text(encoding="utf-8"))
+            sidecar = load_mapping(stub.parent / "skillager.materialized.yaml")
+            self.assertEqual(sidecar["ownership"], "library")
+            self.assertEqual(sidecar["source_library_id"], library_id)
+            self.assertRegex(sidecar["materialized_fingerprint"], r"^[0-9a-f]{64}$")
 
             shown = cli.run("show", "lib/orbital-review", "--content")
             self.assert_code(shown, 0)

@@ -15,6 +15,7 @@ CONTENT_TREE_EXCLUDES = {
     "skillager.materialized.yaml",
 }
 TRANSIENT_PATTERNS = ("*.tmp", "*.swp", "*~")
+TREE_FINGERPRINT_SCHEMA = "skillager.tree-fingerprint.v1"
 
 
 def iter_content_files(root: Path) -> list[Path]:
@@ -79,10 +80,36 @@ def content_tree_manifest(root: Path) -> dict[str, str]:
     return result
 
 
+def content_tree_fingerprint(root: Path) -> str:
+    """Return a cheap advisory fingerprint for the canonical content tree.
+
+    The fingerprint intentionally uses metadata rather than file bytes. It is a cache
+    invalidation hint only; content hashes remain authoritative for approval and
+    mutation decisions.
+    """
+
+    root = root.resolve()
+    digest = hashlib.sha256()
+    digest.update(TREE_FINGERPRINT_SCHEMA.encode("utf-8"))
+    digest.update(b"\0")
+    for path in iter_content_files(root):
+        relative = path.relative_to(root).as_posix()
+        stat = path.stat(follow_symlinks=False)
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(stat.st_size).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(stat.st_mtime_ns).encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 __all__ = [
     "CONTENT_TREE_EXCLUDES",
+    "TREE_FINGERPRINT_SCHEMA",
     "TRANSIENT_PATTERNS",
     "content_path_excluded",
+    "content_tree_fingerprint",
     "content_tree_manifest",
     "copy_content_tree",
     "iter_content_files",

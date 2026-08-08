@@ -12,6 +12,10 @@ from unittest.mock import patch
 from support import chdir
 from skillager.cli import main
 from skillager.index import build_index
+from skillager.simple_yaml import dumps
+from skillager.skills import index as index_impl
+from skillager.skills.tree import content_tree_fingerprint
+from skillager.trust import content_hash
 
 
 def write_skill(root: Path, body: str = "# Demo\n\nUse demo guidance.\n") -> None:
@@ -77,6 +81,7 @@ class SkillagerWorkingTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
+            self.assertEqual(data["schema"], "skillager.working.v2")
             self.assertEqual(data["status"], "ready")
             self.assertTrue(data["can_proceed"])
             self.assertTrue(data["readiness"]["ready"])
@@ -98,7 +103,8 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.assertEqual(data["status"], "review-needed")
             self.assertFalse(data["can_proceed"])
             self.assertFalse(data["setup_complete"])
-            self.assertEqual(data["auto_approved_project_count"], 0)
+            self.assertNotIn("auto_approved_project_count", data)
+            self.assertNotIn("auto_approved_project_skills", data)
             self.assertEqual(data["pending_owner_review_count"], 1)
             self.assertFalse(data["readiness"]["review_ready"])
             self.assertTrue(data["readiness"]["artifacts_ready"])
@@ -134,8 +140,8 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.assertEqual(data["agent"], "claude")
             self.assertEqual(data["readiness"]["artifacts"]["command"], "skillager doctor --agent claude --fix")
             self.assertEqual(data["next"]["command"], "skillager setup --agent claude")
-            self.assertEqual(data["auto_approved_project_count"], 0)
-            self.assertEqual(data["auto_approved_project_skills"], [])
+            self.assertNotIn("auto_approved_project_count", data)
+            self.assertNotIn("auto_approved_project_skills", data)
             self.assertEqual(self.indexed_skill(root, state, "project/claude-tool")["trust"], "discovered")
 
     def test_working_does_not_approve_lint_warned_project_local_skill_after_setup(self) -> None:
@@ -154,7 +160,7 @@ class SkillagerWorkingTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
-            self.assertEqual(data["auto_approved_project_skills"], [])
+            self.assertNotIn("auto_approved_project_skills", data)
             skill = self.indexed_skill(root, state, "project/bad-manifest")
             self.assertEqual(skill["trust"], "lint_blocked")
             code, body, stderr = self.run_cli(["show", "project/bad-manifest", "--content"], root=root, state=state)
@@ -180,10 +186,88 @@ class SkillagerWorkingTests(unittest.TestCase):
             code, stdout, stderr = self.run_cli(["working", "--json"], root=root, state=state)
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
-            self.assertEqual(data["new_external_review_count"], 0)
+            self.assertNotIn("new_external_review_count", data)
+            self.assertNotIn("new_external_review", data)
             self.assertEqual(data["pending_external_review_count"], 1)
             self.assertEqual(data["pending_external_review"][0]["id"], "community/external-tool")
             self.assertEqual(data["pending_owner_review_count"], 1)
+
+    def test_working_v2_reports_advisory_exposure_drift_without_changing_readiness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            target = root / ".agents" / "skills" / "community-demo"
+            write_skill(target, "# Managed\n\nPrivate original body.\n")
+            sidecar = {
+                "schema": "skillager.materialized.v1",
+                "id": "community/demo",
+                "source_id": "community/demo",
+                "source_type": "collection",
+                "source_package": "community",
+                "source_hash": "source-hash",
+                "materialized_hash": content_hash(target),
+                "materialized_fingerprint": content_tree_fingerprint(target),
+                "agent": "codex",
+                "scope": "project",
+                "customized": False,
+                "ownership": "external",
+            }
+            (target / "skillager.materialized.yaml").write_text(dumps(sidecar), encoding="utf-8")
+            (target / "SKILL.md").write_text("# Managed\n\nPrivate changed body.\n", encoding="utf-8")
+
+            code, stdout, stderr = self.run_cli(["working", "--agent", "codex", "--json"], root=root, state=state)
+
+            self.assertEqual(code, 0, stderr)
+            data = json.loads(stdout)
+            self.assertEqual(data["schema"], "skillager.working.v2")
+            self.assertTrue(data["can_proceed"])
+            self.assertEqual(data["status"], "ready")
+            self.assertEqual(data["exposure_changes"]["local_edits"], 1)
+            self.assertEqual(data["exposure_changes"]["items"][0]["status"], "local_edit")
+            self.assertEqual(data["exposure_changes"]["items"][0]["ownership"], "external")
+            self.assertNotIn("Private original body", stdout)
+            self.assertNotIn("Private changed body", stdout)
+
+    def test_warm_working_uses_persisted_fingerprint_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            self.setup_project(root, state)
+
+            with (
+                patch.object(index_impl, "content_hash", side_effect=AssertionError("warm working rehashed a skill")),
+                patch.object(index_impl, "scan_path", side_effect=AssertionError("warm working rescanned a skill")),
+                patch.object(index_impl, "lint_skill", side_effect=AssertionError("warm working relinted a skill")),
+            ):
+                code, stdout, stderr = self.run_cli(["working", "--json"], root=root, state=state)
+
+            self.assertEqual(code, 0, stderr)
+            self.assertEqual(json.loads(stdout)["schema"], "skillager.working.v2")
+
+    def test_working_reuses_saved_library_index_without_resolving_library_freshness(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            library = root / "library"
+            code, _, stderr = self.run_cli(
+                ["library", "init", "--path", str(library), "--no-git"],
+                root=root,
+                state=state,
+            )
+            self.assertEqual(code, 0, stderr)
+            code, _, stderr = self.run_cli(["library", "new", "cached-skill"], root=root, state=state)
+            self.assertEqual(code, 0, stderr)
+
+            with patch(
+                "skillager.catalog.impl._index_collection_skills",
+                side_effect=AssertionError("working resolved live library freshness"),
+            ):
+                code, stdout, stderr = self.run_cli(["working", "--json"], root=root, state=state)
+
+            self.assertEqual(code, 0, stderr)
+            data = json.loads(stdout)
+            self.assertEqual(data["schema"], "skillager.working.v2")
+            self.assertEqual(data["pending_external_review"][0]["id"], "lib/cached-skill")
 
 
 if __name__ == "__main__":
