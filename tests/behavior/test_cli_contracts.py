@@ -119,6 +119,98 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assertIn("# GIS Domain", activated.stdout)
             self.assertIn(BODY_SENTINEL, activated.stdout)
 
+    def test_working_plain_ready_output_is_compact_and_body_safe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            project, cli = self.make_workspace(Path(tmp_name))
+            self.write_skill(project)
+
+            setup = cli.run(
+                "setup",
+                "--source",
+                "project",
+                "--accept-low",
+                "--agent",
+                "codex",
+                "--no-packages",
+                "--summary-json",
+            )
+            self.assert_code(setup, 0)
+            self.assert_body_not_exposed(setup)
+
+            working = cli.run("working", "--agent", "codex")
+            self.assert_code(working, 0)
+            self.assert_body_not_exposed(working)
+            self.assertIn("Skillager ready.", working.stdout)
+            self.assertIn("1 available source entry -> 1 Codex-ready choice(s)", working.stdout)
+            self.assertIn("Tell your agent what you plan to do", working.stdout)
+
+    def test_agent_search_is_monotonic_by_displayed_fractional_score(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            project, cli = self.make_workspace(Path(tmp_name))
+            lower = project / ".skills" / "lower"
+            higher = project / ".skills" / "higher"
+            lower.mkdir(parents=True)
+            higher.mkdir(parents=True)
+            (lower / "SKILL.md").write_text(
+                "# Lower\n\nUse alpha beta guidance.\n\nApply gamma.\n",
+                encoding="utf-8",
+            )
+            (higher / "SKILL.md").write_text(
+                "# Higher\n\nUse alpha beta guidance.\n\nApply gamma and delta.\n",
+                encoding="utf-8",
+            )
+            setup = cli.run("setup", "--source", "project", "--accept-low", "--no-packages", "--summary-json")
+            self.assert_code(setup, 0)
+            exposed = cli.run("expose", "project/lower", "--mode", "native", "--agent", "codex", "--json")
+            self.assert_code(exposed, 0)
+
+            search = cli.run(
+                "search",
+                "alpha beta gamma delta",
+                "--agent",
+                "codex",
+                "--json",
+                "--limit",
+                "0",
+            )
+
+            self.assert_code(search, 0)
+            self.assert_body_not_exposed(search)
+            results = search.json()
+            self.assertEqual([item["id"] for item in results[:2]], ["project/higher", "project/lower"])
+            self.assertGreater(float(results[0]["score"]), float(results[1]["score"]))
+
+    def test_working_prefers_existing_router_over_repeated_curation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            project, cli = self.make_workspace(Path(tmp_name))
+            self.write_skill(project)
+            setup = cli.run(
+                "setup",
+                "--source",
+                "project",
+                "--accept-low",
+                "--agent",
+                "codex",
+                "--no-packages",
+                "--summary-json",
+            )
+            self.assert_code(setup, 0)
+            tagged = cli.run("tag", "add", "gis", "project/gis-domain")
+            self.assert_code(tagged, 0)
+            exposed = cli.run("expose", "--tag", "gis", "--mode", "router", "--agent", "codex", "--scope", "project")
+            self.assert_code(exposed, 0)
+
+            plain = cli.run("working", "--agent", "codex")
+            self.assert_code(plain, 0)
+            self.assert_body_not_exposed(plain)
+            self.assertIn("Use the existing router tag(s) first: gis.", plain.stdout)
+            self.assertNotIn("Tell your agent what you plan to do", plain.stdout)
+
+            working = cli.run("working", "--agent", "codex", "--json")
+            self.assert_code(working, 0)
+            self.assertFalse(working.json()["curation"]["recommended"])
+            self.assertEqual(working.json()["curation"]["existing_router_tags"], ["gis"])
+
 
 if __name__ == "__main__":
     unittest.main()

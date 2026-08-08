@@ -396,11 +396,12 @@ def add_doctor_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 def add_working_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     p = sub.add_parser(
         "working",
-        help="Quietly check Skillager readiness for an active agent session.",
+        help="Check Skillager readiness for an active agent session.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
-            Read Skillager's local inventory for a resumed agent session.
+            Read Skillager's local inventory for a resumed agent session. Plain
+            output is a concise human status; --json is the agent contract.
             External package, collection, environment, and global skills still
             require review before body access, activation, or exposure.
             """
@@ -1178,6 +1179,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if fresh_project_reset is not None:
         report["fresh_project_reset"] = fresh_project_reset
     report["no_manifest_skills"] = _no_manifest_skill_summary(report["selected"])
+    report["approval_provenance"] = _setup_approval_provenance(report)
     _remember_setup_paths(root(args), args.paths or None)
     _mark_setup_complete(root(args), project_dir=project_dir)
     _record_project_registry(args, project_dir)
@@ -1264,7 +1266,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 if bootstrap.get("performed") and bootstrap.get("artifacts_ready"):
                     _print_agent_next_steps(list(bootstrap.get("artifacts") or []))
             if bootstrap is None or not _setup_already_printed_specific_guidance(bootstrap):
-                print("Next step: restart or clear the agent; it should run `skillager working`, then continue with your request. Run `skillager doctor --agent <agent>` when you want explicit diagnostics.")
+                print(
+                    "Next step: restart or clear the agent and tell it what you plan to do. "
+                    "It should run `skillager working --json`, search available metadata, and curate a focused tag/router only when useful. "
+                    "Run `skillager doctor --agent <agent>` when you want explicit diagnostics."
+                )
     return 0
 
 
@@ -1276,8 +1282,9 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
     review_needed = [skill for skill in selected if skill.get("trust") == "discovered"]
     lint_blocked = [skill for skill in selected if skill.get("trust") == "lint_blocked"]
     blocked = [skill for skill in selected if skill.get("trust") == "blocked"]
-    newly_available = sum(1 for item in action.get("changed", []) if item.get("state") in TRUSTED_STATES)
-    prior_approvals = int(report.get("global_approved") or 0)
+    provenance = report.get("approval_provenance") or {}
+    newly_available = int(provenance.get("reviewed_this_run") or 0)
+    prior_approvals = int(provenance.get("reused_global_exact_hash_approvals") or 0)
     collapsed = int(inventory.get("collapsed_variants") or 0)
     agent_label = _agent_label([inventory_agent]) if inventory_agent else "agent"
     agent_ready_label = f"{agent_label}-ready" if inventory_agent else "agent-ready"
@@ -1296,22 +1303,43 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
         if lint_blocked:
             print(f"  - Lint-blocked: {len(lint_blocked)} skill(s)")
     else:
-        print("  - Owner review: no action needed")
+        reused = int(provenance.get("reused_global_exact_hash_approvals") or 0)
+        reviewed = int(provenance.get("reviewed_this_run") or 0)
+        if reused and not reviewed:
+            print(f"  - Owner review this run: no new decision; {reused} exact hash(es) matched reusable global approvals")
+        else:
+            print("  - Owner review: no action needed")
+    scanner = (report.get("approval_provenance") or {}).get("scanner") or {}
+    if scanner:
+        risk = ", ".join(f"{name}={count}" for name, count in (scanner.get("by_risk") or {}).items())
+        print(
+            f"  - Local scanner: scanned {scanner.get('current_content_scanned', 0)} current skill(s); "
+            f"{scanner.get('finding_count', 0)} finding(s)"
+        )
+        if risk:
+            print(f"  - Current skill risk distribution: {risk}")
+        non_low = list(scanner.get("non_low") or [])
+        if non_low:
+            print("  - Non-low scanner results:")
+            for item in non_low[:12]:
+                codes = ", ".join(item.get("finding_codes") or []) or "no finding code"
+                print(f"    - {item.get('id')}: {item.get('risk')}, {item.get('finding_count', 0)} finding(s) ({codes})")
+            if len(non_low) > 12:
+                print(f"    - ... {len(non_low) - 12} more non-low skill(s)")
     lint_overrides = _lint_override_items(action)
     if lint_overrides:
         print(f"  - Lint overrides recorded this run: {len(lint_overrides)} (audited)")
     print(f"  - Blocked skills: {len(blocked)}" if blocked else "  - Blocked skills: none")
     print()
     print("What you have:")
-    print(f"  - {available_choices} {agent_ready_label} skill(s) available on demand")
-    print(f"  - {exposed} skill(s) exposed now")
-    print(
-        f"  - {inventory.get('available_source_entries', 0)} approved source entr"
-        f"{'y' if inventory.get('available_source_entries', 0) == 1 else 'ies'} total"
-    )
+    source_entries = int(inventory.get("available_source_entries") or 0)
+    agent_on_demand = int(inventory.get("agent_visible_on_demand") or 0)
+    collapsed_suffix = f" ({collapsed} alternate-agent variant(s) collapsed)" if collapsed else ""
+    print(f"  - {source_entries} approved source entr{'y' if source_entries == 1 else 'ies'} -> {available_choices} {agent_ready_label} choice(s){collapsed_suffix}")
+    print(f"  - {exposed} source entr{'y' if exposed == 1 else 'ies'} exposed now; {agent_on_demand} {agent_ready_label} choice(s) on demand")
     if newly_available:
         print(f"  - {newly_available} skill(s) newly reviewed in this setup")
-    notes = _setup_scan_notes(report, prior_approvals=prior_approvals, collapsed=collapsed, on_demand=on_demand)
+    notes = _setup_scan_notes(report, prior_approvals=prior_approvals, on_demand=on_demand)
     if notes:
         print()
         print("Notes:")
@@ -1326,7 +1354,7 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
             print("  skillager list --summary-json")
 
 
-def _setup_scan_notes(report: dict[str, Any], *, prior_approvals: int, collapsed: int, on_demand: int) -> list[str]:
+def _setup_scan_notes(report: dict[str, Any], *, prior_approvals: int, on_demand: int) -> list[str]:
     notes: list[str] = []
     no_manifest = report.get("no_manifest_skills") or {}
     by_source = no_manifest.get("by_source") or {}
@@ -1334,12 +1362,13 @@ def _setup_scan_notes(report: dict[str, Any], *, prior_approvals: int, collapsed
         source_bits = ", ".join(f"{source}={count}" for source, count in sorted(by_source.items()))
         notes.append(f"no-manifest skills discovered: {source_bits}")
     if prior_approvals:
-        notes.append(f"{prior_approvals} skill(s) available from prior reusable approvals")
+        notes.append(
+            f"{prior_approvals} unchanged exact content hash(es) matched prior reusable global approvals; "
+            "owner review prompts were not repeated"
+        )
     skipped = int(report.get("skipped_global") or 0)
     if skipped:
         notes.append(f"{skipped} already-installed global skill(s) skipped; use --include-global to review them")
-    if collapsed:
-        notes.append(f"{collapsed} alternate-agent variant(s) collapsed for this agent view")
     if on_demand:
         notes.append("agents can inspect these with `skillager working`, `skillager list`, and `skillager search`")
     return notes
@@ -1423,8 +1452,10 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
         "fresh_reset": report.get("fresh_reset", 0),
         "global_reset": report.get("global_reset", 0),
         "global_approved": report.get("global_approved", 0),
+        "reused_global_approved": report.get("reused_global_approved", 0),
         "fresh_project_reset": report.get("fresh_project_reset"),
         "no_manifest_skills": report.get("no_manifest_skills"),
+        "approval_provenance": report.get("approval_provenance"),
         "errors": len(report.get("errors", [])),
         "summary": report.get("summary", {}),
         "action": report.get("action", {}),
@@ -1439,11 +1470,58 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
 
 def _public_setup_report(report: dict[str, Any]) -> dict[str, Any]:
     public = dict(report)
+    public.pop("_reused_global_approved_ids", None)
     if isinstance(public.get("selected"), list):
         public["selected"] = [_public_full_skill_metadata(skill) for skill in public["selected"] if isinstance(skill, dict)]
     if "bootstrap" in public:
         public["working_artifacts"] = _public_working_artifacts_payload(public.pop("bootstrap"))
     return public
+
+
+def _setup_approval_provenance(report: dict[str, Any]) -> dict[str, Any]:
+    selected = list(report.get("selected") or [])
+    changed = list((report.get("action") or {}).get("changed") or [])
+    reused_ids = set(report.get("_reused_global_approved_ids") or [])
+    reviewed_this_run = sum(
+        1
+        for item in changed
+        if item.get("state") in TRUSTED_STATES and item.get("skill_id") not in reused_ids
+    )
+    reused = len(reused_ids)
+    scan = _status_scan_summary(selected)
+    non_low = []
+    for skill in selected:
+        skill_scan = skill.get("scan") or {}
+        risk = str(skill_scan.get("risk") or "unknown")
+        if risk in {"low", "unknown"}:
+            continue
+        findings = list(skill_scan.get("findings") or [])
+        non_low.append(
+            {
+                "id": skill.get("id"),
+                "risk": risk,
+                "finding_count": len(findings),
+                "finding_codes": sorted(
+                    {
+                        str(item.get("code") or item.get("rule_key") or "unknown")
+                        for item in findings
+                        if isinstance(item, dict)
+                    }
+                ),
+            }
+        )
+    return {
+        "reused_global_exact_hash_approvals": reused,
+        "reviewed_this_run": reviewed_this_run,
+        "current_hashes_scanned": len(selected),
+        "scanner": {
+            "current_content_scanned": len(selected),
+            "by_risk": scan["by_risk"],
+            "finding_count": scan["finding_count"],
+            "non_low": non_low,
+        },
+        "policy": "current content is scanned locally; matching reusable approvals apply only to the same exact content hash",
+    }
 
 
 def _setup_action_requested(args: argparse.Namespace) -> bool:
@@ -1882,6 +1960,8 @@ def cmd_working(args: argparse.Namespace) -> int:
     )
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        _print_working_result(result)
     return 0
 
 
@@ -1911,6 +1991,11 @@ def _build_working_result(
         agent=agent,
         catalog_root=catalog_root,
     )
+    inventory = _available_inventory_summary(
+        view["approved"],
+        agent=agent,
+        project_exposure=view["project_exposure"],
+    )
     return {
         "schema": WORKING_RESULT_SCHEMA,
         "status": diagnosis["status"],
@@ -1922,12 +2007,76 @@ def _build_working_result(
         "pending_external_review_count": len(pending_external),
         "pending_external_review": [_working_sync_item(skill) for skill in pending_external],
         "exposure_changes": exposure_changes,
+        "inventory": inventory,
+        "curation": _working_curation(inventory, agent=agent, exposed_router_tags=view["exposed_router_tags"]),
         "readiness": view["readiness"],
         "next": {
             "command": diagnosis.get("command"),
             "next_commands": diagnosis.get("next_commands", []),
         },
     }
+
+
+def _working_curation(
+    inventory: dict[str, Any],
+    *,
+    agent: str | None,
+    exposed_router_tags: list[str],
+) -> dict[str, Any]:
+    suffix = f" --agent {agent}" if agent else ""
+    choices = int(inventory.get("agent_visible_on_demand") or 0)
+    existing = sorted(exposed_router_tags)
+    return {
+        "recommended": bool(choices) and not existing,
+        "existing_router_tags": existing,
+        "when": "when a specialized skill may help with the user's current goal",
+        "message": (
+            f"Use the existing router tag(s) first: {', '.join(existing)}. Search and curate again only when the current goal falls outside them."
+            if existing
+            else (
+                "Search available metadata using the user's goal, then curate a focused tag/router only when useful."
+                if choices
+                else "No available on-demand skill choices need curation."
+            )
+        ),
+        "inventory_command": f"skillager list --summary-json{suffix}",
+        "search_command": f'skillager search "<user-goal>"{suffix} --json',
+    }
+
+
+def _print_working_result(result: dict[str, Any]) -> None:
+    status = str(result.get("status") or "unknown")
+    inventory = result.get("inventory") or {}
+    changes = result.get("exposure_changes") or {}
+    if result.get("can_proceed"):
+        print("Skillager ready.")
+    else:
+        print(f"Skillager needs attention: {status}.")
+    source_entries = int(inventory.get("available_source_entries") or 0)
+    choices = int(inventory.get("agent_visible_choices") or source_entries)
+    collapsed = int(inventory.get("collapsed_variants") or 0)
+    exposed = int(inventory.get("exposed_now") or 0)
+    count_text = f"{source_entries} available source entr{'y' if source_entries == 1 else 'ies'}"
+    if result.get("agent"):
+        count_text += f" -> {choices} {_agent_label([result['agent']])}-ready choice(s)"
+        if collapsed:
+            count_text += f" ({collapsed} alternate variant(s) collapsed)"
+    print(f"  {count_text}; {exposed} source entries exposed.")
+    pending = int(result.get("pending_owner_review_count") or 0)
+    if pending:
+        print(f"  Owner review needed: {pending} skill(s).")
+    changed = int(changes.get("total") or 0)
+    if changed:
+        print(f"  Exposure changes need reconciliation: {changed}.")
+    next_commands = list((result.get("next") or {}).get("next_commands") or [])
+    if next_commands:
+        print("Next:")
+        for command in next_commands:
+            print(f"  {command}")
+    elif (result.get("curation") or {}).get("existing_router_tags"):
+        print(str((result.get("curation") or {}).get("message") or ""))
+    elif (result.get("curation") or {}).get("recommended"):
+        print("Tell your agent what you plan to do; it can search available metadata and curate a focused router when useful.")
 
 
 def _working_pending_external_review(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2706,12 +2855,14 @@ def _available_inventory_summary(
     agent_visible = _collapse_agent_variant_results(available, agent) if agent else available
     exposed_ids = _project_exposure_breakdown(project_exposure or {}, skill_ids={skill["id"] for skill in available})["exposed_ids"]
     available_ids = {skill["id"] for skill in available}
+    agent_visible_ids = {skill["id"] for skill in agent_visible}
     return {
         "selected_source_entries": len(skills),
         "available_source_entries": source_entry_count,
         "agent_visible_choices": len(agent_visible),
         "exposed_now": len(exposed_ids),
         "available_on_demand": len(available_ids.difference(exposed_ids)),
+        "agent_visible_on_demand": len(agent_visible_ids.difference(exposed_ids)),
         "collapsed_variants": max(0, source_entry_count - len(agent_visible)),
         "basis": "available source entries; agent-visible choices collapse alternate native-agent variants when --agent is set",
     }
@@ -3728,7 +3879,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         results = _sort_agent_variant_search(results, args.agent)
     if args.limit:
         results = results[: args.limit]
-    if args.json:
+    if args.json or args.full_json:
         payload = [_public_full_skill_metadata(skill) for skill in results] if args.full_json else [_compact_search_result(skill, agent=args.agent) for skill in results]
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
@@ -4030,7 +4181,7 @@ def _sort_agent_variant_search(skills: list[dict[str, Any]], agent: str) -> list
     return sorted(
         skills,
         key=lambda skill: (
-            -int(skill.get("score") or 0),
+            -float(skill.get("score") or 0),
             _visibility_rank_for_cli(skill),
             _agent_variant_rank(skill, agent),
             str(skill.get("id") or ""),
@@ -5885,7 +6036,7 @@ def _interactive_setup(
                 approved,
                 state_root=state_root,
                 catalog_root=catalog_root,
-                prompt_prefix="Review complete. ",
+                prompt_prefix="Review requirements satisfied. ",
                 agents=agents,
                 no_bootstrap=no_bootstrap,
                 project_dir=project_dir,
@@ -6317,6 +6468,8 @@ def _print_setup_completion_summary(
     agents: list[str],
 ) -> None:
     approved = [skill for skill in skills if skill.get("trust") in TRUSTED_STATES]
+    agent = agents[0] if len(agents) == 1 else "codex"
+    agent_visible = _collapse_agent_variant_results(approved, agent)
     exposed_ids: set[str] = set()
     for item in results:
         skill_id = item.get("skill_id")
@@ -6326,10 +6479,9 @@ def _print_setup_completion_summary(
             and skill_id != "skillager/working"
         ):
             exposed_ids.add(skill_id)
-    hidden = [skill for skill in approved if skill["id"] not in exposed_ids]
+    hidden = [skill for skill in agent_visible if skill["id"] not in exposed_ids]
     if not approved:
         return
-    agent = agents[0] if len(agents) == 1 else "codex"
     inventory = _available_inventory_summary(
         skills,
         agent=agent,
@@ -6342,25 +6494,26 @@ def _print_setup_completion_summary(
     print("  - Working artifacts: installed")
     print()
     print("What you have:")
-    print(f"  - {inventory.get('agent_visible_choices', 0)} {_agent_label([agent])}-ready skill(s) available on demand")
-    print(f"  - {inventory.get('exposed_now', 0)} skill(s) exposed now")
+    source_entries = int(inventory.get("available_source_entries") or 0)
+    choices = int(inventory.get("agent_visible_choices") or 0)
+    collapsed = int(inventory.get("collapsed_variants") or 0)
+    collapsed_suffix = f" ({collapsed} alternate-agent variant(s) collapsed)" if collapsed else ""
+    print(f"  - {source_entries} approved source entr{'y' if source_entries == 1 else 'ies'} -> {choices} {_agent_label([agent])}-ready choice(s){collapsed_suffix}")
     print(
-        f"  - {inventory.get('available_source_entries', 0)} approved source entr"
-        f"{'y' if inventory.get('available_source_entries', 0) == 1 else 'ies'} total"
+        f"  - {inventory.get('exposed_now', 0)} source entries exposed now; "
+        f"{inventory.get('agent_visible_on_demand', 0)} {_agent_label([agent])}-ready choice(s) on demand"
     )
-    if inventory.get("collapsed_variants"):
-        print(f"  - {inventory.get('collapsed_variants')} alternate-agent variant(s) collapsed for {_agent_label([agent])}")
     if hidden:
         print()
         print("  Stub candidates")
         print("    These are available but not loaded as native skills. Stub any that should be easy to invoke by name:")
-        for index, skill in enumerate(hidden[:25], start=1):
+        for index, skill in enumerate(hidden[:12], start=1):
             summary = _first_sentence(skill.get("summary", ""))
             print(f"    {index}. {skill['id']}")
             if summary:
                 _print_wrapped("       ", summary, width=_output_width(), max_chars=110)
-        if len(hidden) > 25:
-            print(f"    ... {len(hidden) - 25} more available hidden skill(s)")
+        if len(hidden) > 12:
+            print(f"    ... {len(hidden) - 12} more available hidden skill(s)")
         print()
         print("    To stub specific skills:")
         print(f"    skillager expose <skill-id> --mode stub --agent {agent} --scope project")
@@ -6525,7 +6678,8 @@ def _print_agent_next_steps(results: list[dict[str, Any]]) -> None:
     else:
         print(f"  - Restart {_agent_label(agents)} in the directory where you ran Skillager.")
     if first_party_artifacts:
-        print("  - The agent should run `skillager working` after context resets; use `skillager doctor --agent <agent>` for diagnostics.")
+        print("  - Tell the agent what you plan to do. It should run `skillager working --json`, search available metadata, and curate a focused tag/router only when useful.")
+        print("  - Use `skillager doctor --agent <agent>` for explicit diagnostics.")
     else:
         print("  - The agent will discover Skillager-managed native skills from the native skill directory.")
 

@@ -111,7 +111,7 @@ targets:
 
 Cargo `versions` values are normalized as compact non-empty strings for targeting and search; Skillager does not invoke Cargo or resolve version requirements during lint or discovery. V1 discovery reads the current project's `Cargo.lock`, then looks for matching crate sources in the local Cargo registry/git cache and matching local crate roots under the project tree.
 
-The manifest is intentionally structured-only. It cannot declare `id`, `name`, `summary`, `source`, `entrypoint`, `safety`, `triggers`, `domains`, `tools`, or `references`. Skillager derives identity from the package/path and from the reviewed `SKILL.md` body: simple `name`/`description` frontmatter when present, then top-level heading/first sentence fallbacks.
+The manifest is intentionally structured-only. It cannot declare `id`, `name`, `summary`, `source`, `entrypoint`, `safety`, `triggers`, `domains`, `tools`, or `references`. Skillager derives identity from the package/path and from the reviewed `SKILL.md` body: simple `name`/`description` frontmatter when present, then a concise top-level heading, the path-derived name, and the first prose sentence. Clearly fragmentary headings—such as templates, code fragments, versioned contract labels, or long sentence-like instructions—fall back to the stable directory name. Use frontmatter when a deliberately different display name is required.
 
 `skillager.yaml` uses a strict loader: one document, string keys, no duplicate keys, no anchors, no aliases, no merge keys, no custom tags, and a small file-size cap. Unknown keys lint-block the skill.
 

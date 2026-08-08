@@ -37,7 +37,7 @@ skillager working --agent codex --json
 
 `setup` discovers local/project skills, package-provided skills, collections, and native agent skills. It scans them and only makes content available after your review. Skillager is installed once as a user tool; it does not need to live inside every project environment.
 
-`working --json` uses the `skillager.working.v2` schema. Its advisory `exposure_changes` block reports current-project managed copies that are locally edited, intentionally kept local, partially missing, blocked, malformed, or unmanaged. Drift does not change readiness or the command's exit code, and normal human output stays quiet. Fully deleted exposure directories cannot be detected because Skillager intentionally keeps no cross-project exposure ledger.
+`working --json` uses the `skillager.working.v2` schema. Its advisory `exposure_changes` block reports current-project managed copies that are locally edited, intentionally kept local, partially missing, blocked, malformed, or unmanaged. Additive `inventory` and `curation` blocks distinguish source entries from agent-collapsed choices and suggest goal search without turning it into a required readiness action. When a router is already exposed, curation points to it first instead of recommending another router. Drift does not change readiness or the command's exit code. Plain `working` prints only a concise human status and next hint. Fully deleted exposure directories cannot be detected because Skillager intentionally keeps no cross-project exposure ledger.
 
 ## Core Model
 
@@ -74,6 +74,7 @@ Metadata commands stay metadata-only: `working`, `list`, `search`, `show` withou
 | Task | Command |
 | --- | --- |
 | Review or refresh a project | `skillager setup --agent codex` |
+| Check readiness and get a compact next hint | `skillager working --agent codex` |
 | Diagnose state | `skillager doctor --agent codex` |
 | Initialize your personal library | `skillager library init` |
 | Inspect personal library and Git state | `skillager library status --json` |
@@ -212,6 +213,8 @@ See the [package author guide](docs/LIBRARY_AUTHORS.md) for details.
 ## Safety
 
 Skillager's scanner is deterministic, local, and imperfect. It flags common agent-risk patterns such as instruction overrides, hidden prompt requests, credential paths, download-and-execute flows, secret exfiltration language, encoded blobs, and oversized content.
+
+Setup reports how many current hashes were scanned, newly reviewed, or matched reusable global approvals. Scanner finding totals and per-skill risk distribution are labeled separately; medium/high skill IDs and rule codes are listed without bodies. `--fresh-project` clears project-local decisions and curation, not reusable approvals; an approval is reused only when both its logical source identity and exact content hash still match.
 
 Human review decides availability. Signatures are provenance evidence, not safety signals: a verified signed skill still needs normal review before activation or exposure.
 

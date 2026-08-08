@@ -14,6 +14,8 @@ Skillager is a review and activation gate. It reduces accidental context exposur
 - Copy skills into project-local native directories so users can inspect and customize them.
 - Preserve content hashes so changed skills require fresh review.
 
+Setup always scans the current selected content locally. A reusable global approval suppresses a repeated owner prompt only when the logical source identity and exact current content hash match. Setup reports current hashes scanned, decisions recorded this run, and reusable exact-hash matches separately; scanner finding totals are distinct from the per-skill risk distribution, and non-low rows expose only IDs, risk, counts, and rule codes. `--fresh-project` does not imply deleting reusable catalog approvals.
+
 ## Personal Library Acceptance
 
 Library ownership does not grant body availability. Every new or edited `lib/<name>` skill remains pending until `skillager library accept` records its exact current tree hash. Pending bodies stay unavailable through `show --content`, activation, native/stub exposure, and routers; generic force or include-unreviewed flags do not bypass this boundary.

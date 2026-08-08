@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from support import chdir
 from skillager.cli import main
+from skillager.commands.impl import _sort_agent_variant_search
 from skillager.index import build_index, load_index
 from skillager.search import search as search_skills
 from skillager.skills import discovery as discovery_impl
@@ -96,6 +97,60 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             self.assertIn("name:gis", reasons)
             self.assertIn("summary:spatial", reasons)
             self.assertFalse(any(reason.endswith(":i") or reason.endswith(":in") or reason.endswith(":to") or reason.endswith(":be") for reason in reasons))
+
+    def test_search_suppresses_generic_body_only_matches_in_long_goals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            generic_entrypoint = Path(tmp) / "generic.md"
+            spatial_entrypoint = Path(tmp) / "spatial.md"
+            generic_entrypoint.write_text("# Helper\n\nHandle large data work in Python.\n", encoding="utf-8")
+            spatial_entrypoint.write_text("# Spatial\n\nApply topology-safe GIS operations.\n", encoding="utf-8")
+            skills = [
+                {
+                    "id": "project/generic",
+                    "name": "Unrelated Helper",
+                    "summary": "Use an unrelated utility.",
+                    "entrypoint": str(generic_entrypoint),
+                    "trust": "reviewed",
+                    "source": {"type": "project"},
+                },
+                {
+                    "id": "project/spatial",
+                    "name": "Spatial Operations",
+                    "summary": "Use GIS topology operations.",
+                    "entrypoint": str(spatial_entrypoint),
+                    "trust": "reviewed",
+                    "source": {"type": "project"},
+                },
+            ]
+
+            results = search_skills(
+                skills,
+                "large-scale GIS and spatial data work in Python",
+                include_untrusted=False,
+            )
+
+        self.assertEqual([item["id"] for item in results], ["project/spatial"])
+
+    def test_agent_search_sort_preserves_fractional_score_order(self) -> None:
+        results = _sort_agent_variant_search(
+            [
+                {
+                    "id": "project/lower-native",
+                    "score": 4.2,
+                    "exposure": "native",
+                    "source": {"type": "project"},
+                },
+                {
+                    "id": "community/higher-hidden",
+                    "score": 4.8,
+                    "exposure": "hidden",
+                    "source": {"type": "collection"},
+                },
+            ],
+            "codex",
+        )
+
+        self.assertEqual([item["score"] for item in results], [4.8, 4.2])
 
     def test_search_falls_back_when_fts5_is_unavailable(self) -> None:
         skills = [
@@ -222,7 +277,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                     self.assertEqual(main(["search", "GIS", "--agent", "codex", "--json", "--limit", "0"]), 0)
                 full_search_output = StringIO()
                 with redirect_stdout(full_search_output):
-                    self.assertEqual(main(["search", "GIS", "--agent", "codex", "--json", "--full-json", "--limit", "0"]), 0)
+                    self.assertEqual(main(["search", "GIS", "--agent", "codex", "--full-json", "--limit", "0"]), 0)
 
             summary = json.loads(summary_output.getvalue())
             self.assertEqual(summary["total"], 1)

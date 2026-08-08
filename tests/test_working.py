@@ -122,7 +122,8 @@ class SkillagerWorkingTests(unittest.TestCase):
             code, stdout, stderr = self.run_cli(["working"], root=root, state=state)
 
             self.assertEqual(code, 0, stderr)
-            self.assertEqual(stdout, "")
+            self.assertIn("Skillager needs attention: review-needed.", stdout)
+            self.assertIn("Owner review needed: 1 skill(s).", stdout)
             skill = self.indexed_skill(root, state, "project/local-tool")
             self.assertEqual(skill["trust"], "discovered")
 
@@ -174,13 +175,14 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.setup_project(root, state)
             code, stdout, stderr = self.run_cli(["working"], root=root, state=state)
             self.assertEqual(code, 0, stderr)
-            self.assertEqual(stdout, "")
+            self.assertIn("Skillager needs attention:", stdout)
 
             write_skill(root / "community" / ".agents" / "skills" / "external-tool")
             code, stdout, stderr = self.run_cli(["working"], root=root, state=state)
 
             self.assertEqual(code, 0, stderr)
-            self.assertEqual(stdout, "")
+            self.assertIn("Skillager needs attention: review-needed.", stdout)
+            self.assertIn("Owner review needed: 1 skill(s).", stdout)
             self.assertEqual(self.indexed_skill(root, state, "community/external-tool")["trust"], "discovered")
 
             code, stdout, stderr = self.run_cli(["working", "--json"], root=root, state=state)
@@ -191,6 +193,36 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.assertEqual(data["pending_external_review_count"], 1)
             self.assertEqual(data["pending_external_review"][0]["id"], "community/external-tool")
             self.assertEqual(data["pending_owner_review_count"], 1)
+
+    def test_working_plain_ready_output_and_json_offer_optional_goal_curation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            write_skill(root / ".skills" / "base", "# Base\n\nUse specialized base guidance.\n")
+            code, _, stderr = self.run_cli(
+                ["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-packages", "--summary-json"],
+                root=root,
+                state=state,
+            )
+            self.assertEqual(code, 0, stderr)
+
+            code, stdout, stderr = self.run_cli(["working", "--agent", "codex"], root=root, state=state)
+            self.assertEqual(code, 0, stderr)
+            self.assertIn("Skillager ready.", stdout)
+            self.assertIn("1 available source entry -> 1 Codex-ready choice(s)", stdout)
+            self.assertIn("Tell your agent what you plan to do", stdout)
+
+            code, stdout, stderr = self.run_cli(["working", "--agent", "codex", "--json"], root=root, state=state)
+            self.assertEqual(code, 0, stderr)
+            data = json.loads(stdout)
+            self.assertEqual(data["inventory"]["available_source_entries"], 1)
+            self.assertEqual(data["inventory"]["agent_visible_choices"], 1)
+            self.assertTrue(data["curation"]["recommended"])
+            self.assertEqual(
+                data["curation"]["search_command"],
+                'skillager search "<user-goal>" --agent codex --json',
+            )
+            self.assertIsNone(data["next"]["command"])
 
     def test_working_v2_reports_advisory_exposure_drift_without_changing_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

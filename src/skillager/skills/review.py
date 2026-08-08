@@ -482,6 +482,11 @@ def setup_environment(
             include_global=include_global,
         )
         skills = annotate_duplicate_content(skills)
+    reused_global_approved_ids = sorted(
+        str(skill["id"])
+        for skill in skills
+        if skill.get("id") and skill.get("trust_reason") == "global-approval"
+    )
     action = apply_review_action(
         state_root,
         skills,
@@ -518,6 +523,8 @@ def setup_environment(
         "fresh_reset": fresh_reset,
         "global_reset": global_reset,
         "global_approved": sum(1 for skill in selected if skill.get("trust_reason") == "global-approval"),
+        "reused_global_approved": len(reused_global_approved_ids),
+        "_reused_global_approved_ids": reused_global_approved_ids,
         "errors": data.get("errors", []),
         "selected": selected,
         "summary": review_summary(selected),

@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from support import TtyStringIO, chdir
 from skillager.cli import main
+from skillager.commands.impl import _print_setup_completion_summary
 from skillager.commands.impl import _interactive_review_lint_blocked
 from skillager.index import build_index, load_index
 from skillager.trust import set_trust
@@ -468,6 +469,10 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(reset_data["review_needed"], 0)
             self.assertEqual(reset_data["approved"], 1)
             self.assertEqual(reset_data["fresh_project_reset"]["retained_global_state"]["global_approvals"], 1)
+            self.assertEqual(reset_data["approval_provenance"]["reused_global_exact_hash_approvals"], 1)
+            self.assertEqual(reset_data["approval_provenance"]["reviewed_this_run"], 0)
+            self.assertEqual(reset_data["approval_provenance"]["scanner"]["current_content_scanned"], 1)
+            self.assertIn("exact content hash", reset_data["approval_provenance"]["policy"])
 
     def test_setup_with_agent_writes_working_artifacts_when_reusable_approval_already_applies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -504,7 +509,11 @@ class SkillagerSetupTests(unittest.TestCase):
                 chdir(project),
             ):
                 self.assertEqual(main(["setup", "--source", "project", "--fresh-project", "--accept-low", "--agent", "codex", "--no-packages"]), 0)
-            self.assertIn("skillager/working: written", output.getvalue())
+            text = output.getvalue()
+            self.assertIn("skillager/working: written", text)
+            self.assertIn("Owner review this run: no new decision; 1 exact hash(es) matched reusable global approvals", text)
+            self.assertIn("owner review prompts were not repeated", text)
+            self.assertIn("Local scanner: scanned 1 current skill(s)", text)
             self.assertTrue((project / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertTrue((project / "AGENTS.md").exists())
 
@@ -740,7 +749,10 @@ class SkillagerSetupTests(unittest.TestCase):
                         self.assertEqual(main(["setup", "--no-packages", "--non-interactive"]), 0)
             text = output.getvalue()
             self.assertIn("Owner review: no action needed", text)
-            self.assertIn("1 approved source entry total", text)
+            self.assertIn("Local scanner: scanned 1 current skill(s); 1 finding(s)", text)
+            self.assertIn("Current skill risk distribution: high=1", text)
+            self.assertIn("project/risky: high, 1 finding(s) (instruction_override)", text)
+            self.assertIn("1 approved source entry -> 1 agent-ready choice(s)", text)
             self.assertIn("Inspect available skills:", text)
             self.assertIn("skillager list --summary-json", text)
             self.assertNotIn("Needs review", text)
@@ -774,7 +786,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("audience:", text)
             self.assertIn("file:", text)
             self.assertNotIn("project/low [LOW] project/- discovered", text)
-            self.assertIn("Review complete. Install Skillager working skill", text)
+            self.assertIn("Review requirements satisfied. Install Skillager working skill", text)
             self.assertIn("Skillager setup complete", text)
             self.assertIn("Next step", text)
             self.assertIn(f"Skills were written to: {root / '.agents' / 'skills'}", text)
@@ -808,7 +820,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 self.assertEqual(main(["setup", "--audience", "other", "--no-packages"]), 0)
             text = stdout.getvalue()
             self.assertIn("project/api-example: skipped; remains unreviewed", text)
-            self.assertIn("Review complete. Install Skillager working skill", text)
+            self.assertIn("Review requirements satisfied. Install Skillager working skill", text)
             self.assertIn("skillager/working: written", text)
             self.assertIn("Skillager setup complete", text)
             self.assertIn("What you have", text)
@@ -819,6 +831,35 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-api-example" / "SKILL.md").exists())
+
+    def test_setup_completion_stub_candidates_use_agent_collapsed_inventory(self) -> None:
+        skills = [
+            {
+                "id": "project/gis-domain",
+                "name": "GIS Domain",
+                "summary": "Use GIS domain guidance.",
+                "entrypoint": "/workspace/.agents/skills/gis-domain/SKILL.md",
+                "trust": "reviewed",
+                "source": {"type": "project"},
+            },
+            {
+                "id": "project/gis-domain-vibespatial-claude",
+                "name": "GIS Domain",
+                "summary": "Use GIS domain guidance.",
+                "entrypoint": "/workspace/.claude/skills/gis-domain-vibespatial-claude/SKILL.md",
+                "trust": "reviewed",
+                "source": {"type": "project"},
+            },
+        ]
+        output = StringIO()
+
+        with redirect_stdout(output):
+            _print_setup_completion_summary(skills, [], agents=["codex"])
+
+        text = output.getvalue()
+        self.assertIn("2 approved source entries -> 1 Codex-ready choice(s) (1 alternate-agent variant(s) collapsed)", text)
+        self.assertIn("1. project/gis-domain", text)
+        self.assertNotIn("project/gis-domain-vibespatial-claude", text)
 
     def test_interactive_review_can_block_medium_risk_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -39,6 +39,8 @@ STOPWORDS = {
     "into",
     "is",
     "it",
+    "including",
+    "large",
     "may",
     "me",
     "my",
@@ -47,6 +49,7 @@ STOPWORDS = {
     "or",
     "our",
     "project",
+    "relevant",
     "should",
     "skill",
     "skills",
@@ -66,6 +69,8 @@ STOPWORDS = {
     "who",
     "will",
     "with",
+    "work",
+    "working",
     "workflow",
     "would",
     "you",
@@ -74,6 +79,16 @@ STOPWORDS = {
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
 BODY_SEARCH_CHAR_LIMIT = 50_000
+BODY_ONLY_STOPWORDS = {
+    "data",
+    "including",
+    "large",
+    "python",
+    "relevant",
+    "scale",
+    "work",
+    "working",
+}
 
 
 def search(
@@ -164,10 +179,13 @@ def _fts5_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any
     for rowid, _rank in rows:
         skill = skills[int(rowid) - 1]
         body_text = body_texts[skill["id"]]
+        reasons = _reasons(skill, terms, body_text=body_text)
+        if not reasons:
+            continue
         item = _with_score(
             skill,
             _score_boost(skill, terms, body_text=body_text),
-            _reasons(skill, terms, body_text=body_text),
+            reasons,
         )
         by_id.setdefault(skill["id"], item)
     return sorted(by_id.values(), key=lambda item: (-float(item["score"]), _visibility_rank(item), item["id"]))
@@ -249,7 +267,7 @@ def _score_boost(skill: dict[str, Any], terms: list[str], *, body_text: str) -> 
             score += 4.0
         if term in fields["summary"]:
             score += 2.0
-        if term in fields["body"]:
+        if term in fields["body"] and term not in BODY_ONLY_STOPWORDS:
             score += 0.2
         if term in fields["audience"]:
             score += 0.5
@@ -263,6 +281,8 @@ def _reasons(skill: dict[str, Any], terms: list[str], *, body_text: str) -> list
     reasons: list[str] = []
     for term in terms:
         for field in ("name", "tags", "package", "targets", "source", "summary", "body", "audience"):
+            if field == "body" and term in BODY_ONLY_STOPWORDS:
+                continue
             if term in fields[field]:
                 reasons.append(f"{field}:{term}")
                 break

@@ -599,7 +599,7 @@ Tests/gate:
 - Clean, local-edit, kept-local, partial-missing, blocked, malformed-sidecar, and
   unmanaged states classify correctly.
 - Fully deleted exposure directories remain explicitly undetectable without a ledger.
-- `working` readiness, exit code, quiet normal output, and metadata body boundaries are
+- `working` readiness, exit code, concise normal output, and metadata body boundaries are
   unchanged apart from the documented v2 JSON schema.
 - Read-purity tests prove `working` writes no catalog, project state, sidecar, or target.
 
