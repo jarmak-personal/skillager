@@ -79,6 +79,7 @@ from .context import (
     root,
 )
 from .library import add_library_parser
+from .lifecycle import add_lifecycle_parsers
 from .importing import add_import_parser
 from .reconcile import add_reconcile_parser
 
@@ -189,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_doctor_parser(sub)
     add_working_parser(sub)
     add_library_parser(sub)
+    add_lifecycle_parsers(sub)
     add_import_parser(sub)
     add_reconcile_parser(sub)
     add_collection_parser(sub)

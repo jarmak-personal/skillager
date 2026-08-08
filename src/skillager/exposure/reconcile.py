@@ -394,7 +394,9 @@ def _source_context(catalog_root: Path, project_dir: Path, record: dict[str, Any
         }
     accepted_hash = where.get("accepted_hash")
     source_hash = record.get("source_hash")
-    if accepted_hash == source_hash and where.get("working_hash") == source_hash:
+    if where.get("acceptance") != "accepted" or where.get("working_hash") != accepted_hash:
+        status = "unaccepted"
+    elif accepted_hash == source_hash:
         status = "current"
     elif accepted_hash and record.get("status") == "current":
         status = "behind"
@@ -406,6 +408,8 @@ def _source_context(catalog_root: Path, project_dir: Path, record: dict[str, Any
         "working_hash": where.get("working_hash"),
         "head_hash": where.get("head_hash"),
         "acceptance": where.get("acceptance"),
+        "pinned": record.get("pin_hash") is not None,
+        "pin_hash": record.get("pin_hash"),
         "history": where.get("history"),
     }
 

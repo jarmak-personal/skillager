@@ -202,6 +202,9 @@ def _sidecar_validation_error(data: dict[str, Any]) -> str | None:
     blocked = data.get("exposure_blocked_hashes")
     if blocked is not None and not isinstance(blocked, list):
         return "sidecar blocked hashes must be a list"
+    pin_hash = data.get("pin_hash")
+    if pin_hash is not None and (not isinstance(pin_hash, str) or not pin_hash):
+        return "sidecar pin hash must be a non-empty string"
     return None
 
 
@@ -226,6 +229,7 @@ def _base_record(
         "mode": mode,
         "target": str(target),
         "source_hash": data.get("source_hash"),
+        "pin_hash": data.get("pin_hash"),
         "materialized_hash": data.get("materialized_hash"),
         "ownership": _sidecar_ownership(data, registration),
     }

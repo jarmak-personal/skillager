@@ -85,7 +85,10 @@ Metadata commands stay metadata-only: `working`, `list`, `search`, `show` withou
 | Preview imported-skill upstream drift | `skillager import --refresh lib/pr-review --json` |
 | Inspect verified personal-skill versions | `skillager library history lib/pr-review --json` |
 | Restore a verified version as a new commit | `skillager library restore lib/pr-review --to <content-hash> --yes` |
+| Create a living library variant | `skillager fork lib/pr-review --as pr-review-legacy --description "Review legacy branches" --yes` |
 | Inspect current-project exposure changes | `skillager reconcile --agent codex --json` |
+| Preview/apply clean library exposure updates | `skillager sync --agent codex --json` / `skillager sync --agent codex --apply` |
+| Freeze/unfreeze one project exposure | `skillager pin lib/pr-review --agent codex` / `skillager unpin lib/pr-review --agent codex` |
 | Keep an exact project-local edit | `skillager reconcile keep-local lib/pr-review --yes` |
 | Promote an edited library exposure | `skillager reconcile promote lib/pr-review --yes` |
 | Adopt an edited external exposure | `skillager reconcile import workflows/pr-review --as pr-review-local --yes` |
@@ -124,7 +127,7 @@ skillager expose lib/orbital-review --mode stub --agent codex --scope project
 
 `library new` never overwrites an existing skill. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates a path-scoped Git commit when Git is enabled. `where`, `library status`, and plain `edit` are metadata-only and read-only; `edit --open` launches `$EDITOR` and may make an accepted skill pending.
 
-The machine-readable contracts are versioned as `skillager.library-init.v1`, `skillager.library-status.v1`, `skillager.library-new.v1`, `skillager.library-accept.v1`, `skillager.library-history.v1`, `skillager.library-restore.v1`, and `skillager.where.v1`.
+The machine-readable contracts are versioned as `skillager.library-init.v1`, `skillager.library-status.v1`, `skillager.library-new.v1`, `skillager.library-accept.v1`, `skillager.library-history.v1`, `skillager.library-restore.v1`, `skillager.library-fork.v1`, and `skillager.where.v1`.
 
 Adopt one project, collection, environment, package, editable-source, or native skill through the explicit import boundary:
 
@@ -146,6 +149,26 @@ skillager library restore lib/pr-review --to <hash> --yes
 ```
 
 History is path-specific, deduplicates commits with identical agent-visible content, and never prints bodies. `diff --stat` is also metadata-only; plain `diff` is deliberately content-bearing. Restore accepts a unique content-hash prefix, reconstructs and verifies that exact historical tree outside the library, re-runs lint/static checks, and creates a new descendant commit before recording acceptance. It never resets, checks out over the worktree, rewrites history, or contacts remotes. No-Git libraries report history as unavailable while remaining otherwise usable. History and restore JSON use `skillager.library-history.v1` and `skillager.library-restore.v1`.
+
+Create a living variant from the accepted head or a verified historical hash:
+
+```bash
+skillager fork lib/pr-review --as pr-review-legacy --description "Review legacy release branches" --json
+skillager fork lib/pr-review --as pr-review-legacy --description "Review legacy release branches" --from <hash> --yes
+```
+
+Fork requires a distinct destination and description, writes exact `forked_from` lineage to library provenance, scans/lints the resulting tree, and accepts its new content hash. The preview is metadata-only and does not create the destination.
+
+Propagate accepted library heads lazily in the project where you are working:
+
+```bash
+skillager sync --agent codex --json
+skillager sync --agent codex --apply
+skillager pin lib/pr-review --agent codex
+skillager unpin lib/pr-review --agent codex
+```
+
+Bare sync is read-only. `--apply` replaces only clean, unpinned native or stub exposures in the current project. Customized, dirty, blocked, missing, malformed, external, pinned, and unaccepted-source entries are reported with stable skip reasons and left untouched. A pin freezes the exposure's exact current source hash; `--to` may identify that same hash but never rewrites a body. Use rollback or re-exposure to change versions. Sync and pin JSON use `skillager.sync.v1` and `skillager.pin.v1`.
 
 ### Reconcile Project Edits
 

@@ -56,6 +56,14 @@ Library promotion is fast-forward-only. The sidecar base must equal the current 
 
 Exposure rollback reconstructs the sidecar's recorded source hash from verified path-specific library Git history. Dirty project content is quarantined before the historical candidate replaces it. External sources, no-Git libraries, missing history, malformed sidecars, and changed previews fail closed without writing.
 
+## Variants, Sync, And Pins
+
+Fork preview materializes only a temporary verified candidate and emits metadata. Mutation requires confirmation or `--yes`, re-resolves the current or historical source under library resource locks, requires a distinct destination and agent-facing description, scans/lints the resulting candidate, then commits content and exact `forked_from` provenance before recording acceptance. Lineage is descriptive metadata, never approval authority.
+
+Bare `sync` is a pure-read, metadata-only current-project inventory. It resolves library freshness outside the `working` hot path. `sync --apply` acquires the same per-library-skill and per-target locks used by other lifecycle operations, rehashes source and target after the preview, stages the replacement inside the target's project directory, and retains the previous clean target until the replacement and sidecar verify. Only clean, direct library native/stub exposures with accepted clean sources can update. Dirty, customized, pinned, blocked, malformed, missing, external, generated-router, unresolved, and unaccepted-source states fail closed with stable reasons.
+
+An exposure pin is the additive sidecar field `pin_hash`, bound to the target's current exact `source_hash`. Pin/unpin never copy a body, never approve content, and never affect another exposure. `pin --to` can validate the current version but cannot change it; historical body selection remains an explicit rollback or exposure operation. Sync never walks registered project history or an exposure ledger—only live roots below the current project.
+
 ## Static Scanner
 
 The scanner runs locally and does not use an agent. It scans the full skill directory, including `SKILL.md`, supporting docs, scripts, templates, and references.

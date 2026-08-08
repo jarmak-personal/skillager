@@ -707,6 +707,7 @@ def _library_exposures(project_dir: Path | None, skill_id: str) -> list[dict[str
                         "kind": kind,
                         "path": str(sidecar.parent.resolve()),
                         "source_hash": None if is_router_member else data.get("source_hash"),
+                        "pin_hash": None if is_router_member else data.get("pin_hash"),
                         "router": data.get("router_slug") if is_router_member else None,
                     }
                 )

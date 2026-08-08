@@ -44,6 +44,7 @@ class SkillagerReadPurityTests(unittest.TestCase):
             state = root / "state"
             catalog = root / "catalog"
             cache = root / "cache"
+            library = root / "library"
             project = root / "project"
             write_skill(project / ".skills" / "demo")
             env = {
@@ -59,6 +60,7 @@ class SkillagerReadPurityTests(unittest.TestCase):
                 chdir(project),
                 redirect_stdout(StringIO()),
             ):
+                self.assertEqual(main(["library", "init", "--path", str(library), "--no-git"]), 0)
                 self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-packages"]), 0)
                 self.assertEqual(main(["tag", "create", "demo"]), 0)
                 self.assertEqual(main(["tag", "add", "demo", "project/demo"]), 0)
@@ -67,7 +69,7 @@ class SkillagerReadPurityTests(unittest.TestCase):
             exposed.write_text("# Locally Edited Demo\n\nPreview this reconciliation only.\n", encoding="utf-8")
             (state / "index.json").unlink()
 
-            before = snapshot_tree(state, catalog, cache, project)
+            before = snapshot_tree(state, catalog, cache, project, library)
             commands = [
                 ["working", "--agent", "codex", "--json"],
                 ["list", "--no-packages", "--json"],
@@ -79,6 +81,7 @@ class SkillagerReadPurityTests(unittest.TestCase):
                 ["reconcile", "--agent", "codex", "--json"],
                 ["reconcile", "project/demo", "--agent", "codex", "--json"],
                 ["reconcile", "keep-local", "project/demo", "--agent", "codex", "--json"],
+                ["sync", "--agent", "codex", "--json"],
             ]
             with (
                 patch.dict(os.environ, env),
@@ -90,10 +93,10 @@ class SkillagerReadPurityTests(unittest.TestCase):
                     output = StringIO()
                     with redirect_stdout(output):
                         self.assertEqual(main(command), 0, command)
-                    if command[0] in {"working", "list", "search", "show", "tag", "doctor"}:
+                    if command[0] in {"working", "list", "search", "show", "tag", "doctor", "sync"}:
                         json.loads(output.getvalue())
 
-            self.assertEqual(snapshot_tree(state, catalog, cache, project), before)
+            self.assertEqual(snapshot_tree(state, catalog, cache, project, library), before)
             self.assertFalse((state / "index.json").exists())
 
 

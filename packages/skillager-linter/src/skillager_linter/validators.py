@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from pathlib import Path
@@ -589,9 +590,15 @@ def _frontmatter(text: str) -> dict[str, str]:
         if ":" not in stripped:
             continue
         key, value = stripped.split(":", 1)
-        value = value.strip().strip("\"'")
-        if key.strip() in {"name", "description"} and value:
-            result[key.strip()] = value
+        value = value.strip()
+        parsed: object = value.strip("\"'")
+        if value.startswith('"') and value.endswith('"'):
+            try:
+                parsed = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        if key.strip() in {"name", "description"} and isinstance(parsed, str) and parsed:
+            result[key.strip()] = parsed
     return result
 
 

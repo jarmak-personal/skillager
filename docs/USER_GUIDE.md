@@ -37,6 +37,8 @@ skillager reconcile lib/orbital-review --agent codex --json
 
 Unlike `working`, `reconcile` may resolve the accepted personal-library head and verified history because it is an explicit lifecycle command. Its inventory remains metadata-only and read-only.
 
+`skillager sync --agent codex --json` is also an explicit source-freshness check. It is read-only unless `--apply` is present and never scans another project.
+
 Setup does not expose every approved skill by default. Approval makes a skill available for consideration; tagging and exposure are reversible project ergonomics based on what you are doing.
 
 Run `skillager doctor --agent codex` when the state seems off or the agent is stuck. Use `skillager doctor --agent codex --fix` to repair first-party working artifacts and project notes. `doctor` does not approve skills or expose third-party skills; it reports the exact setup, repair, lint, or migration action to run. Use `skillager doctor --json` when you want a broader machine-readable diagnostic report. These commands avoid printing skill bodies.
@@ -108,6 +110,38 @@ History walks only the selected skill path, reconstructs eligible regular files 
 
 Restore is preview-first. After confirmation it reconstructs the version outside the library, re-runs scanner/lint checks, verifies the exact hash and transaction tree fingerprint again under the library lock, replaces the selected working tree, and creates a new descendant commit. Blocking or high-risk historical versions require `--override-lint --reason "..."`. Conflicts, in-progress Git operations, changed previews, unsafe historical symlinks, current symlinks or excluded files, missing hashes, and unavailable history refuse before mutation. Preserve or remove noncanonical current files before restoring. No-Git libraries remain usable but report history-dependent commands as unavailable.
 
+### Variants, Sync, And Exposure Pins
+
+Use a fork when two variants should keep evolving independently:
+
+```bash
+skillager fork lib/orbital-review --as orbital-review-legacy \
+  --description "Review legacy orbital release branches" --json
+skillager fork lib/orbital-review --as orbital-review-legacy \
+  --description "Review legacy orbital release branches" --from <content-hash> --yes
+```
+
+The preview is read-only and metadata-only. Fork requires a collision-free identity and a description distinct from the selected current or historical version. After confirmation, Skillager copies the verified source tree, writes a distinct frontmatter name/description, records the exact source skill and hash under `forked_from`, re-runs scanner/lint gates, commits both the variant and provenance when Git is enabled, and accepts the new variant hash. A fork is a living skill with its own history; it is not a frozen exposure.
+
+Use project sync for lazy update propagation:
+
+```bash
+skillager sync --agent codex --json
+skillager sync --agent codex --apply
+```
+
+Bare sync reports current-project source freshness without writes. `--apply` updates only clean, unpinned library-native and library-stub targets whose new source hash is accepted and whose library path is clean. Sidecar identity, library provenance, exposure decisions, and agent/scope fields are preserved. Customized, dirty, blocked, malformed, missing, external, pinned, unresolved, and unaccepted-source entries receive stable skip reasons. Routers are not rewritten by sync, and no command walks a sibling or previously known project.
+
+Pin only when this project should deliberately remain on its current exact source hash:
+
+```bash
+skillager pin lib/orbital-review --agent codex
+skillager pin lib/orbital-review --to <current-source-hash> --agent codex
+skillager unpin lib/orbital-review --agent codex
+```
+
+An exposure pin writes only `pin_hash` in that target's sidecar. `--to` validates the current exposure version; it cannot downgrade or replace the body. Use `reconcile rollback` or re-exposure for a body change, then pin the resulting clean exposure. This exposure pin is separate from `review pin`, which is an approval decision for a discovered exact hash.
+
 ### Reconcile An Exposed Edit
 
 When a native, stub, or router copy changes in the current project, inspect it first:
@@ -172,6 +206,7 @@ skillager import --refresh lib/<name> --json
 skillager library history lib/<name> --json
 skillager library diff lib/<name> --from <hash> --to <hash> --stat
 skillager library restore lib/<name> --to <hash> --yes
+skillager fork lib/<name> --as <variant> --description "<distinct use case>" --yes
 skillager reconcile --agent codex --json
 skillager reconcile keep-local <skill-id> --agent codex --yes
 skillager reconcile quarantine <skill-id> --agent codex --yes
@@ -179,6 +214,10 @@ skillager reconcile repair <skill-id> --agent codex --yes
 skillager reconcile promote lib/<name> --agent codex --yes
 skillager reconcile rollback lib/<name> --agent codex --yes
 skillager reconcile import <external-id> --as <name> --agent codex --yes
+skillager sync --agent codex --json
+skillager sync --agent codex --apply
+skillager pin lib/<name> --agent codex
+skillager unpin lib/<name> --agent codex
 skillager setup --agent codex
 skillager setup --fresh
 skillager setup --fresh-project --agent codex

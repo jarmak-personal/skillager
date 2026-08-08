@@ -352,6 +352,7 @@ def _known_operation(subject: str) -> str | None:
         ("Import library skill ", "imported"),
         ("Import reconciled exposure as library skill ", "imported"),
         ("Promote exposure to library skill ", "promoted"),
+        ("Fork library skill ", "forked"),
         ("Restore library skill ", "restored"),
     )
     for prefix, operation in prefixes:

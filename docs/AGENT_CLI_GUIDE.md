@@ -14,8 +14,9 @@ Availability is the eligibility gate. Agent-facing Skillager commands only surfa
 - Treat `exposure_changes` as advisory. Mention drift only when it is relevant to the user's task or they ask about exposure/version state; do not treat it as approval or a readiness failure.
 - If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent <agent>` before guessing. Re-run working after repairs if readiness changes.
 - Do not run `skillager setup` or `skillager review ...` unless the user asked for setup or approval changes.
-- Treat `library init`, `library new`, `library accept`, `library restore ... --yes`, `import ... --yes`, and `edit --open` as user-authorized mutations. Do not run them merely because a pending, historical, or useful external skill is discovered.
+- Treat `library init`, `library new`, `library accept`, `library restore ... --yes`, `import ... --yes`, `fork ... --yes`, and `edit --open` as user-authorized mutations. Do not run them merely because a pending, historical, or useful external skill is discovered.
 - Treat every `reconcile ... --yes` command as a user-authorized mutation. You may inspect `reconcile --json` first, but do not choose keep-local, quarantine, repair, promote, rollback, or import on the user's behalf.
+- Treat `sync --apply`, `pin`, and `unpin` as user-authorized exposure lifecycle mutations. Bare `sync --json` is safe metadata inspection; relay updates and skip reasons before applying them.
 - Do not run `skillager expose` until you have asked what the user plans to do and can justify the narrow router, stub, or native exposure.
 - You may add available skills to project-local tags and create scoped router/stub/native exposure after the user states their task. Report what changed.
 - Do not run `skillager activate` or `skillager show --content` for unavailable skills. Ask the user to run setup when Skillager says a skill is unavailable.
@@ -39,6 +40,7 @@ skillager library history lib/<name> --json
 skillager library diff lib/<name> --from <hash> --to <hash> --stat
 skillager reconcile --agent codex --json
 skillager reconcile <skill-id> --agent codex --json
+skillager sync --agent codex --json
 skillager list --summary-json --agent codex
 skillager show <skill-id> --json
 skillager search "<user goal>" --json
@@ -51,6 +53,7 @@ Use `review --collection <name> --summary` or `review --collection <name> --json
 
 `import --refresh` is metadata-only and read-only. A normal `skillager import <external-id> --json` without `--yes` is also a read-only owner preview, but import review includes scanner/lint administration and should be run only for a user-directed adoption workflow. Never add `--yes` on the user's behalf without their explicit decision to adopt that exact source and destination.
 Bare `reconcile` and reconcile action previews without `--yes` are metadata-only and read-only. Use them when `working.exposure_changes` identifies drift and relay the returned choices. `promote` applies only to edited native library exposures; `import` applies only to edited external native exposures; generated stubs/routers can be kept, repaired, or quarantined but never promoted. `rollback` is library-history recovery. Never add `--yes` until the user has selected that action and target. Quarantine is recoverable and preferred over deletion; Skillager has no reconcile deletion command.
+Bare `sync` is metadata-only and read-only. It resolves accepted library freshness only for managed exposures in the current project. `sync --apply` updates clean, unpinned native/stub targets and skips every dirty, customized, pinned, blocked, malformed, missing, external, or unaccepted-source target. A top-level exposure `pin` is not a review approval: it freezes one clean exposure's current `source_hash` until `unpin`.
 `working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, `tag list --json`, and `search --json` are intentionally compact for agent use. Do not use `--full-json` during normal project work; reserve it for explicit user-directed Skillager diagnostics.
 Project-aware JSON includes:
 

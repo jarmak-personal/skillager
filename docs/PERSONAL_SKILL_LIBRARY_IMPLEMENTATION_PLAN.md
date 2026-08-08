@@ -680,6 +680,12 @@ Tests/gate:
 - No filesystem outside the current project and selected library changes.
 - Bare sync and JSON preview are read-only; `--apply` is required for writes.
 
+Phase 7 implementation note (2026-08-08): delivered preview-first accepted-head and
+verified-history forks with exact `forked_from` provenance and mandatory distinct
+agent-facing descriptions; current-project clean-only native/stub sync with stable
+skip reasons and atomic verified replacement; and sidecar-only exact-source pins.
+Source freshness is resolved in `sync`/`reconcile` and remains outside `working`.
+
 ### Phase 8 — Product Recenter And Cleanup
 
 Scope:
