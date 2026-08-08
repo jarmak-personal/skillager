@@ -115,10 +115,11 @@ def parse_attrs(raw: str) -> dict[str, str]:
 
 
 def make_fixture(name: str, tmp: Path) -> SkillagerCli:
-    if name != "basic_project":
-        raise ValueError(f"unknown docs example fixture: {name}")
     project, cli = make_basic_workspace(tmp)
-    write_basic_skill(project)
+    if name == "basic_project":
+        write_basic_skill(project)
+    elif name != "empty_project":
+        raise ValueError(f"unknown docs example fixture: {name}")
     return cli
 
 

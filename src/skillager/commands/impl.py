@@ -155,9 +155,16 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=textwrap.dedent(
             """\
-            Skillager is a pure CLI registry and exposure tool for agent skills.
+            Skillager is a local personal library, discovery, approval, and exposure
+            tool for agent skills.
 
-            Agent-safe default workflow:
+            Personal library workflow:
+              1. Initialize once with `skillager library init`
+              2. Create with `skillager library new` or adopt one external skill with `skillager import`
+              3. Edit and accept the exact reviewed hash
+              4. Expose only what a project needs; use sync/reconcile for later changes
+
+            Project agent workflow:
               1. skillager working
               2. Continue silently unless the task may benefit from a skill
               3. Inspect available metadata with search/list/show when useful
@@ -165,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
               5. Use skillager doctor for human diagnostics or first-party artifact repair
 
             Important rules:
+              - Library ownership never bypasses exact-hash acceptance.
+              - External skills remain at their source unless explicitly imported.
               - Do not activate or expose unavailable skills unless the user explicitly asks.
               - Agents should run `skillager working` after context resets; it is silent on normal success.
               - Agents should ask the user to run `skillager setup` when external skills need owner review.

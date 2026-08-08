@@ -713,6 +713,28 @@ uv run --python 3.13 python scripts/check.py
 Also run the black-box setup simulation in a fresh temporary directory and record any
 discovery, approval, exposure, or onboarding regression before release.
 
+Phase 8 implementation note (2026-08-08): recentered the README, user and agent
+guides, repository guidance, package metadata, top-level CLI help, and planned 0.9.0
+release notes on the personal library while keeping every external discovery path
+documented. Added an isolated no-Git library docs fixture alongside the existing
+project fixture. The built wheel now includes public docs explicitly, excludes both
+internal personal-library plans, and verifies that boundary during wheelhouse smoke.
+All personal-library command surfaces introduced in Phases 2–7 remain extracted under
+`commands/library.py`, `commands/importing.py`, `commands/reconcile.py`, and
+`commands/lifecycle.py`; facade deletion remains a separate cleanup because it would
+enlarge feature-release review risk.
+
+The required fresh-worker setup audit completed without environmental failure or a
+Skillager discovery, approval, onboarding, curation, or exposure regression. It
+indexed 60 entries, selected 49 source skills from both manifest-free child
+repositories, collapsed them to 39 Codex choices, skipped 11 installed global skills,
+and guided a focused six-skill GIS router. Follow-up product opportunities, outside
+this release-hardening phase, are improved semantic search ranking, safe reviewed-risk
+metadata during curation, a more compact inventory payload, structured optional
+curation commands, and simpler count reconciliation. The retained audit directory is
+`/tmp/skillager-setup-audit.uAvo00` (`/private/tmp/skillager-setup-audit.uAvo00` after
+macOS canonicalization).
+
 ## Behavioral Test Matrix
 
 All new end-to-end tests invoke the installed/public CLI through subprocesses with

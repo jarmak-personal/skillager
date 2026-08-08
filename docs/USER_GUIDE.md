@@ -1,12 +1,19 @@
 # Skillager User Guide
 
-Skillager is a CLI gate between discovered skills and agent-native skill directories.
+Skillager is a local personal skill library with an approval and exposure gate between
+all skill sources and agent-native skill directories. Skills you own use the reserved
+`lib/<name>` namespace; discovered external skills stay at their source unless you
+explicitly import them.
 
-The normal loop is:
+There are two connected loops:
 
 ```text
-setup --agent <agent> -> restart agent -> working --agent <agent> --json -> describe goal
+own:     library new or import -> edit -> accept exact hash -> expose -> sync/reconcile
+project: setup --agent <agent> -> restart -> working --json -> describe goal -> curate
 ```
+
+The personal library is optional for users who only consume external skills, but it
+is the canonical path for skills you create, adopt, version, and maintain.
 
 ## First Run In A Project
 
@@ -63,6 +70,10 @@ Direct native skills are not automatically approved. If you place a skill in a p
 ## Personal Library
 
 The personal library is the canonical home for skills you own. It defaults to `~/.skillager/library`, uses an ordinary Git repository unless you choose `--no-git`, and stays usable as plain skill directories without Skillager.
+
+External discovery remains independent: project, child-repository, environment,
+package, collection, and native-agent skills continue to be indexed and reviewed in
+place. Import only when you want to take ownership of a particular external skill.
 
 ```bash
 skillager library init

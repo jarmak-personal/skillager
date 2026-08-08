@@ -1,6 +1,9 @@
 # Agent CLI Guide
 
-This document is for coding agents reading a project that uses Skillager.
+This document is for coding agents reading a project that uses Skillager. Skillager's
+personal library is the canonical source for user-owned `lib/<name>` skills; project,
+package, environment, collection, and native-agent skills remain external inventory
+unless the user explicitly imports one.
 
 Projects may expose a first-party `skillager-working` skill. Treat `skillager working --agent <agent> --json` as the readiness contract for Skillager-managed projects: run it after context resets, keep no-action readiness out of the user conversation, then curate available skills only when the user's task calls for a narrow router, stub, or native skill.
 

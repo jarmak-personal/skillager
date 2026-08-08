@@ -5,6 +5,7 @@ This repository builds Skillager, a local CLI approval and activation layer for 
 ## Working Rules
 
 - Treat the CLI as the public API. Prefer behavior-preserving changes and keep user-facing command contracts stable.
+- Treat the personal library as the canonical ownership path for skills the user creates or explicitly imports. Preserve in-place external discovery; never migrate a project, package, environment, native, or collection skill into the library automatically.
 - Treat discovery as part of the public product contract. Skillager should continue to find project skills, child skill repositories, project `.venv`/`venv` environment skills, installed package skills, and relevant native agent skill directories without users hand-wiring paths.
 - Keep approval and exposure separate: approval records reviewed content hashes; exposure writes native, stub, or router skills for an agent.
 - Do not expose full skill bodies in metadata commands. `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, and summary JSON outputs should stay metadata-only.
@@ -52,6 +53,7 @@ Do not blindly execute every fenced command in docs. Examples with placeholders,
 
 - Fresh project safety gate: unreviewed skills are discoverable as metadata but cannot be activated or shown with content.
 - Environment and package discovery: skills shipped in a project `.venv`, editable package source tree, or installed package are discovered without importing the package and still go through review before activation.
+- Personal library lifecycle: owned skills remain pending after creation or edits until their exact hash is accepted; history is append-only, exposure updates are current-project and preview-first, and customized or pinned targets are not overwritten.
 - Reviewed project skill path: setup approves low-risk content, search returns trusted metadata, stub/native exposure writes project files, and guarded activation emits the reviewed body.
 - Router path: collection or tag inventory can be exposed through one compact router without loading every skill body.
 - Working loop: agents run `skillager working` after context resets or resumed sessions; `handoff` is explicit post-setup curation/onboarding, not an automatic first prompt ritual.

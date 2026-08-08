@@ -5,13 +5,19 @@
 [![Packages](https://img.shields.io/badge/packages-Python%20%7C%20npm%20%7C%20Cargo-c2410c)](docs/LIBRARY_AUTHORS.md)
 [![License](https://img.shields.io/badge/license-MIT-7c3aed)](LICENSE)
 
-Skillager is a local CLI for discovering, reviewing, searching, and exposing agent skills without loading every skill into every chat.
+Skillager is a local personal library and approval/exposure layer for agent skills. It
+gives skills you own a canonical, versioned home while keeping external skills
+discoverable without loading every skill into every chat.
 
 ```text
-discover -> review -> search metadata -> expose only what the task needs
+own or discover -> accept an exact hash -> search metadata -> expose only what the task needs
 ```
 
-Skills can come from your personal library, project folders, Python environments, npm packages, Cargo crates, native agent skill directories, or shared collections. Skillager keeps them searchable after review, then writes native, stub, or router skills for the agent when you choose to expose them.
+Owned skills live as plain files in one personal Git-backed library. External skills
+remain in project folders, Python environments, npm packages, Cargo crates, native
+agent skill directories, or shared collections until you explicitly import one.
+Skillager keeps accepted skills searchable, then writes native, stub, or router
+exposures only when you choose.
 
 ## Quickstart
 
@@ -19,10 +25,7 @@ Skills can come from your personal library, project folders, Python environments
 uv tool install skillager
 # or: pipx install skillager
 
-# Optional: register a personal/team collection, such as Superpowers.
-skillager collection add ~/skills/workflows --name workflows
-
-# Optional: initialize the canonical library for skills you own.
+# Initialize the canonical library for skills you own.
 skillager library init
 
 # Run per project.
@@ -35,7 +38,7 @@ Then restart your agent in the project and have it run:
 skillager working --agent codex --json
 ```
 
-`setup` discovers local/project skills, package-provided skills, collections, and native agent skills. It scans them and only makes content available after your review. Skillager is installed once as a user tool; it does not need to live inside every project environment.
+`setup` discovers local/project skills, package-provided skills, collections, and native agent skills. It scans them and only makes content available after your review. Register an external personal/team repository with `skillager collection add ~/skills/workflows --name workflows` when you want it in reusable inventory. Skillager is installed once as a user tool; it does not need to live inside every project environment.
 
 `working --json` uses the `skillager.working.v2` schema. Its advisory `exposure_changes` block reports current-project managed copies that are locally edited, intentionally kept local, partially missing, blocked, malformed, or unmanaged. Additive `inventory` and `curation` blocks distinguish source entries from agent-collapsed choices and suggest goal search without turning it into a required readiness action. When a router is already exposed, curation points to it first instead of recommending another router. Drift does not change readiness or the command's exit code. Plain `working` prints only a concise human status and next hint. Fully deleted exposure directories cannot be detected because Skillager intentionally keeps no cross-project exposure ledger.
 
@@ -115,6 +118,16 @@ skillager library init --no-git
 ```
 
 Initialization can adopt an existing directory without moving files. Existing skill bodies are indexed as pending metadata: initialization does not approve them, reveal their contents, or expose them to an agent. `library status` is read-only and reports identity, path, Git health, and an optional skill's working hash.
+
+The no-Git form is useful for disposable environments and is also an opt-in,
+isolated runnable documentation example:
+
+<!-- skillager-test fixture=empty_project -->
+```bash
+skillager library init --no-git --json
+skillager library status --json
+skillager sync --agent codex --json
+```
 
 Create, edit, and accept an owned skill with an exact-hash workflow:
 
@@ -248,6 +261,7 @@ Human review decides availability. Signatures are provenance evidence, not safet
 - [Skill repositories](docs/SKILL_REPOSITORIES.md)
 - [Package author guide](docs/LIBRARY_AUTHORS.md)
 - [Safety model](docs/SAFETY_MODEL.md)
+- [Release notes](docs/RELEASE_NOTES.md)
 - [Release runbook](docs/RELEASE.md)
 - [Security policy](SECURITY.md)
 

@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import tempfile
+import zipfile
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -21,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     dist = args.dist.resolve()
     core_wheel = _single(dist.glob("skillager-*.whl"), "skillager wheel")
     linter_wheel = _single(dist.glob("skillager_linter-*.whl"), "skillager-linter wheel")
+    _assert_core_wheel_docs(core_wheel)
 
     with tempfile.TemporaryDirectory(prefix="skillager-wheelhouse-") as tmp:
         work = Path(tmp)
@@ -84,6 +86,21 @@ def _single(paths: Iterable[Path], label: str) -> Path:
     if len(selected) != 1:
         raise SystemExit(f"expected exactly one {label}, found {len(selected)}")
     return selected[0]
+
+
+def _assert_core_wheel_docs(wheel: Path) -> None:
+    with zipfile.ZipFile(wheel) as archive:
+        names = set(archive.namelist())
+    required = {
+        "skillager/docs/RELEASE_NOTES.md",
+        "skillager/docs/USER_GUIDE.md",
+    }
+    missing = sorted(required - names)
+    if missing:
+        raise SystemExit(f"core wheel is missing public documentation: {missing}")
+    leaked = sorted(name for name in names if name.startswith("skillager/docs/") and "_PLAN.md" in name)
+    if leaked:
+        raise SystemExit(f"core wheel contains internal planning documents: {leaked}")
 
 
 def _run(command: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:

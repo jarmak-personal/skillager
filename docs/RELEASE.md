@@ -1,5 +1,9 @@
 # Release Runbook
 
+User-facing changes for the next release are maintained in
+[`RELEASE_NOTES.md`](RELEASE_NOTES.md). Keep those notes aligned with README and CLI
+behavior before starting this runbook.
+
 Skillager is released as two independently versioned distributions from this
 repository:
 
@@ -75,7 +79,8 @@ The workflow:
 - skips publishing a package version that already exists on PyPI
 - publishes the GitHub Release only after PyPI jobs complete
 
-Release notes must name the package version being released.
+Release notes must name the package version being released. Replace a planned version
+heading before publishing if the workflow selects a different version.
 
 ## Recovering From a Half-Published Release
 

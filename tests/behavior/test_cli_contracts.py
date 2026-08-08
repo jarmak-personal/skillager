@@ -25,6 +25,18 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
         self.assertNotIn(BODY_SENTINEL, result.stdout)
         self.assertNotIn(BODY_SENTINEL, result.stderr)
 
+    def test_top_level_help_centers_owned_library_and_preserves_external_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            _, cli = self.make_workspace(Path(tmp_name))
+
+            result = cli.run("--help")
+
+            self.assert_code(result, 0)
+            self.assert_body_not_exposed(result)
+            self.assertIn("Personal library workflow:", result.stdout)
+            self.assertIn("Library ownership never bypasses exact-hash acceptance.", result.stdout)
+            self.assertIn("External skills remain at their source unless explicitly imported.", result.stdout)
+
     def test_metadata_commands_do_not_expose_unreviewed_skill_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             project, cli = self.make_workspace(Path(tmp_name))

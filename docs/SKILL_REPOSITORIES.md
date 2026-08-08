@@ -1,8 +1,44 @@
 # Skill Repositories
 
-Many users have repositories full of skills. Skillager treats those repositories as collections.
+Many users have repositories full of skills. Skillager distinguishes a repository the
+user owns as their canonical personal library from repositories they consume as
+external collections.
 
 Collections are user-global source inventory for administration, review, refresh, and catalog debugging. Project-local tags are the project curation surface for routers, stubs, and task-specific grouping.
+
+| Intent | Skillager path |
+| --- | --- |
+| Create and maintain skills you own | `skillager library init`, then use `lib/<name>` |
+| Take ownership of one external skill | `skillager import <external-id> --yes` |
+| Search/review a repository without copying it | `skillager collection add ...` |
+| Use a repository cloned inside one project | Run project `setup`; child repositories are discovered automatically |
+
+The personal library is plain files and optional Git history; it is not a hosted
+registry. Collections remain the right model for company, community, and upstream
+repositories whose canonical copies live elsewhere.
+
+## Own Or Adopt A Skill
+
+Initialize the one personal library registered in the selected user catalog:
+
+```bash
+skillager library init
+skillager library new release-check
+skillager edit lib/release-check
+skillager library accept lib/release-check --yes
+```
+
+To adopt one reviewed skill from an external repository without changing that
+repository:
+
+```bash
+skillager import community/release-check --json
+skillager import community/release-check --as release-check --yes
+```
+
+Import copies only that skill's canonical agent-visible tree, records exact upstream
+provenance, and makes the accepted library copy independently maintainable. Keep the
+skill external when you only want to search, activate, or expose the upstream copy.
 
 ## Add A Skill Repository
 

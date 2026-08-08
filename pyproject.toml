@@ -1,7 +1,7 @@
 [project]
 name = "skillager"
 version = "0.8.1"
-description = "A local skill registry and activation layer for coding agents."
+description = "A local personal skill library and approval/exposure layer for coding agents."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -34,15 +34,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/skillager"]
-exclude = [
-  "skillager/docs/MANIFEST_HARDENING_PLAN.md",
-  "skillager/docs/PERSONAL_SKILL_LIBRARY_IMPLEMENTATION_PLAN.md",
-  "skillager/docs/PERSONAL_SKILL_LIBRARY_PLAN.md",
-]
 
 [tool.hatch.build.targets.wheel.force-include]
 ".agents/skills" = "skillager/.agents/skills"
-"docs" = "skillager/docs"
+"docs/AGENT_CLI_GUIDE.md" = "skillager/docs/AGENT_CLI_GUIDE.md"
+"docs/LIBRARY_AUTHORS.md" = "skillager/docs/LIBRARY_AUTHORS.md"
+"docs/RELEASE.md" = "skillager/docs/RELEASE.md"
+"docs/RELEASE_NOTES.md" = "skillager/docs/RELEASE_NOTES.md"
+"docs/SAFETY_MODEL.md" = "skillager/docs/SAFETY_MODEL.md"
+"docs/SKILL_REPOSITORIES.md" = "skillager/docs/SKILL_REPOSITORIES.md"
+"docs/USER_GUIDE.md" = "skillager/docs/USER_GUIDE.md"
 "examples" = "skillager/examples"
 
 [tool.hatch.build.targets.sdist]
