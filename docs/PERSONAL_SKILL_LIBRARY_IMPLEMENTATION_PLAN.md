@@ -735,6 +735,34 @@ curation commands, and simpler count reconciliation. The retained audit director
 `/tmp/skillager-setup-audit.uAvo00` (`/private/tmp/skillager-setup-audit.uAvo00` after
 macOS canonicalization).
 
+Phase 8 UX hardening follow-up (2026-08-08): repeated Git, no-Git,
+external-source, two-project, native, stub, pin, sync, import, fork, history,
+and reconcile journeys through the public CLI. The command-surface lookback found
+that `library`, `where`, `edit`, `import`, `reconcile`, `fork`, `sync`, `pin`, and
+`unpin` each retain a distinct user-facing job; no namespace deletion justified a
+compatibility break. The fix cycles instead preserve agent scope in every generated
+reconcile/sync command, explain reconcile choices and diffs in plain language, show
+sync version movement and readable skip reasons, make tag edits report membership
+changes, distinguish idempotent pin state, provide safe non-interactive
+accept/restore previews, separate source-entry and agent-choice counts, remove
+placeholder plural forms, and reduce collection-name noise in semantic search.
+An unused legacy status renderer and its private duplicate-content formatter were
+removed rather than preserved as unreachable parallel UX.
+Reviewed-risk diagnostics remain owner-facing rather than becoming an agent curation
+signal, preserving the approval/availability authority boundary.
+
+A post-fix fresh-worker audit repeated setup against both child repositories, again
+indexing 60 entries, selecting 49 source skills, collapsing them to 39 Codex choices,
+and skipping 11 installed global skills. It then created an eight-skill GIS router
+without an environmental, discovery, approval, onboarding, or exposure failure. The
+audit validated the revised setup counts and tag-mutation feedback while catching
+three remaining presentation issues: an irregular hash plural, an ambiguous routed
+exposure count, and source/tag-only semantic-search noise. Focused replays after those
+fixes confirmed explicit source-entry, agent-choice, and routed-choice units and a
+smaller meaningfully matched result set. The retained audit directory is
+`/tmp/skillager-setup-dNqvXi` (`/private/tmp/skillager-setup-dNqvXi` after macOS
+canonicalization).
+
 ## Behavioral Test Matrix
 
 All new end-to-end tests invoke the installed/public CLI through subprocesses with

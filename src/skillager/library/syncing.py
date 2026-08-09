@@ -329,6 +329,7 @@ def _sync_payload(
         counts[status] = counts.get(status, 0) + 1
     updated = counts.get("updated", 0)
     available = counts.get("update-available", 0)
+    agent_option = f" --agent {agent}" if agent else ""
     return {
         "schema": SYNC_SCHEMA,
         "status": "applied" if applied and updated else "no-changes" if applied else "preview",
@@ -339,6 +340,7 @@ def _sync_payload(
         "filter": {"agent": agent},
         "counts": counts,
         "update_count": updated if applied else available,
+        "next_command": f"skillager sync{agent_option} --apply" if not applied and available else None,
         "items": items,
     }
 

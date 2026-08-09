@@ -30,7 +30,7 @@ Availability is the eligibility gate. Agent-facing Skillager commands only surfa
 
 ## Safe Metadata Commands
 
-These commands do not expose full skill bodies. In a project, normal `list`, `search`, and `show` use effective project inventory: project skills, package/environment skills, and reviewed collection skills that are available to the current project. `list` hides global native skills by default; pass `--include-global` only when the user is asking about global inventory. Plain human `list` and `review` output may include a trailing hint such as `N lint-blocked skill(s) hidden; add --include-lint-blocked to see them.` Treat that as owner-diagnostic guidance, not as available skill inventory.
+These commands do not expose full skill bodies. In a project, normal `list`, `search`, and `show` use effective project inventory: project skills, package/environment skills, and reviewed collection skills that are available to the current project. `list` hides global native skills by default; pass `--include-global` only when the user is asking about global inventory. Plain human `list` and `review` output may include a trailing hint such as `N lint-blocked skills hidden; add --include-lint-blocked to see them.` Treat that as owner-diagnostic guidance, not as available skill inventory.
 
 ```bash
 skillager working --agent codex --json

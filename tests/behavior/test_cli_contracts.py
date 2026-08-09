@@ -37,6 +37,21 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assertIn("Library ownership never bypasses exact-hash acceptance.", result.stdout)
             self.assertIn("External skills remain at their source unless explicitly imported.", result.stdout)
 
+            reconcile = cli.run("reconcile", "--help")
+            self.assert_code(reconcile, 0)
+            self.assertIn("Actions:", reconcile.stdout)
+            self.assertIn("keep-local  Acknowledge this exact project edit", reconcile.stdout)
+            self.assertIn("promote     Make an edited native library exposure", reconcile.stdout)
+
+            pin = cli.run("pin", "--help")
+            self.assert_code(pin, 0)
+            self.assertIn("Pinning does not copy or rewrite skill content.", pin.stdout)
+            self.assertIn("skillager pin lib/pandas --agent codex", pin.stdout)
+
+            where = cli.run("where", "--help")
+            self.assert_code(where, 0)
+            self.assertIn("without showing its body", where.stdout)
+
     def test_metadata_commands_do_not_expose_unreviewed_skill_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             project, cli = self.make_workspace(Path(tmp_name))
@@ -153,7 +168,8 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assert_code(working, 0)
             self.assert_body_not_exposed(working)
             self.assertIn("Skillager ready.", working.stdout)
-            self.assertIn("1 available source entry -> 1 Codex-ready choice(s)", working.stdout)
+            self.assertIn("1 available source entry -> 1 Codex-ready choice", working.stdout)
+            self.assertIn("0 exposed choices, 1 on demand.", working.stdout)
             self.assertIn("Tell your agent what you plan to do", working.stdout)
 
     def test_agent_search_is_monotonic_by_displayed_fractional_score(self) -> None:
@@ -209,19 +225,33 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assert_code(setup, 0)
             tagged = cli.run("tag", "add", "gis", "project/gis-domain")
             self.assert_code(tagged, 0)
+            self.assertIn("gis: 1 skill (1 added)", tagged.stdout)
+            self.assertIn("Added:\n  - project/gis-domain", tagged.stdout)
+            self.assertIn("Inspect: skillager tag show gis", tagged.stdout)
+            unchanged = cli.run("tag", "add", "GIS", "project/gis-domain")
+            self.assert_code(unchanged, 0)
+            self.assertIn("gis: 1 skill (unchanged)", unchanged.stdout)
             exposed = cli.run("expose", "--tag", "gis", "--mode", "router", "--agent", "codex", "--scope", "project")
             self.assert_code(exposed, 0)
 
             plain = cli.run("working", "--agent", "codex")
             self.assert_code(plain, 0)
             self.assert_body_not_exposed(plain)
-            self.assertIn("Use the existing router tag(s) first: gis.", plain.stdout)
+            self.assertIn("1 exposed choice (1 routed through 1 router), 0 on demand.", plain.stdout)
+            self.assertIn("Use the existing router tags first: gis.", plain.stdout)
             self.assertNotIn("Tell your agent what you plan to do", plain.stdout)
 
             working = cli.run("working", "--agent", "codex", "--json")
             self.assert_code(working, 0)
             self.assertFalse(working.json()["curation"]["recommended"])
             self.assertEqual(working.json()["curation"]["existing_router_tags"], ["gis"])
+            self.assertEqual(working.json()["inventory"]["routed"], 1)
+            self.assertEqual(working.json()["inventory"]["router_tags"], 1)
+
+            removed = cli.run("tag", "remove", "GIS", "project/gis-domain")
+            self.assert_code(removed, 0)
+            self.assertIn("gis: 0 skills (1 removed)", removed.stdout)
+            self.assertIn("Removed:\n  - project/gis-domain", removed.stdout)
 
 
 if __name__ == "__main__":

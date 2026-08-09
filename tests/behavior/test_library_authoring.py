@@ -97,6 +97,13 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertFalse((catalog / "trust.json").exists())
             self.assert_body_not_exposed(preview)
 
+            readable_preview = cli.run("library", "accept", "lib/orbital-review")
+            self.assert_code(readable_preview, 1)
+            self.assertIn("Confirmation required; no changes were made.", readable_preview.stdout)
+            self.assertIn("Next: skillager library accept lib/orbital-review --yes", readable_preview.stdout)
+            self.assertEqual(readable_preview.stderr, "")
+            self.assert_body_not_exposed(readable_preview)
+
             accepted = cli.run("library", "accept", "lib/orbital-review", "--yes", "--json")
             self.assert_code(accepted, 0)
             accepted_data = accepted.json()

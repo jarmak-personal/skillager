@@ -210,6 +210,14 @@ class LibraryVariantsSyncBehaviorTests(unittest.TestCase):
             self.assertEqual(native.joinpath("SKILL.md").read_bytes(), native_before)
             self.assertEqual(stub.joinpath("SKILL.md").read_bytes(), stub_before)
 
+            scoped_preview = cli.run("sync", "--agent", "claude", "--json")
+            self.assert_code(scoped_preview)
+            self.assertEqual(scoped_preview.json()["next_command"], "skillager sync --agent claude --apply")
+            readable_preview = cli.run("sync", "--agent", "claude")
+            self.assert_code(readable_preview)
+            self.assertIn(f"{first_hash[:12]} -> {second_hash[:12]}", readable_preview.stdout)
+            self.assertIn("Next: skillager sync --agent claude --apply", readable_preview.stdout)
+
             applied = cli.run("sync", "--apply", "--json")
             self.assert_code(applied)
             self.assertEqual(applied.json()["counts"]["updated"], 1)
@@ -222,6 +230,9 @@ class LibraryVariantsSyncBehaviorTests(unittest.TestCase):
             unpinned = cli.run("unpin", "lib/brainstorm", "--agent", "codex", "--json")
             self.assert_code(unpinned)
             self.assertEqual(unpinned.json()["previous_pin_hash"], first_hash)
+            already_unpinned = cli.run("unpin", "lib/brainstorm", "--agent", "codex")
+            self.assert_code(already_unpinned)
+            self.assertIn("Already unpinned:", already_unpinned.stdout)
             updated = cli.run("sync", "--agent", "codex", "--apply", "--json")
             self.assert_code(updated)
             self.assertEqual(updated.json()["counts"]["updated"], 1)
@@ -257,6 +268,12 @@ class LibraryVariantsSyncBehaviorTests(unittest.TestCase):
             self.assertIn("dirty", reasons)
             self.assertIn("external-source", reasons)
             self.assertNotIn(PRIVATE_VARIANT_BODY, preview.stdout)
+
+            readable = cli.run("sync")
+            self.assert_code(readable)
+            self.assertIn("skipped (local edit; reconcile first)", readable.stdout)
+            self.assertIn("skipped (external source)", readable.stdout)
+            self.assertNotIn("external-source", readable.stdout)
 
             applied = cli.run("sync", "--apply", "--json")
             self.assert_code(applied)

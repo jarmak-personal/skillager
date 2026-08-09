@@ -138,7 +138,7 @@ skillager library accept lib/orbital-review --yes
 skillager expose lib/orbital-review --mode stub --agent codex --scope project
 ```
 
-`library new` never overwrites an existing skill. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates a path-scoped Git commit when Git is enabled. `where`, `library status`, and plain `edit` are metadata-only and read-only; `edit --open` launches `$EDITOR` and may make an accepted skill pending.
+`library new` never overwrites an existing skill. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates a path-scoped Git commit when Git is enabled. In non-interactive use, omitting `--yes` prints a body-safe hash/risk/lint preview and the exact confirmed command without changing state. `where`, `library status`, and plain `edit` are metadata-only and read-only; `edit --open` launches `$EDITOR` and may make an accepted skill pending.
 
 The machine-readable contracts are versioned as `skillager.library-init.v1`, `skillager.library-status.v1`, `skillager.library-new.v1`, `skillager.library-accept.v1`, `skillager.library-history.v1`, `skillager.library-restore.v1`, `skillager.library-fork.v1`, and `skillager.where.v1`.
 
@@ -181,7 +181,7 @@ skillager pin lib/pr-review --agent codex
 skillager unpin lib/pr-review --agent codex
 ```
 
-Bare sync is read-only. `--apply` replaces only clean, unpinned native or stub exposures in the current project. Customized, dirty, blocked, missing, malformed, external, pinned, and unaccepted-source entries are reported with stable skip reasons and left untouched. A pin freezes the exposure's exact current source hash; `--to` may identify that same hash but never rewrites a body. Use rollback or re-exposure to change versions. Sync and pin JSON use `skillager.sync.v1` and `skillager.pin.v1`.
+Bare sync is read-only. `--apply` replaces only clean, unpinned native or stub exposures in the current project. Customized, dirty, blocked, missing, malformed, external, pinned, and unaccepted-source entries are reported with stable JSON skip reasons, readable human explanations, and no changes. Previewed next commands preserve `--agent` scope. A pin freezes the exposure's exact current source hash; `--to` may identify that same hash but never rewrites a body. Use rollback or re-exposure to change versions. Sync and pin JSON use `skillager.sync.v1` and `skillager.pin.v1`.
 
 ### Reconcile Project Edits
 

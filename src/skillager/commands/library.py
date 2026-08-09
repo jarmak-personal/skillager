@@ -103,12 +103,24 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     restore.add_argument("--json", action="store_true", help="Emit versioned restore preview or result JSON.")
     restore.set_defaults(func=cmd_library_restore)
 
-    where = sub.add_parser("where", help="Show canonical library ownership, hashes, Git state, and project exposures.")
+    where = sub.add_parser(
+        "where",
+        help="Show canonical library ownership, hashes, Git state, and project exposures.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Locate one personal-library skill and compare its working, accepted, and Git HEAD hashes without showing its body.",
+        epilog="Examples:\n  skillager where lib/my-skill\n  skillager where lib/my-skill --json",
+    )
     where.add_argument("skill", help="Library skill name or lib/<name> ID.")
     where.add_argument("--json", action="store_true", help="Emit versioned location metadata as JSON.")
     where.set_defaults(func=cmd_where)
 
-    edit = sub.add_parser("edit", help="Print or open a canonical library skill path.")
+    edit = sub.add_parser(
+        "edit",
+        help="Print or open a canonical library skill path.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Print the canonical SKILL.md path, or open it with the command configured in $EDITOR.",
+        epilog="Examples:\n  skillager edit lib/my-skill\n  EDITOR=code skillager edit lib/my-skill --open",
+    )
     edit.add_argument("skill", help="Library skill name or lib/<name> ID.")
     edit.add_argument("--open", action="store_true", dest="open_editor", help="Open SKILL.md with $EDITOR.")
     edit.set_defaults(func=cmd_edit)
@@ -125,7 +137,8 @@ def cmd_library_init(args: argparse.Namespace) -> int:
     print(f"Identity: {library['library_id']}")
     print(f"Git: {_git_summary(result['git'])}")
     print(f"History: {_history_summary(result['history'])}")
-    print(f"Indexed: {result['indexed']} skill(s); none were approved or exposed")
+    indexed = int(result["indexed"])
+    print(f"Indexed: {indexed} skill{'s' if indexed != 1 else ''}; none were approved or exposed")
     for warning in result["warnings"]:
         print(f"Warning: {warning}")
     return 0
@@ -188,7 +201,10 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
             if args.json:
                 print(json.dumps(preview, indent=2, sort_keys=True))
                 return 1
-            raise ValueError("non-interactive library acceptance requires --yes")
+            _print_acceptance_preview(preview)
+            print("Confirmation required; no changes were made.")
+            print(f"Next: {preview['next_command']}")
+            return 1
         _print_acceptance_preview(preview)
         response = input("Accept this exact library skill hash? [y/N] ").strip().lower()
         if response not in {"y", "yes"}:
@@ -288,7 +304,10 @@ def cmd_library_restore(args: argparse.Namespace) -> int:
             if args.json:
                 print(json.dumps(preview, indent=2, sort_keys=True))
                 return 1
-            raise ValueError("non-interactive library restore requires --yes")
+            _print_restore_preview(preview)
+            print("Confirmation required; no files were changed.")
+            print(f"Next: {preview['next_command']}")
+            return 1
         _print_restore_preview(preview)
         response = input("Restore this exact historical tree as a new commit? [y/N] ").strip().lower()
         if response not in {"y", "yes"}:

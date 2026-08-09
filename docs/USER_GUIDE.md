@@ -84,7 +84,7 @@ skillager where lib/orbital-review --json
 skillager expose lib/orbital-review --mode stub --agent codex --scope project
 ```
 
-Creation and direct edits produce a pending exact hash. Pending library content is visible through path and diagnostic metadata, but Skillager will not emit or copy its body through `show --content`, activation, native/stub exposure, or routers—even with generic unreviewed or force flags. Run `library accept` after reviewing the current files. Non-interactive acceptance requires `--yes`; lint-blocking or high-risk findings additionally require `--override-lint --reason "..."`. When Git is enabled, Skillager commits only the selected skill path before recording acceptance and refuses conflicts, in-progress repository operations, or unrelated staged files.
+Creation and direct edits produce a pending exact hash. Pending library content is visible through path and diagnostic metadata, but Skillager will not emit or copy its body through `show --content`, activation, native/stub exposure, or routers—even with generic unreviewed or force flags. Run `library accept` after reviewing the current files. A non-interactive call without `--yes` prints a body-safe scanner/lint/hash preview and the exact confirmed command, then exits without changing state. Lint-blocking or high-risk findings additionally require `--override-lint --reason "..."`. When Git is enabled, Skillager commits only the selected skill path before recording acceptance and refuses conflicts, in-progress repository operations, or unrelated staged files.
 
 `library status`, `where`, and plain `edit` are read-only. Plain `edit` prints `SKILL.md`; `edit --open` launches `$EDITOR`. `where` reports canonical ownership, working/accepted/HEAD hashes, Git state, and exposures in the current project without printing the body. Any out-of-band content change immediately stops matching the accepted hash and returns the skill to pending.
 
@@ -141,7 +141,7 @@ skillager sync --agent codex --json
 skillager sync --agent codex --apply
 ```
 
-Bare sync reports current-project source freshness without writes. `--apply` updates only clean, unpinned library-native and library-stub targets whose new source hash is accepted and whose library path is clean. Sidecar identity, library provenance, exposure decisions, and agent/scope fields are preserved. Customized, dirty, blocked, malformed, missing, external, pinned, unresolved, and unaccepted-source entries receive stable skip reasons. Routers are not rewritten by sync, and no command walks a sibling or previously known project.
+Bare sync reports current-project source freshness without writes. `--apply` updates only clean, unpinned library-native and library-stub targets whose new source hash is accepted and whose library path is clean. Sidecar identity, library provenance, exposure decisions, and agent/scope fields are preserved. Customized, dirty, blocked, malformed, missing, external, pinned, unresolved, and unaccepted-source entries receive stable JSON skip reasons and readable human explanations. A preview's suggested command preserves any `--agent` scope. Routers are not rewritten by sync, and no command walks a sibling or previously known project.
 
 Pin only when this project should deliberately remain on its current exact source hash:
 

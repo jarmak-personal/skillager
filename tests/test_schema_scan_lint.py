@@ -211,18 +211,18 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                 review_output = StringIO()
                 with redirect_stdout(review_output):
                     self.assertEqual(main(["review"]), 0)
-                self.assertIn("1 lint-blocked skill(s) hidden; add --include-lint-blocked to see them.", review_output.getvalue())
+                self.assertIn("1 lint-blocked skill hidden; add --include-lint-blocked to see them.", review_output.getvalue())
 
                 list_output = TtyStringIO()
                 with redirect_stdout(list_output):
                     self.assertEqual(main(["list"]), 0)
-                self.assertIn("1 lint-blocked skill(s) hidden; add --include-lint-blocked to see them.", list_output.getvalue())
+                self.assertIn("1 lint-blocked skill hidden; add --include-lint-blocked to see them.", list_output.getvalue())
 
                 included_output = TtyStringIO()
                 with redirect_stdout(included_output):
                     self.assertEqual(main(["list", "--include-lint-blocked"]), 0)
                 self.assertIn("project/demo", included_output.getvalue())
-                self.assertNotIn("lint-blocked skill(s) hidden", included_output.getvalue())
+                self.assertNotIn("lint-blocked skill hidden", included_output.getvalue())
 
                 summary_output = StringIO()
                 with redirect_stdout(summary_output):

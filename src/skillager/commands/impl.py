@@ -702,7 +702,7 @@ def cmd_collection_add(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:
-        print(f"{result['collection']['name']}: indexed {result['indexed']} skill(s)")
+        print(f"{result['collection']['name']}: indexed {_counted(result['indexed'], 'skill')}")
         if result.get("errors"):
             _print_discovery_errors(result["errors"])
         skills = select_collection_skills(catalog_root(args), result["collection"]["name"], include_lint_blocked=True)
@@ -730,7 +730,7 @@ def cmd_collection_refresh(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(data, indent=2, sort_keys=True))
     else:
-        print(f"{data['name']}: indexed {len(data.get('skills', []))} skill(s)")
+        print(f"{data['name']}: indexed {_counted(len(data.get('skills', [])), 'skill')}")
         if data.get("errors"):
             _print_discovery_errors(data["errors"])
         _print_collection_quarantine_note(data.get("skills", []))
@@ -740,7 +740,8 @@ def cmd_collection_refresh(args: argparse.Namespace) -> int:
 def _print_collection_quarantine_note(skills: list[dict[str, Any]]) -> None:
     count = sum(1 for skill in skills if _is_lint_quarantined(skill))
     if count:
-        print(f"{count} skill(s) quarantined by lint; they will appear in `skillager setup` for review.")
+        subject = "It" if count == 1 else "They"
+        print(f"{_counted(count, 'skill')} quarantined by lint. {subject} will appear in `skillager setup` for review.")
 
 
 def cmd_collection_remove(args: argparse.Namespace) -> int:
@@ -783,6 +784,7 @@ def cmd_tag_create(args: argparse.Namespace) -> int:
 
 
 def cmd_tag_add(args: argparse.Namespace) -> int:
+    previous = _existing_tag_members(args.tag)
     skill_ids = list(args.skill_ids)
     source_collection = None
     if args.from_collection:
@@ -805,16 +807,50 @@ def cmd_tag_add(args: argparse.Namespace) -> int:
             source_collection=source_collection,
             catalog_state_dir=catalog_root(args),
         )
-        print(f"{updated_tag['tag']}: {len(updated_tag['skills'])} skill(s)")
+        _print_tag_update(updated_tag, previous=previous)
         return 0
     tag = project_tags.add_tag_skills(_current_project_dir(), args.tag, skill_ids, catalog_state_dir=catalog_root(args))
-    print(f"{tag['tag']}: {len(tag['skills'])} skill(s)")
+    _print_tag_update(tag, previous=previous)
     return 0
 
 
+def _print_tag_update(tag: dict[str, Any], *, previous: set[str]) -> None:
+    current = {str(skill_id) for skill_id in tag.get("skills") or []}
+    added = sorted(current - previous)
+    removed = sorted(previous - current)
+    changes = []
+    if added:
+        changes.append(f"{len(added)} added")
+    if removed:
+        changes.append(f"{len(removed)} removed")
+    suffix = f" ({', '.join(changes)})" if changes else " (unchanged)"
+    count = len(current)
+    print(f"{tag['tag']}: {count} skill{'s' if count != 1 else ''}{suffix}")
+    _print_tag_member_changes("Added", added)
+    _print_tag_member_changes("Removed", removed)
+    print(f"Inspect: skillager tag show {tag['tag']}")
+
+
+def _print_tag_member_changes(label: str, skill_ids: list[str], *, limit: int = 8) -> None:
+    if not skill_ids:
+        return
+    print(f"{label}:")
+    for skill_id in skill_ids[:limit]:
+        print(f"  - {skill_id}")
+    if len(skill_ids) > limit:
+        print(f"  - ... {len(skill_ids) - limit} more")
+
+
+def _existing_tag_members(tag: str) -> set[str]:
+    normalized = project_tags.normalize_tag(tag)
+    entry = (project_tags.load_tags(_current_project_dir()).get("tags") or {}).get(normalized, {})
+    return {str(skill_id) for skill_id in entry.get("skills") or []}
+
+
 def cmd_tag_remove(args: argparse.Namespace) -> int:
+    previous = _existing_tag_members(args.tag)
     tag = project_tags.remove_tag_skills(_current_project_dir(), args.tag, args.skill_ids)
-    print(f"{tag['tag']}: {len(tag['skills'])} skill(s)")
+    _print_tag_update(tag, previous=previous)
     return 0
 
 
@@ -858,7 +894,7 @@ def cmd_tag_sync(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         for item in results:
-            print(f"{item['project']}: {item['tag']} {item['skills']} skill(s)")
+            print(f"{item['project']}: {item['tag']} {_counted(item['skills'], 'skill')}")
     return 0
 
 
@@ -1006,7 +1042,10 @@ def cmd_state_migrate(args: argparse.Namespace) -> int:
     print(f"New state: {destination}")
     _print_trust_records(project_trust.get("skills", {}), title="Project-local trust records to import")
     if global_approvals:
-        print(f"Ignoring {len(global_approvals)} reusable global approval(s); use `skillager state import-global-approvals` after separate review.")
+        print(
+            f"Ignoring {_counted(len(global_approvals), 'reusable global approval')}; "
+            "use `skillager state import-global-approvals` after separate review."
+        )
     _require_interactive_confirmation("Import this legacy project-local state? [y/N] ")
     _copy_legacy_project_state(legacy, destination, project_trust=project_trust)
     print(f"Imported legacy project-local state to {destination}")
@@ -1028,7 +1067,7 @@ def cmd_state_import_global_approvals(args: argparse.Namespace) -> int:
     _print_trust_records(approvals, title="Reusable global approvals to import")
     _require_interactive_confirmation("Import these reusable global approvals into the user catalog? [y/N] ")
     merge_global_approvals(catalog_root(args), approvals)
-    print(f"Imported {len(approvals)} reusable global approval(s).")
+    print(f"Imported {_counted(len(approvals), 'reusable global approval')}.")
     return 0
 
 
@@ -1222,11 +1261,11 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 f"legacy sessions cleared={((report.get('fresh_project_reset') or {}).get('sessions', 0))}, "
                 f"saved setup scope cleared={int(bool((report.get('fresh_project_reset') or {}).get('status_scope')))}. "
                 "Retained global state: "
-                f"{retained.get('global_approvals', 0)} approval(s), "
-                f"{retained.get('catalog_tags', 0)} catalog tag(s), "
-                f"{retained.get('catalog_tag_members', 0)} tag member(s), "
-                f"{retained.get('collections', 0)} collection(s), "
-                f"plus {retained.get('exposed_skill_targets', 0)} exposed skill target(s)."
+                f"{_counted(retained.get('global_approvals', 0), 'approval')}, "
+                f"{_counted(retained.get('catalog_tags', 0), 'catalog tag')}, "
+                f"{_counted(retained.get('catalog_tag_members', 0), 'tag member')}, "
+                f"{_counted(retained.get('collections', 0), 'collection')}, "
+                f"plus {_counted(retained.get('exposed_skill_targets', 0), 'exposed skill target')}."
             )
         elif args.fresh:
             print(
@@ -1305,28 +1344,39 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
 
     print(_style("Skillager setup scan", "bold"))
     print(f"Project root: {project_dir}")
-    print(f"Indexed {report['indexed']} skills")
+    indexed = int(report.get("indexed") or 0)
+    selected_count = len(selected)
+    skipped_global = int(report.get("skipped_global") or 0)
+    if indexed == selected_count + skipped_global and skipped_global:
+        print(
+            f"Indexed {_counted(indexed, 'skill')}: {selected_count} selected, "
+            f"{_counted(skipped_global, 'installed global skill')} skipped"
+        )
+    else:
+        print(f"Indexed {_counted(indexed, 'skill')}")
     print()
     print("Ready:")
     if review_needed or lint_blocked:
         if review_needed:
-            print(f"  - Owner review needed: {len(review_needed)} skill(s)")
+            print(f"  - Owner review needed: {_counted(len(review_needed), 'skill')}")
         if lint_blocked:
-            print(f"  - Lint-blocked: {len(lint_blocked)} skill(s)")
+            print(f"  - Lint-blocked: {_counted(len(lint_blocked), 'skill')}")
     else:
         reused = int(provenance.get("reused_global_exact_hash_approvals") or 0)
         reviewed = int(provenance.get("reviewed_this_run") or 0)
         if reused and not reviewed:
-            print(f"  - Owner review this run: no new decision; {reused} exact hash(es) matched reusable global approvals")
+            print(
+                "  - Owner review this run: no new decision; "
+                f"{_counted(reused, 'exact hash', 'exact hashes')} matched reusable global approvals"
+            )
         else:
             print("  - Owner review: no action needed")
     scanner = (report.get("approval_provenance") or {}).get("scanner") or {}
     if scanner:
         risk = ", ".join(f"{name}={count}" for name, count in (scanner.get("by_risk") or {}).items())
-        print(
-            f"  - Local scanner: scanned {scanner.get('current_content_scanned', 0)} current skill(s); "
-            f"{scanner.get('finding_count', 0)} finding(s)"
-        )
+        scanned = int(scanner.get("current_content_scanned") or 0)
+        finding_count = int(scanner.get("finding_count") or 0)
+        print(f"  - Local scanner: scanned {_counted(scanned, 'current skill')}; {_counted(finding_count, 'finding')}")
         if risk:
             print(f"  - Current skill risk distribution: {risk}")
         non_low = list(scanner.get("non_low") or [])
@@ -1334,9 +1384,10 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
             print("  - Non-low scanner results:")
             for item in non_low[:12]:
                 codes = ", ".join(item.get("finding_codes") or []) or "no finding code"
-                print(f"    - {item.get('id')}: {item.get('risk')}, {item.get('finding_count', 0)} finding(s) ({codes})")
+                item_findings = int(item.get("finding_count") or 0)
+                print(f"    - {item.get('id')}: {item.get('risk')}, {_counted(item_findings, 'finding')} ({codes})")
             if len(non_low) > 12:
-                print(f"    - ... {len(non_low) - 12} more non-low skill(s)")
+                print(f"    - ... {_counted(len(non_low) - 12, 'more non-low skill')}")
     lint_overrides = _lint_override_items(action)
     if lint_overrides:
         print(f"  - Lint overrides recorded this run: {len(lint_overrides)} (audited)")
@@ -1345,11 +1396,20 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
     print("What you have:")
     source_entries = int(inventory.get("available_source_entries") or 0)
     agent_on_demand = int(inventory.get("agent_visible_on_demand") or 0)
-    collapsed_suffix = f" ({collapsed} alternate-agent variant(s) collapsed)" if collapsed else ""
-    print(f"  - {source_entries} approved source entr{'y' if source_entries == 1 else 'ies'} -> {available_choices} {agent_ready_label} choice(s){collapsed_suffix}")
-    print(f"  - {exposed} source entr{'y' if exposed == 1 else 'ies'} exposed now; {agent_on_demand} {agent_ready_label} choice(s) on demand")
+    source_on_demand = int(inventory.get("available_on_demand") or 0)
+    print(
+        f"  - {_counted(source_entries, 'approved source entry', 'approved source entries')}: "
+        f"{exposed} exposed, {source_on_demand} on demand"
+    )
+    if inventory_agent:
+        agent_exposed = max(0, available_choices - agent_on_demand)
+        collapsed_suffix = f"; {_counted(collapsed, 'alternate-agent variant')} collapsed" if collapsed else ""
+        print(
+            f"  - {_counted(available_choices, f'{agent_ready_label} choice')}: "
+            f"{agent_exposed} exposed, {agent_on_demand} on demand{collapsed_suffix}"
+        )
     if newly_available:
-        print(f"  - {newly_available} skill(s) newly reviewed in this setup")
+        print(f"  - {_counted(newly_available, 'skill')} newly reviewed in this setup")
     notes = _setup_scan_notes(report, prior_approvals=prior_approvals, on_demand=on_demand)
     if notes:
         print()
@@ -1374,12 +1434,13 @@ def _setup_scan_notes(report: dict[str, Any], *, prior_approvals: int, on_demand
         notes.append(f"no-manifest skills discovered: {source_bits}")
     if prior_approvals:
         notes.append(
-            f"{prior_approvals} unchanged exact content hash(es) matched prior reusable global approvals; "
+            f"{_counted(prior_approvals, 'unchanged exact content hash', 'unchanged exact content hashes')} "
+            "matched prior reusable global approvals; "
             "owner review prompts were not repeated"
         )
     skipped = int(report.get("skipped_global") or 0)
     if skipped:
-        notes.append(f"{skipped} already-installed global skill(s) skipped; use --include-global to review them")
+        notes.append(f"{_counted(skipped, 'already-installed global skill')} skipped; use --include-global to review them")
     if on_demand:
         notes.append("agents can inspect these with `skillager working`, `skillager list`, and `skillager search`")
     return notes
@@ -1875,7 +1936,7 @@ def _exposure_summary_text(exposure: dict[str, Any]) -> str:
     stubbed = int(exposure.get("stubbed") or 0)
     native = int(exposure.get("native") or 0)
     if router_tags or routed:
-        details.append(f"{router_tags} router tag(s), {routed} routed")
+        details.append(f"{_counted(router_tags, 'router tag')}, {routed} routed")
     if stubbed:
         details.append(f"{stubbed} stubbed")
     if native:
@@ -2042,7 +2103,7 @@ def _working_curation(
         "existing_router_tags": existing,
         "when": "when a specialized skill may help with the user's current goal",
         "message": (
-            f"Use the existing router tag(s) first: {', '.join(existing)}. Search and curate again only when the current goal falls outside them."
+            f"Use the existing router tags first: {', '.join(existing)}. Search and curate again only when the current goal falls outside them."
             if existing
             else (
                 "Search available metadata using the user's goal, then curate a focused tag/router only when useful."
@@ -2067,15 +2128,31 @@ def _print_working_result(result: dict[str, Any]) -> None:
     choices = int(inventory.get("agent_visible_choices") or source_entries)
     collapsed = int(inventory.get("collapsed_variants") or 0)
     exposed = int(inventory.get("exposed_now") or 0)
-    count_text = f"{source_entries} available source entr{'y' if source_entries == 1 else 'ies'}"
+    count_text = _counted(source_entries, "available source entry", "available source entries")
     if result.get("agent"):
-        count_text += f" -> {choices} {_agent_label([result['agent']])}-ready choice(s)"
+        ready_choice = f"{_agent_label([result['agent']])}-ready choice"
+        count_text += f" -> {_counted(choices, ready_choice)}"
         if collapsed:
-            count_text += f" ({collapsed} alternate variant(s) collapsed)"
-    print(f"  {count_text}; {exposed} source entries exposed.")
+            count_text += f" ({_counted(collapsed, 'alternate variant')} collapsed)"
+    if result.get("agent"):
+        on_demand = int(inventory.get("agent_visible_on_demand") or 0)
+        exposed_choices = max(0, choices - on_demand)
+    else:
+        on_demand = int(inventory.get("available_on_demand") or 0)
+        exposed_choices = exposed
+    if result.get("agent"):
+        exposed_text = _counted(exposed_choices, "exposed choice")
+    else:
+        exposed_text = _counted(exposed_choices, "exposed source entry", "exposed source entries")
+    exposure_detail = _working_exposure_detail(inventory)
+    detail_suffix = f" ({exposure_detail})" if exposure_detail else ""
+    print(
+        f"  {count_text}; {exposed_text}"
+        f"{detail_suffix}, {on_demand} on demand."
+    )
     pending = int(result.get("pending_owner_review_count") or 0)
     if pending:
-        print(f"  Owner review needed: {pending} skill(s).")
+        print(f"  Owner review needed: {_counted(pending, 'skill')}.")
     changed = int(changes.get("total") or 0)
     if changed:
         print(f"  Exposure changes need reconciliation: {changed}.")
@@ -2098,6 +2175,14 @@ def _working_pending_external_review(skills: list[dict[str, Any]]) -> list[dict[
         and skill.get("trust") in {"discovered", "lint_blocked"}
         and skill.get("id")
     ]
+
+
+def _working_exposure_detail(inventory: dict[str, Any]) -> str:
+    routed = int(inventory.get("routed") or 0)
+    router_tags = int(inventory.get("router_tags") or 0)
+    if routed and router_tags:
+        return f"{routed} routed through {_counted(router_tags, 'router')}"
+    return ""
 
 
 def _working_setup_path(state_root: Path) -> Path:
@@ -2253,7 +2338,7 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
         return _doctor_issue(
             "lint-blocked",
             DOCTOR_EXIT_LINT_BLOCKED,
-            f"{count} skill(s) are lint-blocked. Fix the source or approve with an audited override.",
+            f"{_counted(count, 'skill')} {'is' if count == 1 else 'are'} lint-blocked. Fix the source or approve with an audited override.",
             "skillager review --include-lint-blocked --summary",
             next_commands=[
                 "skillager review --include-lint-blocked --summary",
@@ -2265,7 +2350,7 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
         return _doctor_issue(
             "authored-review-needed",
             DOCTOR_EXIT_REVIEW_NEEDED,
-            f"{count} authored skill(s) are not reviewed yet.",
+            f"{_counted(count, 'authored skill')} {'is' if count == 1 else 'are'} not reviewed yet.",
             "skillager review --summary",
         )
     migration = view["migration"]
@@ -2297,9 +2382,9 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
         count = len(view["review_needed"])
         command, next_commands = _doctor_setup_next(agent)
         duplicate_review = int((view.get("duplicate_content") or {}).get("review_needed") or 0)
-        message = f"{count} unreviewed skill(s) need review in the active setup scope."
+        message = f"{_counted(count, 'unreviewed skill')} {'needs' if count == 1 else 'need'} review in the active setup scope."
         if duplicate_review:
-            message += f" {duplicate_review} are same-content duplicate(s) that need source-key approval."
+            message += f" {_counted(duplicate_review, 'same-content duplicate')} {'needs' if duplicate_review == 1 else 'need'} source-key approval."
         return _doctor_issue(
             "review-needed",
             DOCTOR_EXIT_REVIEW_NEEDED,
@@ -2597,7 +2682,7 @@ def _print_bootstrap_result(result: dict[str, Any]) -> None:
     print(f"Ready: {ready} of {len(artifacts)} artifacts current.")
     if summary.get("local_blockers"):
         print()
-        print("Local artifact repair needed. Re-run with --force only if you want Skillager to overwrite the listed local target(s).")
+        print("Local artifact repair needed. Re-run with --force only if you want Skillager to overwrite the listed local targets.")
 
 
 def _build_handoff(state_root: Path, *, catalog_root: Path, project_dir: Path, agent: str) -> dict[str, Any]:
@@ -2823,7 +2908,7 @@ def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any
         return {
             "status": "ready",
             "message": (
-                "Ask the user what they plan to do. Existing exposed router tag(s) are already available: "
+                "Ask the user what they plan to do. Existing exposed router tags are already available: "
                 f"{', '.join(exposed_router_tags)}. Search within an existing router tag when it matches the user's goal; "
                 "otherwise search available metadata, curate a task tag, and expose a narrow router, stub, native skill, or no new exposure as appropriate. "
                 "Report any curation or exposure changes."
@@ -2864,7 +2949,8 @@ def _available_inventory_summary(
     available = _available_skills(skills)
     source_entry_count = len(available)
     agent_visible = _collapse_agent_variant_results(available, agent) if agent else available
-    exposed_ids = _project_exposure_breakdown(project_exposure or {}, skill_ids={skill["id"] for skill in available})["exposed_ids"]
+    breakdown = _project_exposure_breakdown(project_exposure or {}, skill_ids={skill["id"] for skill in available})
+    exposed_ids = breakdown["exposed_ids"]
     available_ids = {skill["id"] for skill in available}
     agent_visible_ids = {skill["id"] for skill in agent_visible}
     return {
@@ -2875,6 +2961,10 @@ def _available_inventory_summary(
         "available_on_demand": len(available_ids.difference(exposed_ids)),
         "agent_visible_on_demand": len(agent_visible_ids.difference(exposed_ids)),
         "collapsed_variants": max(0, source_entry_count - len(agent_visible)),
+        "native": breakdown["native"],
+        "stubbed": breakdown["stubbed"],
+        "routed": breakdown["routed"],
+        "router_tags": breakdown["router_tags"],
         "basis": "available source entries; agent-visible choices collapse alternate native-agent variants when --agent is set",
     }
 
@@ -2939,14 +3029,15 @@ def _print_handoff(handoff: dict[str, Any]) -> None:
     print()
     print("State:")
     setup = state["setup"]
-    setup_text = f"needed, {setup.get('pending_owner_review', 0)} skill(s) pending owner review" if setup["needed"] else "clean"
+    pending_review = int(setup.get("pending_owner_review") or 0)
+    setup_text = f"needed, {_counted(pending_review, 'skill')} pending owner review" if setup["needed"] else "clean"
     print(f"  Setup: {setup_text}")
     migration = state["migration"]
     migration_text = "pending" if migration.get("pending") else "clean"
     if migration.get("pending"):
         totals = migration.get("totals", {})
         migration_text += (
-            f", {totals.get('id_migrations', 0)} ID(s), "
+            f", {_counted(totals.get('id_migrations', 0), 'ID')}, "
             f"{totals.get('needs_review', 0)} review, "
             f"{totals.get('tag_needs_repair', 0)} tag repair"
         )
@@ -3001,7 +3092,7 @@ def _compact_status(status: dict[str, Any]) -> dict[str, Any]:
     payload["pending_owner_review"] = int(payload.pop("review_needed", 0) or 0) + int(payload.pop("lint_blocked", 0) or 0)
     if payload["pending_owner_review"]:
         payload["message"] = (
-            f"Skillager: {payload['pending_owner_review']} skill(s) pending owner review. "
+            f"Skillager: {_counted(payload['pending_owner_review'], 'skill')} pending owner review. "
             "Ask the user to run `skillager setup`."
         )
     payload.pop("global_approved", None)
@@ -3251,7 +3342,7 @@ def _tag_trust_summary(tag: str, skills: list[dict[str, Any]]) -> dict[str, Any]
 
 def _tag_summary_line(summary: dict[str, Any]) -> str:
     parts = [
-        f"{summary['tag']}: {summary['skills']} skill(s)",
+        f"{summary['tag']}: {_counted(summary['skills'], 'skill')}",
         f"approved={summary['approved']}",
         f"review_needed={summary['review_needed']}",
     ]
@@ -3278,7 +3369,7 @@ def _tag_available_summary(summary: dict[str, Any]) -> dict[str, Any]:
 
 def _tag_available_summary_line(summary: dict[str, Any]) -> str:
     parts = [
-        f"{summary['tag']}: {summary['skills']} skill(s)",
+        f"{summary['tag']}: {_counted(summary['skills'], 'skill')}",
         f"available={summary['available']}",
     ]
     if summary.get("pending_owner_review"):
@@ -3291,9 +3382,11 @@ def _tag_available_summary_line(summary: dict[str, Any]) -> str:
 def _print_tag_review_warning(summary: dict[str, Any], *, indent: str = "") -> None:
     if not (summary.get("review_needed") or summary.get("lint_blocked")):
         return
+    unreviewed = int(summary.get("review_needed") or 0)
+    lint_blocked = int(summary.get("lint_blocked") or 0)
     print(
         f"{indent}warning: tag {summary['tag']} contains "
-        f"{summary.get('review_needed', 0)} unreviewed and {summary.get('lint_blocked', 0)} lint-blocked skill(s); "
+        f"{_counted(unreviewed, 'unreviewed skill')} and {_counted(lint_blocked, 'lint-blocked skill')}; "
         "search and router exposure will use only available members."
     )
     print(f"{indent}review remaining tag members with: skillager setup")
@@ -3304,7 +3397,7 @@ def _print_tag_owner_review_note(summary: dict[str, Any], *, indent: str = "") -
     if not pending:
         return
     print(
-        f"{indent}note: {pending} tag member(s) need owner review before they become available. "
+        f"{indent}note: {_counted(pending, 'tag member')} {'needs' if pending == 1 else 'need'} owner review before becoming available. "
         "Ask the user to run `skillager setup` when they want to inspect them."
     )
 
@@ -3363,25 +3456,27 @@ def _status_message(
     readiness: dict[str, Any] | None = None,
 ) -> str:
     if lint_blocked:
-        return f"Skillager: {len(lint_blocked)} skill(s) are lint-blocked. Inspect setup/review output, then fix the source or approve with an audited override."
+        count = len(lint_blocked)
+        return f"Skillager: {_counted(count, 'skill')} {'is' if count == 1 else 'are'} lint-blocked. Inspect setup/review output, then fix the source or approve with an audited override."
     if migration_summary and migration_summary.get("pending"):
         totals = migration_summary.get("totals", {})
         return (
             "Skillager: collection skill ID migration pending. "
-            f"{totals.get('id_migrations', 0)} ID(s) migrated, "
-            f"{totals.get('needs_review', 0)} skill(s) need re-review, "
-            f"{totals.get('tag_needs_repair', 0)} tag entries need repair. "
+            f"{_counted(totals.get('id_migrations', 0), 'ID')} migrated, "
+            f"{_counted(totals.get('needs_review', 0), 'skill')} requiring re-review, "
+            f"{_counted(totals.get('tag_needs_repair', 0), 'tag entry')} requiring repair. "
             "Run `skillager doctor --ack-migration` after reviewing."
         )
     if review_needed:
         duplicate_review = int((duplicate_content or {}).get("review_needed") or 0)
+        review_count = len(review_needed)
         if duplicate_review:
             return (
-                f"Skillager: {len(review_needed)} skill(s) need owner review in the active setup scope; "
-                f"{duplicate_review} same-content duplicate(s) already match approved content and need source-key approval. "
+                f"Skillager: {_counted(review_count, 'skill')} {'needs' if review_count == 1 else 'need'} owner review in the active setup scope; "
+                f"{_counted(duplicate_review, 'same-content duplicate')} already {'matches' if duplicate_review == 1 else 'match'} approved content and {'needs' if duplicate_review == 1 else 'need'} source-key approval. "
                 "Ask the user to run `skillager setup`."
             )
-        return f"Skillager: {len(review_needed)} skill(s) need owner review in the active setup scope. Ask the user to run `skillager setup`."
+        return f"Skillager: {_counted(review_count, 'skill')} {'needs' if review_count == 1 else 'need'} owner review in the active setup scope. Ask the user to run `skillager setup`."
     if readiness and not readiness.get("artifacts_ready") and (readiness.get("exposure") or {}).get("approved"):
         artifacts = readiness.get("artifacts") or {}
         if artifacts.get("kind") == "agent-required":
@@ -3391,134 +3486,6 @@ def _status_message(
             return f"Skillager: review is complete, but working artifacts need refresh. Run `{command}`."
         return f"Skillager: review is complete, but working artifacts need manual repair. {artifacts.get('message', '').strip()}"
     return "Skillager: no skills pending owner review. Use available metadata and expose only when the task needs it."
-
-
-def _print_status(status: dict[str, Any]) -> None:
-    print(_style("Skillager status", "bold"))
-    readiness = status.get("readiness") or {}
-    exposure = readiness.get("exposure") or {}
-    print(f"  - readiness: {'ready' if readiness.get('ready') else 'not ready'}")
-    print(f"    review: {'ready' if readiness.get('review_ready') else 'needs review'}")
-    print(f"    artifacts: {_readiness_handoff_state(readiness)}")
-    next_actions = _readiness_next_actions(readiness)
-    if len(next_actions) == 1:
-        print(f"    next: {next_actions[0]}")
-    elif next_actions:
-        print("    next:")
-        for action in next_actions:
-            print(f"      - {action}")
-    print(f"    exposure: {_exposure_summary_text(exposure)}")
-    if status.get("agent"):
-        source = status.get("agent_source")
-        source_suffix = " from saved setup scope" if source == "saved_setup_scope" else ""
-        print(f"  - agent: {status['agent']}{source_suffix}")
-    print(f"  - selected skills: {status['selected']}")
-    print(f"  - available: {status['approved']}")
-    if status.get("global_approved"):
-        print(f"  - reusable global availability records: {status['global_approved']}")
-    authored = status.get("authored_unreviewed") or {}
-    if authored.get("count"):
-        print(f"  - authored pending owner review: {authored['count']}")
-    print(f"  - pending owner review: {status['review_needed']}")
-    if status.get("lint_blocked"):
-        print(f"  - lint blocked: {status['lint_blocked']} (inspect setup/review output)")
-    _print_duplicate_content_status(status.get("duplicate_content") or {}, indent="  - ")
-    manifest_lint = status.get("manifest_lint") or {}
-    if manifest_lint.get("warned"):
-        print(f"  - manifest lint warned: {manifest_lint['warned']}")
-    print(f"  - blocked: {status['blocked']}")
-    if status["skipped_global"]:
-        print(f"  - skipped global: {status['skipped_global']} (use --include-global to include)")
-    collections = status.get("collections") or {}
-    if collections.get("count"):
-        names = ", ".join(f"{item['name']}={item['skills']}" for item in collections.get("items", [])[:5])
-        if collections.get("count", 0) > 5:
-            names += f", ... {collections['count'] - 5} more"
-        print(f"  - registered collection repos: {collections['count']} ({names})")
-        if collections.get("tagged_count"):
-            print(f"    project tags reference {collections.get('tagged_count')} collection(s)")
-    collection_inventory = status.get("collection_inventory") or {}
-    if collection_inventory.get("count"):
-        names = ", ".join(f"{item['name']}={item['skills']}" for item in collection_inventory.get("items", [])[:5])
-        if collection_inventory.get("count", 0) > 5:
-            names += f", ... {collection_inventory['count'] - 5} more"
-        print(
-            "  - discovered collection skill repos: "
-            f"{collection_inventory['count']} ({names})"
-        )
-    tagging = status.get("tagging") or {}
-    if tagging.get("mixed_trust_tag_count"):
-        names = ", ".join(
-            f"{item['tag']}={item['review_needed']} unreviewed"
-            for item in tagging.get("mixed_trust_tags", [])[:5]
-        )
-        print(f"  - attached tags needing review: {tagging['mixed_trust_tag_count']} ({names})")
-    if tagging.get("approved_untagged_count"):
-        names = ", ".join(
-            f"{item['collection']}={item['approved_untagged']}"
-            for item in tagging.get("approved_untagged_collections", [])[:5]
-        )
-        if len(tagging.get("approved_untagged_collections", [])) > 5:
-            names += f", ... {len(tagging['approved_untagged_collections']) - 5} more"
-        print(f"  - approved untagged collection skills: {tagging['approved_untagged_count']} ({names})")
-    migrations = status.get("collection_migrations") or {}
-    if migrations.get("pending"):
-        totals = migrations.get("totals", {})
-        print(
-            "  - collection ID migration: "
-            f"{totals.get('id_migrations', 0)} ID(s), "
-            f"{totals.get('trust_migrated', 0)} trust entries migrated, "
-            f"{totals.get('needs_review', 0)} skill(s) need re-review, "
-            f"{totals.get('tag_migrated', 0)} tag entries migrated, "
-            f"{totals.get('tag_needs_repair', 0)} tag entries need repair"
-        )
-        if totals.get("needs_review"):
-            print("    skills modified since the last collection refresh are listed as needs-review")
-        print("    run `skillager doctor --ack-migration` after reviewing")
-    if status.get("migration_details"):
-        _print_migration_details(migrations)
-    scope = status.get("scope")
-    if scope:
-        scope_bits = []
-        if scope.get("audience"):
-            scope_bits.append(f"audience={scope['audience']}")
-        if scope.get("selected_count") is not None:
-            scope_bits.append(f"selected={scope['selected_count']}")
-        if scope.get("paths"):
-            scope_bits.append(f"paths={len(scope['paths'])}")
-        if scope_bits:
-            print(f"  - setup scope: {', '.join(scope_bits)}")
-    materialized = status.get("materialized", {})
-    if materialized:
-        parts = [f"{agent}={count}" for agent, count in sorted(materialized.items())]
-        print(f"  - exposed project skills: {', '.join(parts)}")
-    if status.get("exposure_count"):
-        print(f"  - exposure detail: {_exposure_summary_text(exposure)}")
-    _print_inventory_block(status.get("inventory") or {}, indent="  - ")
-    update = status.get("update") or {}
-    if update.get("available"):
-        print(f"  - update available: skillager {update.get('latest_version')} (run `{update.get('command')}`)")
-    print()
-    print(status["message"])
-
-
-def _print_duplicate_content_status(duplicate_content: dict[str, Any], *, indent: str = "") -> None:
-    review_needed = int(duplicate_content.get("review_needed") or 0)
-    if not review_needed:
-        return
-    groups = int(duplicate_content.get("approved_overlap_groups") or 0)
-    print(f"{indent}duplicate approved content: {review_needed} source-key approval(s) across {groups} group(s)")
-    relevant_groups = [
-        group
-        for group in (duplicate_content.get("groups_detail") or [])
-        if group.get("source_key_approval_required")
-    ]
-    for group in relevant_groups[:3]:
-        review_ids = ", ".join(group.get("review_needed_ids") or [])
-        approved_ids = ", ".join(group.get("approved_ids") or [])
-        print(f"    {review_ids} matches approved {approved_ids}")
-    if len(relevant_groups) > 3:
-        print(f"    ... {len(relevant_groups) - 3} more duplicate group(s)")
 
 
 def _print_migration_details(migrations: dict[str, Any]) -> None:
@@ -3846,7 +3813,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         for skill in skills:
             print(f"{skill['id']}\t{skill.get('activation', '-')}\t{skill['source'].get('type')}\t{skill.get('summary', '-')}")
         if hidden_lint_count:
-            print(f"{hidden_lint_count} lint-blocked skill(s) hidden; add --include-lint-blocked to see them.")
+            print(f"{_counted(hidden_lint_count, 'lint-blocked skill')} hidden; add --include-lint-blocked to see them.")
     return 0
 
 
@@ -5026,7 +4993,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     else:
         _print_review_report(skills, summary, action, compact=args.summary)
         if hidden_lint_count:
-            print(f"{hidden_lint_count} lint-blocked skill(s) hidden; add --include-lint-blocked to see them.")
+            print(f"{_counted(hidden_lint_count, 'lint-blocked skill')} hidden; add --include-lint-blocked to see them.")
     return 0
 
 
@@ -5714,7 +5681,8 @@ def _print_review_report_rich(
     if duplicate.get("review_needed"):
         table.add_row(
             "duplicate approved content",
-            f"{duplicate.get('review_needed', 0)} source-key approval(s) across {duplicate.get('approved_overlap_groups', 0)} group(s)",
+            f"{_counted(duplicate.get('review_needed', 0), 'source-key approval')} across "
+            f"{_counted(duplicate.get('approved_overlap_groups', 0), 'group')}",
         )
     console.print(table)
     if action.get("changed") or action.get("skipped"):
@@ -5758,7 +5726,7 @@ def _print_review_duplicate_summary(summary: dict[str, Any]) -> None:
         return
     print(
         "  - duplicate approved content: "
-        f"{duplicate.get('review_needed', 0)} source-key approval(s), "
+        f"{_counted(duplicate.get('review_needed', 0), 'source-key approval')}, "
         f"groups={duplicate.get('approved_overlap_groups', 0)}"
     )
 
@@ -5839,7 +5807,7 @@ def _print_needs_review(skills: list[dict[str, Any]]) -> None:
             if index:
                 print()
             findings = skill.get("scan", {}).get("findings", [])
-            print(f"  - {_style(skill['id'], 'bold')} ({len(findings)} finding(s))")
+            print(f"  - {_style(skill['id'], 'bold')} ({_counted(len(findings), 'finding')})")
             print(f"    review: {_review_gate_summary(skill)}")
             print(f"    audience: {_audience_label(skill)}")
             if skill.get("summary"):
@@ -5861,7 +5829,7 @@ def _print_needs_review_rich(skills: list[dict[str, Any]]) -> None:
         for skill in group:
             findings = skill.get("scan", {}).get("findings", [])
             detail_lines = [
-                f"[bold]{skill['id']}[/bold] ({len(findings)} finding(s))",
+                f"[bold]{skill['id']}[/bold] ({_counted(len(findings), 'finding')})",
                 f"review: {_review_gate_summary(skill)}",
                 f"audience: {_audience_label(skill)}",
             ]
@@ -5903,7 +5871,7 @@ def _print_ready_for_approval(skills: list[dict[str, Any]], *, limit: int = 12) 
             print(f"    duplicate of approved: {', '.join(duplicate['approved_ids'])}")
         _print_wrapped("    file: ", skill.get("entrypoint", "<unknown>"), width=_output_width(), break_long_words=True)
     if len(ready) > limit:
-        print(f"  ... {len(ready) - limit} more low-risk skill(s); choose option 1 or run skillager setup --details to inspect all.")
+        print(f"  ... {_counted(len(ready) - limit, 'more low-risk skill')}; choose option 1 or run skillager setup --details to inspect all.")
 
 
 def _print_ready_for_approval_rich(skills: list[dict[str, Any]], *, limit: int = 12) -> None:
@@ -5928,7 +5896,7 @@ def _print_ready_for_approval_rich(skills: list[dict[str, Any]], *, limit: int =
         )
     console.print(table)
     if len(skills) > limit:
-        console.print(f"[dim]... {len(skills) - limit} more low-risk skill(s); choose option 1 or run skillager setup --details to inspect all.[/dim]")
+        console.print(f"[dim]... {_counted(len(skills) - limit, 'more low-risk skill')}; choose option 1 or run skillager setup --details to inspect all.[/dim]")
 
 
 def _print_setup_next_steps(skills: list[dict[str, Any]]) -> None:
@@ -6068,7 +6036,7 @@ def _interactive_setup(
         print(f"  {_style('4', 'cyan')}. Install Skillager working skill for project scope (requires approved skills)")
         print(f"  {_style('5', 'dim')}. Exit")
         if lint_candidates:
-            print(f"  {_style('6', 'yellow')}. Review {len(lint_candidates)} lint-blocked skill(s) (audited override)")
+            print(f"  {_style('6', 'yellow')}. Review {_counted(len(lint_candidates), 'lint-blocked skill')} (audited override)")
         choice = _interactive_input("> ").strip()
         if choice == "1":
             if not candidates:
@@ -6081,7 +6049,7 @@ def _interactive_setup(
                 print("No unreviewed low-risk skills remain in this setup selection.")
                 continue
             selected_low = _choose_low_risk_audience_group(low)
-            if selected_low and _confirm(f"Approve {len(selected_low)} low-risk skill(s) as reviewed?"):
+            if selected_low and _confirm(f"Approve {_counted(len(selected_low), 'low-risk skill')} as reviewed?"):
                 _print_action_result(
                     apply_review_action(
                         state_root,
@@ -6095,7 +6063,7 @@ def _interactive_setup(
             high = [skill for skill in candidates if skill.get("scan", {}).get("risk") == "high"]
             if not high:
                 print("No unreviewed high-risk skills remain in this setup selection.")
-            elif _confirm(f"Block {len(high)} high-risk skill(s)?"):
+            elif _confirm(f"Block {_counted(len(high), 'high-risk skill')}?"):
                 _print_action_result(apply_review_action(state_root, high, block_high=True))
         elif choice == "4":
             reviewed = _approved_skills(selected)
@@ -6468,7 +6436,7 @@ def _print_router_suggestions(state_root: Path, *, catalog_root: Path | None, ag
     print(_style("Router suggestions", "bold"))
     print("  Broad project-local tags are best exposed as router skills when relevant to the task:")
     for tag, count in suggestions:
-        print(f"  - {tag}: {count} approved skill(s)")
+        print(f"  - {tag}: {_counted(count, 'approved skill')}")
         print(f"    skillager expose --tag {tag} --mode router --agent {agent} --scope project")
 
 
@@ -6508,11 +6476,18 @@ def _print_setup_completion_summary(
     source_entries = int(inventory.get("available_source_entries") or 0)
     choices = int(inventory.get("agent_visible_choices") or 0)
     collapsed = int(inventory.get("collapsed_variants") or 0)
-    collapsed_suffix = f" ({collapsed} alternate-agent variant(s) collapsed)" if collapsed else ""
-    print(f"  - {source_entries} approved source entr{'y' if source_entries == 1 else 'ies'} -> {choices} {_agent_label([agent])}-ready choice(s){collapsed_suffix}")
+    exposed = int(inventory.get("exposed_now") or 0)
+    source_on_demand = int(inventory.get("available_on_demand") or 0)
+    agent_on_demand = int(inventory.get("agent_visible_on_demand") or 0)
+    agent_exposed = max(0, choices - agent_on_demand)
     print(
-        f"  - {inventory.get('exposed_now', 0)} source entries exposed now; "
-        f"{inventory.get('agent_visible_on_demand', 0)} {_agent_label([agent])}-ready choice(s) on demand"
+        f"  - {_counted(source_entries, 'approved source entry', 'approved source entries')}: "
+        f"{exposed} exposed, {source_on_demand} on demand"
+    )
+    collapsed_suffix = f"; {_counted(collapsed, 'alternate-agent variant')} collapsed" if collapsed else ""
+    print(
+        f"  - {_counted(choices, f'{_agent_label([agent])}-ready choice')}: "
+        f"{agent_exposed} exposed, {agent_on_demand} on demand{collapsed_suffix}"
     )
     if hidden:
         print()
@@ -6524,7 +6499,7 @@ def _print_setup_completion_summary(
             if summary:
                 _print_wrapped("       ", summary, width=_output_width(), max_chars=110)
         if len(hidden) > 12:
-            print(f"    ... {len(hidden) - 12} more available hidden skill(s)")
+            print(f"    ... {_counted(len(hidden) - 12, 'more available hidden skill')}")
         print()
         print("    To stub specific skills:")
         print(f"    skillager expose <skill-id> --mode stub --agent {agent} --scope project")
@@ -6717,6 +6692,10 @@ def _agent_label(agents: list[str]) -> str:
     if agents:
         return "Codex/Claude"
     return "the agent"
+
+
+def _counted(count: int, singular: str, plural: str | None = None) -> str:
+    return f"{count} {singular if count == 1 else plural or singular + 's'}"
 
 
 def _materialized_agents(results: list[dict[str, Any]]) -> list[str]:

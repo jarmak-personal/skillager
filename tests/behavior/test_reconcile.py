@@ -52,7 +52,17 @@ class ReconcileBehaviorTests(unittest.TestCase):
             preview = cli.run("reconcile", "keep-local", "lib/brainstorm", "--agent", "codex", "--json")
             self.assert_code(preview)
             self.assertEqual(preview.json()["status"], "preview")
+            self.assertEqual(
+                preview.json()["next_command"],
+                "skillager reconcile keep-local lib/brainstorm --agent codex --yes",
+            )
             self.assertFalse(load_mapping(target / "skillager.materialized.yaml")["customized"])
+
+            readable = cli.run("reconcile", "lib/brainstorm", "--agent", "codex")
+            self.assert_code(readable)
+            self.assertIn("locally edited", readable.stdout)
+            self.assertIn("keep-local: acknowledge this exact project edit", readable.stdout)
+            self.assertNotIn(PRIVATE_BODY, readable.stdout)
 
             kept = cli.run("reconcile", "keep-local", "lib/brainstorm", "--agent", "codex", "--yes", "--json")
             self.assert_code(kept)
@@ -101,6 +111,10 @@ class ReconcileBehaviorTests(unittest.TestCase):
             self.assert_code(preview)
             self.assertTrue(preview.json()["can_apply"])
             self.assertFalse(preview.json()["will_write"])
+            self.assertEqual(
+                preview.json()["next_command"],
+                "skillager reconcile promote lib/brainstorm --agent codex --yes",
+            )
 
             result = cli.run("reconcile", "promote", "lib/brainstorm", "--agent", "codex", "--yes", "--json")
             self.assert_code(result)
@@ -135,6 +149,13 @@ class ReconcileBehaviorTests(unittest.TestCase):
             self.assertIn("base_to_exposure", payload["changes"])
             self.assertIn("base_to_library", payload["changes"])
 
+            readable = cli.run("reconcile", "promote", "lib/brainstorm", "--agent", "codex")
+            self.assert_code(readable)
+            self.assertIn("Edited exposure hash:", readable.stdout)
+            self.assertIn("Project edit: 1 file changed", readable.stdout)
+            self.assertIn("Library changes since exposure: 1 file changed", readable.stdout)
+            self.assertNotIn("base_to_exposure", readable.stdout)
+
             refused = cli.run("reconcile", "promote", "lib/brainstorm", "--agent", "codex", "--yes", "--json")
             self.assert_code(refused, 2)
             self.assertEqual(content_hash(skill), library_hash)
@@ -153,6 +174,11 @@ class ReconcileBehaviorTests(unittest.TestCase):
             self.assertEqual(behind.json()["items"][0]["source"]["status"], "behind")
             target.joinpath("SKILL.md").write_text("# Dirty\n\nUnsaved project work.\n", encoding="utf-8")
             dirty_hash = content_hash(target)
+
+            preview = cli.run("reconcile", "rollback", "lib/brainstorm", "--agent", "codex")
+            self.assert_code(preview)
+            self.assertIn("Files to restore: 1 file changed", preview.stdout)
+            self.assertIn("Next: skillager reconcile rollback lib/brainstorm --agent codex --yes", preview.stdout)
 
             result = cli.run("reconcile", "rollback", "lib/brainstorm", "--agent", "codex", "--yes", "--json")
             self.assert_code(result)

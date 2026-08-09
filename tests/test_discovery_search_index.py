@@ -98,6 +98,58 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             self.assertIn("summary:spatial", reasons)
             self.assertFalse(any(reason.endswith(":i") or reason.endswith(":in") or reason.endswith(":to") or reason.endswith(":be") for reason in reasons))
 
+    def test_search_prefers_semantic_summary_matches_over_collection_name_matches(self) -> None:
+        skills = [
+            {
+                "id": "vibespatial/generic",
+                "name": "Generic Helper",
+                "summary": "Use general-purpose project guidance.",
+                "trust": "reviewed",
+                "source": {"type": "collection", "collection": "vibespatial"},
+            },
+            {
+                "id": "community/topology",
+                "name": "Spatial Validator",
+                "summary": "Validate topology before publishing spatial data.",
+                "trust": "reviewed",
+                "source": {"type": "collection", "collection": "community"},
+            },
+        ]
+
+        results = search_skills(skills, "vibespatial topology workflows", include_untrusted=False)
+
+        self.assertEqual([item["id"] for item in results], ["community/topology"])
+        self.assertNotIn("source:workflows", results[0]["reasons"])
+
+        source_inventory = search_skills(skills, "vibespatial", include_untrusted=False)
+        self.assertEqual([item["id"] for item in source_inventory], ["vibespatial/generic"])
+
+    def test_multi_term_search_drops_tag_only_matches_but_single_term_tag_search_remains_useful(self) -> None:
+        skills = [
+            {
+                "id": "project/spatial",
+                "name": "Spatial Validator",
+                "summary": "Validate spatial topology in Python.",
+                "trust": "reviewed",
+                "source": {"type": "project"},
+                "tags": ["gis"],
+            },
+            {
+                "id": "project/cuda",
+                "name": "Kernel Optimizer",
+                "summary": "Tune low-level GPU kernels.",
+                "trust": "reviewed",
+                "source": {"type": "project"},
+                "tags": ["gis"],
+            },
+        ]
+
+        focused = search_skills(skills, "GIS spatial Python", include_untrusted=False)
+        tag_inventory = search_skills(skills, "GIS", include_untrusted=False)
+
+        self.assertEqual([item["id"] for item in focused], ["project/spatial"])
+        self.assertEqual({item["id"] for item in tag_inventory}, {"project/spatial", "project/cuda"})
+
     def test_search_suppresses_generic_body_only_matches_in_long_goals(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             generic_entrypoint = Path(tmp) / "generic.md"

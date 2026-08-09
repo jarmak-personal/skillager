@@ -72,6 +72,7 @@ STOPWORDS = {
     "work",
     "working",
     "workflow",
+    "workflows",
     "would",
     "you",
     "your",
@@ -180,7 +181,7 @@ def _fts5_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any
         skill = skills[int(rowid) - 1]
         body_text = body_texts[skill["id"]]
         reasons = _reasons(skill, terms, body_text=body_text)
-        if not reasons:
+        if not reasons or _only_provenance_matches(reasons, terms):
             continue
         item = _with_score(
             skill,
@@ -202,11 +203,20 @@ def _fallback_search(skills: list[dict[str, Any]], query: str) -> list[dict[str,
         reasons: list[str] = ["id:exact"] if exact and skill["id"] == exact["id"] else []
         if terms:
             reasons.extend(_reasons(skill, terms, body_text=body_texts[skill["id"]]))
+        if "id:exact" not in reasons and _only_provenance_matches(reasons, terms):
+            continue
         if reasons or (not terms and not query.strip()):
             body_text = body_texts.get(skill["id"], "")
             score = (100.0 if "id:exact" in reasons else 0.0) + _score_boost(skill, terms, body_text=body_text)
             results.append(_with_score(skill, score, reasons))
     return sorted(results, key=lambda item: (-item["score"], _visibility_rank(item), item["id"]))
+
+
+def _only_provenance_matches(reasons: list[str], terms: list[str]) -> bool:
+    if len(terms) <= 1 or not reasons:
+        return False
+    fields = {reason.partition(":")[0] for reason in reasons}
+    return fields.issubset({"source", "tags"})
 
 
 def _included(
@@ -258,15 +268,15 @@ def _score_boost(skill: dict[str, Any], terms: list[str], *, body_text: str) -> 
         if term in fields["name"]:
             score += 8.0
         if term in fields["tags"]:
-            score += 7.0
+            score += 2.0
         if term in fields["package"]:
             score += 5.0
         if term in fields["targets"]:
             score += 5.0
         if term in fields["source"]:
-            score += 4.0
+            score += 0.1
         if term in fields["summary"]:
-            score += 2.0
+            score += 3.0
         if term in fields["body"] and term not in BODY_ONLY_STOPWORDS:
             score += 0.2
         if term in fields["audience"]:

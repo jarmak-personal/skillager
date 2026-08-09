@@ -128,7 +128,7 @@ def classify_exposure_target(
                 "current_hash": None,
                 "sidecar_status": "readable",
                 "reason": "managed target is missing SKILL.md",
-                "next_command": f"skillager reconcile {skill_id} --json",
+                "next_command": f"skillager reconcile {skill_id} --agent {record['agent']} --json",
             }
         )
         return record
@@ -145,7 +145,7 @@ def classify_exposure_target(
                 "current_hash": None,
                 "sidecar_status": "readable",
                 "reason": f"managed target is unreadable: {type(exc).__name__}",
-                "next_command": f"skillager reconcile {skill_id} --json",
+                "next_command": f"skillager reconcile {skill_id} --agent {record['agent']} --json",
             }
         )
         return record
@@ -164,7 +164,7 @@ def classify_exposure_target(
         status = "local_edit"
     record["status"] = status
     if status in ACTIONABLE_EXPOSURE_STATES:
-        record["next_command"] = f"skillager reconcile {skill_id} --json"
+        record["next_command"] = f"skillager reconcile {skill_id} --agent {record['agent']} --json"
     return record
 
 
@@ -253,7 +253,7 @@ def _sidecar_error_record(
             "sidecar_status": "error",
             "current_hash": None,
             "reason": reason,
-            "next_command": f"skillager reconcile {skill_id} --json",
+            "next_command": f"skillager reconcile {skill_id} --agent {agent} --json",
         }
     )
     return record
@@ -274,7 +274,7 @@ def _unmanaged_record(target: Path, *, agent: str) -> dict[str, Any]:
         "status": "unmanaged",
         "ownership": "external",
         "reason": "native skill exists without Skillager provenance",
-        "next_command": f"skillager reconcile {skill_id} --json",
+        "next_command": f"skillager reconcile {skill_id} --agent {agent} --json",
     }
 
 

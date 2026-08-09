@@ -88,7 +88,7 @@ def promote_preview(
             "head_matches_base": where.get("head_hash") == base_hash if identity.git_mode == "system" else None,
         },
         "changes": changes,
-        "next_command": f"skillager reconcile promote {record['skill_id']} --yes",
+        "next_command": _next_command("promote", record),
     }
 
 
@@ -265,7 +265,7 @@ def import_exposure_preview(
         "lint": _compact_lint(candidate.get("lint")),
         "scan": _compact_scan(candidate.get("scan")),
         "requires_override": _requires_override(candidate),
-        "next_command": f"skillager reconcile import {record['skill_id']} --as {name} --yes",
+        "next_command": _next_command("import", record, destination=name),
     }
 
 
@@ -455,7 +455,7 @@ def rollback_preview(
         "selected_version": version,
         "dirty_target_will_quarantine": current_hash is not None and current_hash != data.get("materialized_hash"),
         "changes": difference,
-        "next_command": f"skillager reconcile rollback {record['skill_id']} --yes",
+        "next_command": _next_command("rollback", record),
     }
 
 
@@ -584,6 +584,13 @@ def _rollback_unavailable(record: dict[str, Any], reason: str, next_action: str)
         "next_action": next_action,
         "exposure": record,
     }
+
+
+def _next_command(action: str, record: dict[str, Any], *, destination: str | None = None) -> str:
+    command = f"skillager reconcile {action} {record['skill_id']}"
+    if destination is not None:
+        command += f" --as {destination}"
+    return f"{command} --agent {record['agent']} --yes"
 
 
 def _require_matching_library(data: dict[str, Any], library_id: str) -> None:

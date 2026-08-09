@@ -123,7 +123,7 @@ class SkillagerWorkingTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             self.assertIn("Skillager needs attention: review-needed.", stdout)
-            self.assertIn("Owner review needed: 1 skill(s).", stdout)
+            self.assertIn("Owner review needed: 1 skill.", stdout)
             skill = self.indexed_skill(root, state, "project/local-tool")
             self.assertEqual(skill["trust"], "discovered")
 
@@ -182,7 +182,7 @@ class SkillagerWorkingTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             self.assertIn("Skillager needs attention: review-needed.", stdout)
-            self.assertIn("Owner review needed: 1 skill(s).", stdout)
+            self.assertIn("Owner review needed: 1 skill.", stdout)
             self.assertEqual(self.indexed_skill(root, state, "community/external-tool")["trust"], "discovered")
 
             code, stdout, stderr = self.run_cli(["working", "--json"], root=root, state=state)
@@ -209,7 +209,8 @@ class SkillagerWorkingTests(unittest.TestCase):
             code, stdout, stderr = self.run_cli(["working", "--agent", "codex"], root=root, state=state)
             self.assertEqual(code, 0, stderr)
             self.assertIn("Skillager ready.", stdout)
-            self.assertIn("1 available source entry -> 1 Codex-ready choice(s)", stdout)
+            self.assertIn("1 available source entry -> 1 Codex-ready choice", stdout)
+            self.assertIn("0 exposed choices, 1 on demand.", stdout)
             self.assertIn("Tell your agent what you plan to do", stdout)
 
             code, stdout, stderr = self.run_cli(["working", "--agent", "codex", "--json"], root=root, state=state)

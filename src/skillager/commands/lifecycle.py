@@ -11,6 +11,30 @@ from ..library.variants import fork_library_skill, fork_preview
 from .context import catalog_root, current_project_dir
 
 
+_SYNC_STATUS_LABELS = {
+    "up-to-date": "current",
+    "update-available": "update available",
+}
+_SYNC_REASON_LABELS = {
+    "changed-since-preview": "changed since preview",
+    "malformed-sidecar": "management metadata is malformed",
+    "unmanaged": "not managed by Skillager",
+    "external-source": "external source",
+    "unsupported-mode": "unsupported exposure mode",
+    "target-missing": "target is missing",
+    "blocked": "prospective hash is blocked",
+    "dirty": "local edit; reconcile first",
+    "customized": "intentionally kept local",
+    "pinned": "pinned",
+    "unresolved-drift": "unresolved local drift",
+    "library-identity-mismatch": "different library identity",
+    "invalid-library-source": "invalid library source",
+    "source-missing": "library source is missing",
+    "unaccepted-source": "library source has unaccepted changes",
+    "source-not-clean": "library source is not clean",
+}
+
+
 def add_lifecycle_parsers(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     fork = sub.add_parser(
         "fork",
@@ -57,14 +81,29 @@ def add_lifecycle_parsers(sub: argparse._SubParsersAction[argparse.ArgumentParse
     sync.add_argument("--json", action="store_true", help="Emit versioned metadata-only sync JSON.")
     sync.set_defaults(func=cmd_sync)
 
-    pin = sub.add_parser("pin", help="Freeze one clean current-project library exposure at its exact source hash.")
+    pin = sub.add_parser(
+        "pin",
+        help="Freeze one clean current-project library exposure at its exact source hash.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Pin a clean native or stub exposure to the accepted library hash it currently uses. "
+            "Pinning does not copy or rewrite skill content."
+        ),
+        epilog="Examples:\n  skillager pin lib/pandas --agent codex\n  skillager pin lib/pandas --agent codex --to <current-hash>",
+    )
     pin.add_argument("skill", help="Personal-library exposure skill ID.")
     pin.add_argument("--to", dest="to_hash", help="Hash prefix that must identify the exposure's current source hash.")
     pin.add_argument("--agent", choices=["codex", "claude"], help="Select one current-project agent exposure root.")
     pin.add_argument("--json", action="store_true", help="Emit versioned metadata-only pin JSON.")
     pin.set_defaults(func=cmd_pin)
 
-    unpin = sub.add_parser("unpin", help="Allow one current-project library exposure to sync again.")
+    unpin = sub.add_parser(
+        "unpin",
+        help="Allow one current-project library exposure to sync again.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Remove a project exposure's pin. Content changes only when a later sync is explicitly applied.",
+        epilog="Example:\n  skillager unpin lib/pandas --agent codex",
+    )
     unpin.add_argument("skill", help="Personal-library exposure skill ID.")
     unpin.add_argument("--agent", choices=["codex", "claude"], help="Select one current-project agent exposure root.")
     unpin.add_argument("--json", action="store_true", help="Emit versioned metadata-only unpin JSON.")
@@ -132,13 +171,21 @@ def cmd_sync(args: argparse.Namespace) -> int:
         _emit(result, as_json=True)
         return 0
     mode = "applied" if args.apply else "preview"
-    print(f"Project sync {mode}: {result['update_count']} update(s)")
+    update_count = int(result["update_count"])
+    print(f"Project sync {mode}: {update_count} update{'s' if update_count != 1 else ''}")
     for item in result["items"]:
-        label = item["status"]
-        reason = f" ({item['reason']})" if item.get("reason") else ""
-        print(f"- {item['skill_id']} [{item['agent']}] {label}{reason}")
+        status = str(item["status"])
+        label = _SYNC_STATUS_LABELS.get(status, status)
+        reason = ""
+        if status == "skipped" and item.get("reason"):
+            reason_value = str(item["reason"])
+            reason = f" ({_SYNC_REASON_LABELS.get(reason_value, reason_value.replace('-', ' '))})"
+        hashes = ""
+        if item.get("from_hash") and item.get("to_hash") and status in {"update-available", "updated"}:
+            hashes = f" {str(item['from_hash'])[:12]} -> {str(item['to_hash'])[:12]}"
+        print(f"- {item['skill_id']} [{item['agent']}] {label}{reason}{hashes}")
     if not args.apply and result["update_count"]:
-        print("Next: skillager sync --apply")
+        print(f"Next: {result['next_command']}")
     return 0
 
 
@@ -153,7 +200,8 @@ def cmd_pin(args: argparse.Namespace) -> int:
     if args.json:
         _emit(result, as_json=True)
         return 0
-    print(f"Pinned: {result['skill_id']} [{result['agent']}] at {result['pin_hash']}")
+    verb = "Already pinned" if result["status"] == "already-pinned" else "Pinned"
+    print(f"{verb}: {result['skill_id']} [{result['agent']}] at {result['pin_hash']}")
     return 0
 
 
@@ -167,7 +215,8 @@ def cmd_unpin(args: argparse.Namespace) -> int:
     if args.json:
         _emit(result, as_json=True)
         return 0
-    print(f"Unpinned: {result['skill_id']} [{result['agent']}]")
+    verb = "Already unpinned" if result["status"] == "already-unpinned" else "Unpinned"
+    print(f"{verb}: {result['skill_id']} [{result['agent']}]")
     return 0
 
 

@@ -27,6 +27,27 @@ from .context import catalog_root, current_project_dir, root
 
 
 RECONCILE_ACTIONS = {"keep-local", "quarantine", "repair", "promote", "rollback", "import"}
+_STATUS_LABELS = {
+    "current": "current",
+    "kept_local": "intentionally kept local",
+    "local_edit": "locally edited",
+    "target_missing": "partially missing",
+    "blocked": "blocked for this exposure",
+    "sidecar_error": "malformed management metadata",
+    "unmanaged": "not managed by Skillager",
+}
+_ACTION_DESCRIPTIONS = {
+    "keep-local": "acknowledge this exact project edit and leave the source unchanged",
+    "quarantine": "preserve the target outside agent-visible roots and block its exact hash",
+    "repair": "preserve local bytes, then regenerate this stub or router",
+    "promote": "make this edited native copy the new accepted library head",
+    "rollback": "restore this native copy from verified library history",
+    "import": "adopt this edited external native copy as a new library skill",
+}
+_CHANGE_LABELS = {
+    "base_to_exposure": "Project edit",
+    "base_to_library": "Library changes since exposure",
+}
 
 
 def add_reconcile_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -40,6 +61,14 @@ def add_reconcile_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser
         ),
         epilog=textwrap.dedent(
             """\
+            Actions:
+              keep-local  Acknowledge this exact project edit without changing the source.
+              quarantine  Preserve the target outside agent-visible roots and block its exact hash.
+              repair      Preserve then regenerate an edited or incomplete stub/router.
+              promote     Make an edited native library exposure the new accepted library head.
+              rollback    Restore a native library exposure from verified library history.
+              import      Adopt an edited external native exposure as a new library skill.
+
             Examples:
               skillager reconcile --json
               skillager reconcile lib/brainstorm --json
@@ -52,7 +81,12 @@ def add_reconcile_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser
             """
         ),
     )
-    parser.add_argument("arguments", nargs="*", metavar="ACTION_OR_SKILL")
+    parser.add_argument(
+        "arguments",
+        nargs="*",
+        metavar="ACTION_OR_SKILL",
+        help="Optional exposure skill ID, or an action (keep-local, quarantine, repair, promote, rollback, import) followed by one skill ID.",
+    )
     parser.add_argument("--agent", choices=["codex", "claude"], help="Select one current-project agent exposure root.")
     parser.add_argument("--as", dest="destination_name", help="Collision-free library name for reconcile import.")
     parser.add_argument("--yes", action="store_true", help="Confirm the exact previewed reconciliation mutation.")
@@ -242,11 +276,17 @@ def _emit_inventory(result: dict[str, Any], *, as_json: bool) -> None:
     if not items:
         print("No current-project exposures matched.")
         return
-    print(f"Reconcile inventory: {len(items)} exposure(s)")
+    exposure_count = len(items)
+    print(f"Reconcile inventory: {exposure_count} exposure{'s' if exposure_count != 1 else ''}")
     for item in items:
-        actions = ", ".join(item["actions"]) if item["actions"] else "none"
-        print(f"- {item['skill_id']} [{item['agent']}] {item['status']} ({item['ownership']}/{item['mode']})")
-        print(f"  actions: {actions}")
+        status = _STATUS_LABELS.get(str(item["status"]), str(item["status"]).replace("_", " "))
+        print(f"- {item['skill_id']} [{item['agent']}] {status} ({item['ownership']}/{item['mode']})")
+        if item["actions"]:
+            print("  choices:")
+            for action in item["actions"]:
+                print(f"    {action}: {_ACTION_DESCRIPTIONS[action]}")
+        else:
+            print("  choices: none")
 
 
 def _emit_action(result: dict[str, Any], *, as_json: bool) -> None:
@@ -262,7 +302,8 @@ def _emit_action(result: dict[str, Any], *, as_json: bool) -> None:
     if result.get("base_hash"):
         print(f"Base hash: {result['base_hash']}")
     if result.get("promoted_hash"):
-        print(f"Promoted hash: {result['promoted_hash']}")
+        label = "Promoted hash" if result.get("status") == "promoted" else "Edited exposure hash"
+        print(f"{label}: {result['promoted_hash']}")
     if result.get("imported_hash"):
         print(f"Imported hash: {result['imported_hash']}")
     if result.get("restore_hash"):
@@ -277,14 +318,26 @@ def _emit_action(result: dict[str, Any], *, as_json: bool) -> None:
 
 
 def _print_changes(changes: dict[str, Any]) -> None:
+    if _is_tree_difference(changes):
+        _print_tree_difference("Files to restore", changes)
+        return
     for label, difference in changes.items():
         if not isinstance(difference, dict):
             continue
-        if difference.get("available") is False:
-            print(f"{label}: unavailable ({difference.get('reason')})")
-            continue
-        changed = [*difference.get("added", []), *difference.get("deleted", []), *difference.get("changed", [])]
-        print(f"{label}: {len(changed)} file(s) changed")
+        _print_tree_difference(_CHANGE_LABELS.get(label, label.replace("_", " ").title()), difference)
+
+
+def _is_tree_difference(value: dict[str, Any]) -> bool:
+    return bool({"available", "added", "deleted", "changed"} & value.keys())
+
+
+def _print_tree_difference(label: str, difference: dict[str, Any]) -> None:
+    if difference.get("available") is False:
+        print(f"{label}: unavailable ({difference.get('reason')})")
+        return
+    changed = [*difference.get("added", []), *difference.get("deleted", []), *difference.get("changed", [])]
+    file_count = len(changed)
+    print(f"{label}: {file_count} file{'s' if file_count != 1 else ''} changed")
 
 
 __all__ = ["RECONCILE_ACTIONS", "add_reconcile_parser", "cmd_reconcile"]

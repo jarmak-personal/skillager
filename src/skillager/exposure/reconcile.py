@@ -88,7 +88,7 @@ def keep_local_preview(
         record,
         status=status,
         expected_hash=current_hash,
-        next_command=f"skillager reconcile keep-local {record['skill_id']} --yes",
+        next_command=_next_command("keep-local", record),
     )
 
 
@@ -156,7 +156,7 @@ def quarantine_preview(
         status="preview",
         expected_hash=current_hash,
         extra={"quarantine_root": str(_quarantine_root(project_dir))},
-        next_command=f"skillager reconcile quarantine {record['skill_id']} --yes",
+        next_command=_next_command("quarantine", record),
     )
 
 
@@ -218,7 +218,7 @@ def repair_preview(
         status="preview",
         expected_hash=expected_hash,
         extra={"resolved_source_count": resolved, "generated_hash": _rendered_hash(rendered)},
-        next_command=f"skillager reconcile repair {record['skill_id']} --yes",
+        next_command=_next_command("repair", record),
     )
 
 
@@ -454,6 +454,13 @@ def _action_preview(
     if next_command:
         result["next_command"] = next_command
     return result
+
+
+def _next_command(action: str, record: dict[str, Any]) -> str:
+    return (
+        f"skillager reconcile {action} {record['skill_id']} "
+        f"--agent {record['agent']} --yes"
+    )
 
 
 def _record_matches(record: dict[str, Any], value: str) -> bool:

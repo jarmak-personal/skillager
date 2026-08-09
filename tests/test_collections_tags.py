@@ -37,7 +37,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 output = StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                self.assertIn("community: indexed 1 skill(s)", output.getvalue())
+                self.assertIn("community: indexed 1 skill", output.getvalue())
 
                 collection_review = StringIO()
                 with redirect_stdout(collection_review):
@@ -101,6 +101,11 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 working_data = json.loads(working.getvalue())
                 self.assertTrue(working_data["readiness"]["review_ready"])
                 self.assertEqual(working_data["pending_owner_review_count"], 0)
+
+                working_human = StringIO()
+                with redirect_stdout(working_human):
+                    self.assertEqual(main(["working"]), 0)
+                self.assertIn("0 exposed source entries, 1 on demand.", working_human.getvalue())
 
                 project_tags = StringIO()
                 with redirect_stdout(project_tags):
@@ -169,21 +174,21 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(add_output):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
                 add_text = add_output.getvalue()
-                self.assertIn("community: indexed 2 skill(s)", add_text)
+                self.assertIn("community: indexed 2 skills", add_text)
                 self.assertIn("Errors: 1", add_text)
                 self.assertIn(str(bad), add_text)
                 self.assertIn("unknown manifest key", add_text)
-                self.assertIn("1 skill(s) quarantined by lint; they will appear in `skillager setup` for review.", add_text)
+                self.assertIn("1 skill quarantined by lint. It will appear in `skillager setup` for review.", add_text)
                 self.assertNotIn("errors: 1", add_text)
 
                 refresh_output = StringIO()
                 with redirect_stdout(refresh_output):
                     self.assertEqual(main(["collection", "refresh", "community"]), 0)
                 refresh_text = refresh_output.getvalue()
-                self.assertIn("community: indexed 2 skill(s)", refresh_text)
+                self.assertIn("community: indexed 2 skills", refresh_text)
                 self.assertIn("Errors: 1", refresh_text)
                 self.assertIn(str(bad), refresh_text)
-                self.assertIn("1 skill(s) quarantined by lint; they will appear in `skillager setup` for review.", refresh_text)
+                self.assertIn("1 skill quarantined by lint. It will appear in `skillager setup` for review.", refresh_text)
 
                 default_review = StringIO()
                 with redirect_stdout(default_review):
@@ -370,7 +375,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             tag_data = json.loads(tag_output.getvalue())
             self.assertEqual(tag_data["summary"]["available"], 1)
             self.assertEqual(tag_data["summary"]["pending_owner_review"], 1)
-            self.assertIn("need owner review", attach_text.getvalue())
+            self.assertIn("1 tag member needs owner review", attach_text.getvalue())
             project_data = json.loads(project_output.getvalue())
             self.assertEqual(project_data["tag_summaries"][0]["tag"], "mixed")
             self.assertEqual(project_data["tag_summaries"][0]["pending_owner_review"], 1)
@@ -415,7 +420,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 output = StringIO()
                 with redirect_stdout(output):
                     self.assertEqual(main(["collection", "add", str(repos), "--name", "personal"]), 0)
-                self.assertIn("personal: indexed 3 skill(s)", output.getvalue())
+                self.assertIn("personal: indexed 3 skills", output.getvalue())
                 index = json.loads((state / "collections" / "personal.json").read_text(encoding="utf-8"))
             self.assertEqual(
                 [skill["id"] for skill in index["skills"]],

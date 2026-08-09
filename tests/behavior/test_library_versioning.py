@@ -160,6 +160,17 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             self.assertFalse(reference.exists())
             self.assertNotIn(FIRST_BODY, preview.stdout)
 
+            readable_preview = cli.run("library", "restore", "restorable", "--to", first_hash[:12])
+            self.assert_code(readable_preview, 1)
+            self.assertIn("Confirmation required; no files were changed.", readable_preview.stdout)
+            self.assertIn(
+                f"Next: skillager library restore lib/restorable --to {first_hash[:12]} --yes",
+                readable_preview.stdout,
+            )
+            self.assertEqual(readable_preview.stderr, "")
+            self.assertNotIn(FIRST_BODY, readable_preview.stdout)
+            self.assertNotIn(SECOND_BODY, readable_preview.stdout)
+
             restored = cli.run(
                 "library",
                 "restore",
