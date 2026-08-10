@@ -33,24 +33,14 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
 
             self.assert_code(result, 0)
             self.assert_body_not_exposed(result)
-            self.assertIn("Personal library workflow:", result.stdout)
+            self.assertIn("When you own or adopt a skill:", result.stdout)
             self.assertIn("Library ownership never bypasses exact-hash acceptance.", result.stdout)
             self.assertIn("External skills remain at their source unless explicitly imported.", result.stdout)
 
-            reconcile = cli.run("reconcile", "--help")
-            self.assert_code(reconcile, 0)
-            self.assertIn("Actions:", reconcile.stdout)
-            self.assertIn("keep-local  Acknowledge this exact project edit", reconcile.stdout)
-            self.assertIn("promote     Make an edited native library exposure", reconcile.stdout)
-
-            pin = cli.run("pin", "--help")
-            self.assert_code(pin, 0)
-            self.assertIn("Pinning does not copy or rewrite skill content.", pin.stdout)
-            self.assertIn("skillager pin lib/pandas --agent codex", pin.stdout)
-
-            where = cli.run("where", "--help")
-            self.assert_code(where, 0)
-            self.assertIn("without showing its body", where.stdout)
+            for deferred in ("reconcile", "sync", "pin", "unpin", "fork", "where", "edit"):
+                result = cli.run(deferred, "--help")
+                self.assert_code(result, 2)
+                self.assertIn("invalid choice", result.stderr)
 
     def test_metadata_commands_do_not_expose_unreviewed_skill_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -170,7 +160,11 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assertIn("Skillager ready.", working.stdout)
             self.assertIn("1 available source entry -> 1 Codex-ready choice", working.stdout)
             self.assertIn("0 exposed choices, 1 on demand.", working.stdout)
-            self.assertIn("Tell your agent what you plan to do", working.stdout)
+            self.assertIn("Optional next step when a specialized skill may help:", working.stdout)
+            self.assertIn(
+                'skillager search "<user-goal>" --agent codex --json',
+                working.stdout,
+            )
 
     def test_agent_search_is_monotonic_by_displayed_fractional_score(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -233,6 +227,10 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assertIn("gis: 1 skill (unchanged)", unchanged.stdout)
             exposed = cli.run("expose", "--tag", "gis", "--mode", "router", "--agent", "codex", "--scope", "project")
             self.assert_code(exposed, 0)
+            self.assertIn(
+                "skillager activate <skill-id> --from-router skillager-gis",
+                exposed.stdout,
+            )
 
             plain = cli.run("working", "--agent", "codex")
             self.assert_code(plain, 0)

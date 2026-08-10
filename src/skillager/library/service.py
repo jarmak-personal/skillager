@@ -125,7 +125,6 @@ def library_relocation_preview(catalog_root: Path, path: Path) -> dict[str, Any]
     return {
         "schema": LIBRARY_RELOCATE_SCHEMA,
         "status": "preview",
-        "will_relocate": False,
         "library_id": registration.library_id,
         "from_path": str(registration.layout.root),
         "to_path": str(candidate.root),
@@ -139,10 +138,10 @@ def relocate_library(catalog_root: Path, path: Path) -> dict[str, Any]:
         relocate_library_collection(catalog_root, Path(preview["to_path"]), str(preview["library_id"]))
         index = refresh_collection(catalog_root, LIBRARY_NAMESPACE)
     status = library_status(catalog_root)
+    preview.pop("next_command_argv", None)
     return {
         **preview,
         "status": "relocated",
-        "will_relocate": True,
         "indexed": len(index.get("skills", [])),
         "errors": index.get("errors", []),
         "library": status["library"],
@@ -165,30 +164,22 @@ def new_library_skill(catalog_root: Path, name: str) -> dict[str, Any]:
             skill_path = candidate / "SKILL.md"
             skill_path.write_text(_new_skill_template(normalized), encoding="utf-8")
             os.replace(candidate, target)
-        commit = None
-        if identity.git_mode == "system":
-            commit = commit_paths(layout.root, [target], f"Add library skill {normalized}")
         index = refresh_collection(catalog_root, LIBRARY_NAMESPACE)
         skill = _library_skill_entry(catalog_root, normalized)
         return {
             "schema": LIBRARY_NEW_SCHEMA,
             "status": "pending",
             "skill": _compact_library_skill(skill),
-            "commit": commit,
             "indexed": len(index.get("skills", [])),
-            "next_commands": [
-                f"skillager edit {LIBRARY_NAMESPACE}/{normalized}",
-                f"skillager library accept {LIBRARY_NAMESPACE}/{normalized}",
-            ],
+            "next_command_argv": ["skillager", "library", "accept", f"{LIBRARY_NAMESPACE}/{normalized}"],
         }
 
 
-def library_acceptance_preview(catalog_root: Path, skill_name: str, *, project_dir: Path | None = None) -> dict[str, Any]:
+def library_acceptance_preview(catalog_root: Path, skill_name: str) -> dict[str, Any]:
     registration, identity = _require_library_identity(catalog_root)
     normalized = normalize_skill_name(skill_name)
     require_canonical_content_tree(registration.layout.skill_root(normalized), action="library acceptance")
     skill = _library_skill_entry(catalog_root, skill_name)
-    approval_key = _library_approval_key(skill)
     git = repository_status(registration.layout.root, mode=identity.git_mode)
     changes = path_changes(git, registration.layout.root, Path(skill["root"])) if identity.git_mode == "system" else _empty_path_changes()
     lint_blocked = bool(blocking_findings(skill.get("lint")))
@@ -196,9 +187,7 @@ def library_acceptance_preview(catalog_root: Path, skill_name: str, *, project_d
     return {
         "schema": LIBRARY_ACCEPT_SCHEMA,
         "status": "preview",
-        "will_accept": False,
         "skill": _compact_library_skill(skill),
-        "approval_key": approval_key,
         "lint": _compact_lint(skill.get("lint")),
         "scan": _compact_scan(skill.get("scan")),
         "requires_override": lint_blocked or high_risk,
@@ -208,7 +197,6 @@ def library_acceptance_preview(catalog_root: Path, skill_name: str, *, project_d
             "operation": git.get("operation"),
             **changes,
         },
-        "where": library_where(catalog_root, skill_name, project_dir=project_dir)["skill"],
     }
 
 
@@ -280,13 +268,11 @@ def accept_library_skill(
         return {
             "schema": LIBRARY_ACCEPT_SCHEMA,
             "status": "accepted",
-            "will_accept": True,
             "skill": where,
             "approval": {
                 "state": record["state"],
                 "scope": record["scope"],
                 "content_hash": record["content_hash"],
-                "approval_key": approval_key,
                 "lint_override": record.get("lint_override"),
                 "risk_override": record.get("risk_override"),
             },
@@ -308,17 +294,6 @@ def library_where(catalog_root: Path, skill_name: str, *, project_dir: Path | No
     return {"schema": LIBRARY_WHERE_SCHEMA, "skill": skill}
 
 
-def library_skill_path(catalog_root: Path, skill_name: str) -> Path:
-    registration, _identity = _require_library_identity(catalog_root)
-    skill = _library_skill_entry(catalog_root, skill_name)
-    target = Path(skill["entrypoint"])
-    try:
-        target.resolve().relative_to(registration.layout.skills.resolve())
-    except ValueError as exc:
-        raise ValueError(f"library skill path escapes the registered library: {target}") from exc
-    return target.resolve()
-
-
 def library_status(
     catalog_root: Path,
     *,
@@ -338,8 +313,7 @@ def library_status(
             "skill": None,
             "warnings": [],
             "advisories": [],
-            "next_command": "skillager library init",
-            "recovery_command": None,
+            "next_command_argv": ["skillager", "library", "init"],
         }
 
     layout = registration.layout
@@ -388,7 +362,7 @@ def library_status(
         if skill_name is not None and identity is not None
         else None
     )
-    return {
+    result = {
         "schema": LIBRARY_STATUS_SCHEMA,
         "status": "ready" if not warnings else "degraded",
         "initialized": True,
@@ -407,13 +381,16 @@ def library_status(
         "skill": selected,
         "warnings": warnings,
         "advisories": advisories,
-        "next_command": "skillager library status" if warnings else None,
-        "recovery_command": (
-            "skillager library relocate --path <moved-library-path>"
-            if not layout.root.is_dir()
-            else None
-        ),
     }
+    if not layout.root.is_dir():
+        result["next_command_argv"] = [
+            "skillager",
+            "library",
+            "relocate",
+            "--path",
+            "<moved-library-path>",
+        ]
+    return result
 
 
 def _registered_library_or_conflict(catalog_root: Path) -> LibraryRegistration | None:
@@ -547,22 +524,19 @@ def _skill_status(
         "summary": skill.get("summary"),
         "path": str(root),
         "entrypoint": skill.get("entrypoint"),
-        "ownership": "library",
         "status": state,
         "acceptance": acceptance,
         "working_hash": working_hash,
         "accepted_hash": accepted_hash,
         "head_hash": head_hash,
-        "approval_key": approval_key,
         "lint": _compact_lint(skill.get("lint")),
         "scan": _compact_scan(skill.get("scan")),
         "git": git_paths,
         "history": _history_availability(identity, git),
         "exposures": _library_exposures(project_dir, str(skill["id"])),
     }
-    for key in ("lineage", "imported_from"):
-        if skill.get(key):
-            result[key] = skill[key]
+    if skill.get("imported_from"):
+        result["imported_from"] = skill["imported_from"]
     return result
 
 
@@ -618,8 +592,6 @@ def _library_skill_entry(catalog_root: Path, value: str) -> dict[str, Any]:
             provenance = load_library_provenance(registration.layout) if registration is not None else None
             record = (provenance or {}).get("skills", {}).get(name)
             if isinstance(record, dict):
-                if isinstance(record.get("forked_from"), dict):
-                    result["lineage"] = dict(record["forked_from"])
                 if isinstance(record.get("imported_from"), dict):
                     result["imported_from"] = dict(record["imported_from"])
             return result
@@ -644,13 +616,12 @@ def _compact_library_skill(skill: dict[str, Any]) -> dict[str, Any]:
         "name": skill.get("name"),
         "summary": skill.get("summary"),
         "path": skill.get("root"),
+        "skill_file": skill.get("entrypoint"),
         "working_hash": skill.get("content_hash"),
         "trust": skill.get("trust"),
-        "approval_key": _library_approval_key(skill),
     }
-    for key in ("lineage", "imported_from"):
-        if skill.get(key):
-            result[key] = skill[key]
+    if skill.get("imported_from"):
+        result["imported_from"] = skill["imported_from"]
     return result
 
 
@@ -796,7 +767,6 @@ def _library_exposures(project_dir: Path | None, skill_id: str) -> list[dict[str
                         "kind": kind,
                         "path": str(sidecar.parent.resolve()),
                         "source_hash": None if is_router_member else data.get("source_hash"),
-                        "pin_hash": None if is_router_member else data.get("pin_hash"),
                         "router": data.get("router_slug") if is_router_member else None,
                     }
                 )
@@ -814,7 +784,6 @@ __all__ = [
     "initialize_library",
     "library_acceptance_preview",
     "library_relocation_preview",
-    "library_skill_path",
     "library_status",
     "library_where",
     "new_library_skill",

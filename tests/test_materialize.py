@@ -449,7 +449,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             self.assertFalse((target / "skill-card.md").exists())
             self.assertTrue((target / "skillager.materialized.yaml").exists())
             sidecar = load_mapping(target / "skillager.materialized.yaml")
-            self.assertEqual(sidecar["ownership"], "external")
+            self.assertNotIn("ownership", sidecar)
             self.assertEqual(sidecar["materialized_fingerprint"], content_tree_fingerprint(target))
 
     def test_expose_json_result_uses_exposure_vocabulary(self) -> None:

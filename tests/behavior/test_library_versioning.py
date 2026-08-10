@@ -65,7 +65,7 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             self.assertTrue(data["versions"][0]["head"])
             self.assertTrue(data["versions"][0]["current"])
 
-            where = cli.run("where", "atlas", "--json")
+            where = cli.run("library", "status", "atlas", "--json")
             status = cli.run("library", "status", "atlas", "--json")
             self.assert_code(where, 0)
             self.assert_code(status, 0)
@@ -106,6 +106,24 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             self.assertIn("reference.md", stat.stdout)
             self.assertNotIn(FIRST_BODY, stat.stdout)
             self.assertNotIn(SECOND_BODY, stat.stdout)
+
+            stat_json = cli.run(
+                "library",
+                "diff",
+                "diffable",
+                "--from",
+                first_hash[:12],
+                "--to",
+                second_hash[:12],
+                "--stat",
+                "--json",
+            )
+            self.assert_code(stat_json, 0)
+            self.assertEqual(stat_json.json()["schema"], "skillager.library-diff.v1")
+            self.assertFalse(stat_json.json()["content_bearing"])
+            self.assertIsNone(stat_json.json()["diff"])
+            self.assertNotIn(FIRST_BODY, stat_json.stdout)
+            self.assertNotIn(SECOND_BODY, stat_json.stdout)
 
             content = cli.run(
                 "library",
@@ -156,6 +174,10 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             preview = cli.run("library", "restore", "restorable", "--to", first_hash[:12], "--json")
             self.assert_code(preview, 0)
             self.assertEqual(preview.json()["status"], "preview")
+            self.assertNotIn("will_restore", preview.json())
+            self.assertNotIn("current_tree_fingerprint", preview.stdout)
+            self.assertNotIn("approval_key", preview.stdout)
+            self.assertIn("next_command_argv", preview.json())
             self.assertEqual(skill_file.read_text(encoding="utf-8"), self.body("Restorable", SECOND_BODY))
             self.assertFalse(reference.exists())
             self.assertNotIn(FIRST_BODY, preview.stdout)
@@ -295,7 +317,7 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             refused = cli.run("library", "restore", "risky-version", "--to", risky_hash[:12], "--yes")
             self.assert_code(refused, 2)
             self.assertIn("--override-lint --reason", refused.stderr)
-            current = cli.run("where", "risky-version", "--json")
+            current = cli.run("library", "status", "risky-version", "--json")
             self.assertEqual(current.json()["skill"]["working_hash"], safe_hash)
 
             restored = cli.run(
@@ -312,8 +334,8 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             )
             self.assert_code(restored, 0)
             self.assertEqual(restored.json()["skill"]["working_hash"], risky_hash)
-            approval_key = restored.json()["approval"]["approval_key"]
             trust = json.loads((catalog / "trust.json").read_text(encoding="utf-8"))
+            approval_key = next(iter(trust["global_approvals"]))
             self.assertEqual(
                 trust["global_approvals"][approval_key]["risk_override"]["reason"],
                 "Re-reviewed historical security example",
@@ -339,7 +361,7 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             self.assert_code(failed, 2)
             self.assertIn("restored content remains pending", failed.stderr)
             self.assertIn("library accept lib/hooked-restore --yes", failed.stderr)
-            pending = cli.run("where", "hooked-restore", "--json")
+            pending = cli.run("library", "status", "hooked-restore", "--json")
             self.assert_code(pending, 0)
             self.assertEqual(pending.json()["skill"]["working_hash"], first_hash)
             self.assertEqual(pending.json()["skill"]["acceptance"], "pending")

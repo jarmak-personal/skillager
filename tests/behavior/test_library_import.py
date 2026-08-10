@@ -66,6 +66,11 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             self.assertEqual(preview_data["schema"], "skillager.import.v1")
             self.assertEqual(preview_data["status"], "preview")
             self.assertTrue(preview_data["owner_review_required"])
+            self.assertNotIn("will_import", preview_data)
+            self.assertNotIn("source_key", preview.stdout)
+            self.assertNotIn("artifact_kind", preview.stdout)
+            self.assertNotIn('"next_command"', preview.stdout)
+            self.assertEqual(preview_data["next_command_argv"][-1], "--yes")
             self.assertFalse((library / "skills" / "orbital-review").exists())
             self.assert_body_not_exposed(preview)
 
@@ -76,6 +81,7 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             self.assertEqual(data["destination"]["id"], "lib/orbital-review")
             self.assertEqual(data["destination"]["acceptance"], "accepted")
             self.assertEqual(data["source"]["content_hash"], data["destination"]["working_hash"])
+            self.assertNotIn("approval_key", imported.stdout)
             self.assert_body_not_exposed(imported)
 
             destination = library / "skills" / "orbital-review"
@@ -96,7 +102,6 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
 
             provenance = json.loads((library / ".skillager" / "provenance.json").read_text(encoding="utf-8"))
             provenance_entry = provenance["skills"]["orbital-review"]
-            self.assertEqual(provenance_entry["artifact_kind"], "skill")
             imported_from = provenance_entry["imported_from"]
             self.assertEqual(imported_from["skill_id"], "project/orbital-review")
             self.assertEqual(imported_from["content_hash"], data["destination"]["working_hash"])
@@ -159,45 +164,6 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             self.assertEqual(approval["lint_override"]["reason"], "Reviewed local security documentation")
             self.assertEqual(approval["risk_override"]["reason"], "Reviewed local security documentation")
             self.assertTrue(target.is_dir())
-
-    def test_refresh_is_read_only_and_degrades_when_upstream_disappears(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            _, cli = make_basic_workspace(root)
-            library = root / "library"
-            source = cli.project / ".skills" / "refreshable"
-            source.mkdir(parents=True)
-            source_file = source / "SKILL.md"
-            source_file.write_text("# Refreshable\n\nUse first upstream guidance.\n", encoding="utf-8")
-            self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
-            self.assert_code(cli.run("import", "project/refreshable", "--yes"), 0)
-
-            unchanged = cli.run("import", "--refresh", "lib/refreshable", "--json")
-            self.assert_code(unchanged, 0)
-            self.assertEqual(unchanged.json()["status"], "unchanged")
-            self.assertTrue(unchanged.json()["preview_only"])
-
-            source_file.write_text("# Refreshable\n\nUse second upstream guidance.\n", encoding="utf-8")
-            upstream_changed = cli.run("import", "--refresh", "refreshable", "--json")
-            self.assert_code(upstream_changed, 0)
-            self.assertEqual(upstream_changed.json()["status"], "upstream-changed")
-            self.assertEqual(upstream_changed.json()["tree_difference"]["changed"], ["SKILL.md"])
-
-            library_file = library / "skills" / "refreshable" / "SKILL.md"
-            library_file.write_text("# Refreshable\n\nUse independently edited library guidance.\n", encoding="utf-8")
-            diverged = cli.run("import", "--refresh", "lib/refreshable", "--json")
-            self.assert_code(diverged, 0)
-            self.assertEqual(diverged.json()["status"], "diverged")
-            self.assert_code(cli.run("library", "accept", "refreshable", "--yes"), 0)
-
-            source_file.unlink()
-            missing = cli.run("import", "--refresh", "lib/refreshable", "--json")
-            self.assert_code(missing, 0)
-            self.assertEqual(missing.json()["status"], "source-missing")
-            self.assertTrue(missing.json()["preview_only"])
-            still_owned = cli.run("show", "lib/refreshable", "--content")
-            self.assert_code(still_owned, 0)
-            self.assertIn("independently edited library guidance", still_owned.stdout)
 
     def test_import_discovers_collection_environment_packages_editable_and_native_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

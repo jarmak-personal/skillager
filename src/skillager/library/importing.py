@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,7 +8,7 @@ from typing import Any
 
 from ..catalog.impl import refresh_collection, select_collection_skills
 from ..skills.index import build_index
-from ..skills.tree import content_tree_manifest, copy_content_tree
+from ..skills.tree import copy_content_tree
 from ..state.locking import resource_locks
 from ..state.statefiles import read_user_json
 from ..trust import APPROVED_TRUST_STATES, approval_key_for, content_hash, set_trust
@@ -28,7 +27,6 @@ from .service import (
 
 
 IMPORT_SCHEMA = "skillager.import.v1"
-IMPORT_REFRESH_SCHEMA = "skillager.import-refresh.v1"
 
 
 def import_preview(
@@ -50,9 +48,7 @@ def import_preview(
     scan = _compact_scan(source.get("scan"))
     requires_override = lint["blocking_count"] > 0 or scan["risk"] == "high"
     prospective_provenance = {
-        "artifact_kind": "skill",
         "imported_from": {
-            "source_key": source_key,
             "skill_id": source_skill_id,
             "content_hash": source["content_hash"],
             "source_type": str((source.get("source") or {}).get("type") or "unknown"),
@@ -62,8 +58,7 @@ def import_preview(
     return {
         "schema": IMPORT_SCHEMA,
         "status": "preview",
-        "will_import": False,
-        "source": _compact_source(source, source_key=source_key),
+        "source": _compact_source(source),
         "destination": {
             "id": f"{LIBRARY_NAMESPACE}/{name}",
             "name": name,
@@ -71,13 +66,13 @@ def import_preview(
             "exists": False,
         },
         "source_hash": source["content_hash"],
+        "_source_key": source_key,
         "provenance": prospective_provenance,
         "owner_review_required": source.get("trust") not in APPROVED_TRUST_STATES,
         "blocked": blocked,
         "lint": lint,
         "scan": scan,
         "requires_override": requires_override,
-        "next_command": shlex.join(next_command_argv),
         "next_command_argv": next_command_argv,
         "project": str(project_dir.resolve()) if project_dir is not None else None,
     }
@@ -146,7 +141,6 @@ def import_library_skill(
                 provenance = set_import_provenance(
                     layout,
                     name,
-                    source_key=source_key,
                     source_skill=source_skill_id,
                     source_hash=expected_hash,
                     source_type=str((source.get("source") or {}).get("type") or "unknown"),
@@ -204,104 +198,19 @@ def import_library_skill(
         return {
             "schema": IMPORT_SCHEMA,
             "status": "imported",
-            "will_import": True,
-            "source": _compact_source(source, source_key=source_key),
+            "source": _compact_source(source),
             "destination": where,
             "provenance": provenance,
             "approval": {
                 "state": record["state"],
                 "scope": record["scope"],
                 "content_hash": record["content_hash"],
-                "approval_key": approval_key,
                 "lint_override": record.get("lint_override"),
                 "risk_override": record.get("risk_override"),
             },
             "copied_file_count": len(copied_files),
             "commit": commit,
         }
-
-
-def import_refresh_preview(
-    project_state: Path,
-    catalog_root: Path,
-    library_skill_id: str,
-    *,
-    project_dir: Path | None = None,
-) -> dict[str, Any]:
-    registration, _identity = _require_library_identity(catalog_root)
-    name = normalize_skill_name(library_skill_id)
-    where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
-    provenance_data = load_library_provenance(registration.layout)
-    if provenance_data is None:
-        return _refresh_degraded(where, "provenance-missing", "library provenance metadata is missing")
-    entry = provenance_data.get("skills", {}).get(name)
-    imported_from = entry.get("imported_from") if isinstance(entry, dict) else None
-    if not isinstance(imported_from, dict):
-        return _refresh_degraded(where, "not-imported", "library skill has no import provenance")
-    source_id = imported_from.get("skill_id")
-    source_key = imported_from.get("source_key")
-    base_hash = imported_from.get("content_hash")
-    if not all(isinstance(value, str) and value for value in (source_id, source_key, base_hash)):
-        return _refresh_degraded(where, "provenance-invalid", "import provenance is incomplete")
-
-    candidates = _external_skill_candidates(project_state, catalog_root, str(source_id))
-    if not candidates:
-        return _refresh_degraded(
-            where,
-            "source-missing",
-            f"import source is no longer discoverable: {source_id}",
-            imported_from=imported_from,
-        )
-    matching = [skill for skill in candidates if _source_key(skill) == source_key]
-    if not matching:
-        return _refresh_degraded(
-            where,
-            "source-identity-changed",
-            "a skill with the imported ID exists, but its source identity changed",
-            imported_from=imported_from,
-        )
-    if len(matching) > 1:
-        return _refresh_degraded(
-            where,
-            "source-ambiguous",
-            "multiple discovered skills match the import provenance",
-            imported_from=imported_from,
-        )
-
-    upstream = matching[0]
-    upstream_hash = str(upstream["content_hash"])
-    library_hash = str(where["working_hash"])
-    upstream_changed = upstream_hash != base_hash
-    library_changed = library_hash != base_hash
-    if not upstream_changed and not library_changed:
-        status = "unchanged"
-    elif upstream_changed and not library_changed:
-        status = "upstream-changed"
-    elif library_changed and not upstream_changed:
-        status = "library-changed"
-    elif upstream_hash == library_hash:
-        status = "converged"
-    else:
-        status = "diverged"
-    return {
-        "schema": IMPORT_REFRESH_SCHEMA,
-        "status": status,
-        "preview_only": True,
-        "can_apply": False,
-        "library": where,
-        "imported_from": imported_from,
-        "base_hash": base_hash,
-        "upstream": _compact_source(upstream, source_key=str(source_key)),
-        "upstream_hash": upstream_hash,
-        "comparisons": {
-            "upstream_changed": upstream_changed,
-            "library_changed": library_changed,
-            "upstream_matches_library": upstream_hash == library_hash,
-        },
-        "tree_difference": _tree_difference(Path(upstream["root"]), Path(where["path"])),
-        "lint": _compact_lint(upstream.get("lint")),
-        "scan": _compact_scan(upstream.get("scan")),
-    }
 
 
 def _external_skill_candidates(project_state: Path, catalog_root: Path, skill_id: str) -> list[dict[str, Any]]:
@@ -338,7 +247,7 @@ def _resolve_external_skill(project_state: Path, catalog_root: Path, skill_id: s
     candidates = _external_skill_candidates(project_state, catalog_root, skill_id)
     if not candidates:
         if skill_id.startswith(f"{LIBRARY_NAMESPACE}/"):
-            raise ValueError("library skills are already owned; use `skillager fork` when variant support is available")
+            raise ValueError("library skills are already owned and cannot be imported again")
         raise ValueError(f"external skill not found in current discovery: {skill_id}")
     if len(candidates) > 1:
         paths = ", ".join(sorted(str(Path(skill["root"]).resolve()) for skill in candidates))
@@ -358,14 +267,13 @@ def _source_key(skill: dict[str, Any]) -> str:
     return f"path:{Path(skill['root']).resolve().as_posix()}"
 
 
-def _compact_source(skill: dict[str, Any], *, source_key: str) -> dict[str, Any]:
+def _compact_source(skill: dict[str, Any]) -> dict[str, Any]:
     source = skill.get("source") or {}
     return {
         "id": skill.get("id"),
         "name": skill.get("name"),
         "summary": skill.get("summary"),
         "path": str(Path(skill["root"]).resolve()),
-        "source_key": source_key,
         "type": source.get("type"),
         "collection": source.get("collection"),
         "package": source.get("package"),
@@ -399,39 +307,6 @@ def _saved_setup_paths(project_state: Path) -> list[Path] | None:
     return paths or None
 
 
-def _tree_difference(upstream: Path, library: Path) -> dict[str, list[str]]:
-    upstream_files = content_tree_manifest(upstream)
-    library_files = content_tree_manifest(library)
-    return {
-        "upstream_only": sorted(set(upstream_files) - set(library_files)),
-        "library_only": sorted(set(library_files) - set(upstream_files)),
-        "changed": sorted(
-            path
-            for path in set(upstream_files) & set(library_files)
-            if upstream_files[path] != library_files[path]
-        ),
-    }
-
-
-def _refresh_degraded(
-    where: dict[str, Any],
-    status: str,
-    reason: str,
-    *,
-    imported_from: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return {
-        "schema": IMPORT_REFRESH_SCHEMA,
-        "status": status,
-        "preview_only": True,
-        "can_apply": False,
-        "library": where,
-        "imported_from": imported_from,
-        "upstream": None,
-        "reason": reason,
-    }
-
-
 def _import_argv(source_skill_id: str, name: str, *, override: bool) -> list[str]:
     command = ["skillager", "import", source_skill_id, "--as", name, "--yes"]
     if override:
@@ -440,9 +315,7 @@ def _import_argv(source_skill_id: str, name: str, *, override: bool) -> list[str
 
 
 __all__ = [
-    "IMPORT_REFRESH_SCHEMA",
     "IMPORT_SCHEMA",
     "import_library_skill",
     "import_preview",
-    "import_refresh_preview",
 ]

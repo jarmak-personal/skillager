@@ -19,7 +19,7 @@ MATERIALIZED_SCHEMA = "skillager.materialized.v1"
 TRUSTED_STATES = {"reviewed", "trusted", "pinned"}
 ROUTER_SCHEMA = "skillager.router.v1"
 WORKING_SKILL_ID = "skillager/working"
-WORKING_REASON_LOCAL_CUSTOMIZATION = "target has local customizations"
+WORKING_REASON_LOCAL_CUSTOMIZATION = "target has local edits"
 WORKING_REASON_UNMANAGED = "target exists without Skillager provenance"
 
 
@@ -292,7 +292,7 @@ def materialize_working_skill_one(
 def render_working_skill(agent: str = "codex") -> str:
     return f"""---
 name: skillager-working
-description: "Operate Skillager safely in a managed project: run quiet readiness checks, find and activate available skills, curate narrow exposure, and help the user manage skills in their personal library. Use after context resets, when specialized skills may help, or when the user asks to create, edit, import, version, sync, or reconcile skills."
+description: "Operate Skillager safely in a managed project: run quiet readiness checks, find and activate available skills, curate narrow exposure, and help the user manage skills in their personal library. Use after context resets, when specialized skills may help, or when the user asks to create, edit, import, or recover skills."
 ---
 
 # Skillager Working
@@ -308,7 +308,7 @@ acceptance, overrides, or version-changing decisions.
 - Approval and exposure are separate. Approval records an exact reviewed content hash;
   exposure writes a native skill, stub, or router for an agent.
 - Personal-library ownership never approves changed bytes. A pending `lib/<name>` skill
-  remains metadata-visible but cannot be activated, exposed, routed, or synced.
+  remains metadata-visible but cannot be activated, exposed, or routed.
 - External project, package, environment, collection, and native-agent skills remain at
   their source unless the user explicitly imports one into the personal library.
 - Do not inspect owner review or scanner diagnostics during ordinary task selection.
@@ -319,11 +319,11 @@ acceptance, overrides, or version-changing decisions.
 2. Treat `next` as required before using or exposing managed skill bodies, and
    `curation` as optional task guidance. An explicit owner request may still create or
    edit a pending personal-library draft while unrelated project review waits; do not
-   accept, activate, expose, or sync that draft until its own gates are satisfied.
+   accept, activate, or expose that draft until its own gates are satisfied.
 3. If no user action is needed, continue quietly. Mention Skillager only when a skill,
    owner decision, curation change, exposure, activation, drift, or repair matters.
-4. Treat `exposure_changes` as advisory. Preview reconciliation when useful; never
-   mutate an exposure merely because drift was detected.
+4. Treat `exposure_changes` as advisory. A local edit is a no-overwrite warning, not
+   permission to replace either the exposure or its canonical source.
 5. If review is needed, ask the user to run the exact setup/review command. If the
    first-party working skill is stale or missing, ask for
    `skillager doctor --agent {agent} --fix`, then rerun `working`.
@@ -366,10 +366,7 @@ Use these metadata-only commands to orient without exposing bodies:
 
 ```text
 skillager library status [<lib-skill>] --json
-skillager where <lib-skill> --json
 skillager library history <lib-skill> --json
-skillager reconcile [<skill-id>] --agent {agent} --json
-skillager sync --agent {agent} --json
 ```
 
 When the user asks to manage owned skills, inspect the relevant command's `--help`
@@ -380,20 +377,20 @@ to expose a named skill to a named agent and scope authorizes that narrow exposu
 the skill is available; it does not waive the acceptance gate.
 
 1. For a new owned skill, inspect library status, initialize only when required, create
-   it with `skillager library new <name> --json`, locate it with `skillager where
-   lib/<name> --json`, then edit that canonical file with normal agent tools. Use an
-   available skill-authoring workflow for content and validation guidance, but do not
-   run a second scaffold initializer. Do not convert external inventory implicitly.
-2. Preview acceptance, restore, import, reconciliation, and sync before any
-   version-changing action. Preserve and show the exact generated next command.
-3. Run confirmation-bearing commands (`--yes`) or `sync --apply` only after the user
-   authorizes that exact preview. Never infer acceptance from authorship or ownership.
-4. Keep local exposure edits separate from library changes. Use `reconcile --help`
-   and its preview to choose keep-local, quarantine, repair, promote, rollback, or
-   import; do not silently merge divergence.
-5. Treat pin and unpin as explicit project policy. A pin freezes one clean exposure at
-   its exact source hash; it does not create another library version.
-6. If lint blocks a skill, stop for owner review. Use `--override-lint` only when the
+   it with `skillager library new <name> --json`, then edit the returned canonical
+   `SKILL.md` path with normal agent tools. Use an available skill-authoring workflow
+   for content and validation guidance, but do not run a second scaffold initializer.
+   Do not convert external inventory implicitly.
+2. Preview acceptance, restore, and import before any version-changing action.
+   Preserve and show the exact generated next command.
+3. Run confirmation-bearing commands (`--yes`) only after the user authorizes that
+   exact preview. Never infer acceptance from authorship or ownership.
+4. Exposed copies are managed projections, not alternate sources of truth. If one was
+   edited, do not overwrite it. Compare it with the canonical source, copy intentional
+   work into the library, accept the new library hash, and re-expose only with the
+   user's explicit authorization. Use `--force` only when the user explicitly chooses
+   to replace the local copy.
+5. If lint blocks a skill, stop for owner review. Use `--override-lint` only when the
    user explicitly approves the exact override and supplies an audited reason.
 """
 
@@ -418,10 +415,10 @@ def materialize_router_one(
         prospective_hash = _single_file_content_hash(rendered)
         decisions = _exposure_decisions(sidecar)
         if prospective_hash in decisions.get("exposure_blocked_hashes", []):
-            return _result(router_skill, target, "skipped", "exact exposure hash is blocked; use reconcile to choose a recovery action", agent=agent, scope=scope)
+            return _result(router_skill, target, "skipped", "exact exposure hash is blocked by prior project policy", agent=agent, scope=scope)
         if target.exists():
             if _is_customized(sidecar, target) and not force:
-                return _result(router_skill, target, "skipped", "target has local customizations", agent=agent, scope=scope)
+                return _result(router_skill, target, "skipped", WORKING_REASON_LOCAL_CUSTOMIZATION, agent=agent, scope=scope)
             if not force and (target / "SKILL.md").exists() and not sidecar.exists():
                 return _result(router_skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
         if dry_run:
@@ -532,10 +529,10 @@ def materialize_stub_one(
         prospective_hash = _single_file_content_hash(rendered)
         decisions = _exposure_decisions(sidecar)
         if prospective_hash in decisions.get("exposure_blocked_hashes", []):
-            return _result(skill, target, "skipped", "exact exposure hash is blocked; use reconcile to choose a recovery action", agent=agent, scope=scope)
+            return _result(skill, target, "skipped", "exact exposure hash is blocked by prior project policy", agent=agent, scope=scope)
         if target.exists():
             if _is_customized(sidecar, target) and not force:
-                return _result(skill, target, "skipped", "target has local customizations", agent=agent, scope=scope)
+                return _result(skill, target, "skipped", WORKING_REASON_LOCAL_CUSTOMIZATION, agent=agent, scope=scope)
             if not force and (target / "SKILL.md").exists() and not sidecar.exists():
                 return _result(skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
         if dry_run:
@@ -630,10 +627,10 @@ def materialize_one(
         sidecar = target / "skillager.materialized.yaml"
         decisions = _exposure_decisions(sidecar)
         if skill.get("content_hash") in decisions.get("exposure_blocked_hashes", []):
-            return _result(skill, target, "skipped", "exact exposure hash is blocked; use reconcile to choose a recovery action", agent=agent, scope=scope)
+            return _result(skill, target, "skipped", "exact exposure hash is blocked by prior project policy", agent=agent, scope=scope)
         if target.exists():
             if _is_customized(sidecar, target) and not force:
-                return _result(skill, target, "skipped", "target has local customizations", agent=agent, scope=scope)
+                return _result(skill, target, "skipped", WORKING_REASON_LOCAL_CUSTOMIZATION, agent=agent, scope=scope)
             if not force and target_skill.exists() and not sidecar.exists():
                 return _result(skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
         if dry_run:
@@ -787,8 +784,6 @@ def _sidecar(
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
         "scope": scope,
-        "customized": False,
-        "ownership": _skill_ownership(skill),
     }
     _add_source_library_id(data, skill)
     return data
@@ -835,7 +830,6 @@ def _working_sidecar(
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
         "scope": scope,
-        "customized": False,
     }
 
 
@@ -867,8 +861,6 @@ def _router_sidecar(
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
         "scope": scope,
-        "customized": False,
-        "ownership": "library" if skills and all(_skill_ownership(skill) == "library" for skill in skills) else "external",
     }
     if tag is not None:
         data["tag"] = tag
@@ -897,8 +889,6 @@ def _stub_sidecar(
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
         "scope": scope,
-        "customized": False,
-        "ownership": _skill_ownership(skill),
     }
     _add_source_library_id(data, skill)
     return data
@@ -976,7 +966,7 @@ def _exposure_decisions(sidecar: Path) -> dict[str, Any]:
     blocked = data.get("exposure_blocked_hashes")
     if isinstance(blocked, list):
         decisions["exposure_blocked_hashes"] = [str(value) for value in blocked]
-    for key in ("quarantine_path", "quarantined_at", "pin_hash"):
+    for key in ("quarantine_path", "quarantined_at"):
         value = data.get(key)
         if isinstance(value, str) and value:
             decisions[key] = value

@@ -12,15 +12,6 @@ from .impl import (
     working_source_hash,
 )
 from .drift import classify_exposure_target, list_project_exposures, scan_project_exposures
-from .reconcile import (
-    keep_local,
-    keep_local_preview,
-    quarantine,
-    quarantine_preview,
-    reconcile_inventory,
-    repair_generated,
-    repair_preview,
-)
 
 __all__ = [
     "TRUSTED_STATES",
@@ -34,12 +25,5 @@ __all__ = [
     "working_source_hash",
     "classify_exposure_target",
     "list_project_exposures",
-    "keep_local",
-    "keep_local_preview",
-    "quarantine",
-    "quarantine_preview",
-    "reconcile_inventory",
-    "repair_generated",
-    "repair_preview",
     "scan_project_exposures",
 ]

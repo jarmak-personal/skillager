@@ -78,10 +78,6 @@ class SkillagerReadPurityTests(unittest.TestCase):
                 ["tag", "show", "demo", "--json"],
                 ["tag", "list", "--json"],
                 ["doctor", "--agent", "codex", "--no-packages", "--json"],
-                ["reconcile", "--agent", "codex", "--json"],
-                ["reconcile", "project/demo", "--agent", "codex", "--json"],
-                ["reconcile", "keep-local", "project/demo", "--agent", "codex", "--json"],
-                ["sync", "--agent", "codex", "--json"],
             ]
             with (
                 patch.dict(os.environ, env),
@@ -93,7 +89,7 @@ class SkillagerReadPurityTests(unittest.TestCase):
                     output = StringIO()
                     with redirect_stdout(output):
                         self.assertEqual(main(command), 0, command)
-                    if command[0] in {"working", "list", "search", "show", "tag", "doctor", "sync"}:
+                    if command[0] in {"working", "list", "search", "show", "tag", "doctor"}:
                         json.loads(output.getvalue())
 
             self.assertEqual(snapshot_tree(state, catalog, cache, project, library), before)

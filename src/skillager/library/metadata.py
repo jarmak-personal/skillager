@@ -59,7 +59,6 @@ def set_import_provenance(
     layout: LibraryLayout,
     name: str,
     *,
-    source_key: str,
     source_skill: str,
     source_hash: str,
     source_type: str,
@@ -75,44 +74,12 @@ def set_import_provenance(
     if name in skills:
         raise ValueError(f"library provenance already exists for: {name}")
     entry = {
-        "artifact_kind": "skill",
         "imported_from": {
-            "source_key": source_key,
             "skill_id": source_skill,
             "content_hash": source_hash,
             "source_type": source_type,
         },
         "imported_at": imported_at,
-    }
-    skills[name] = entry
-    write_library_provenance(layout, data)
-    return entry
-
-
-def set_fork_provenance(
-    layout: LibraryLayout,
-    name: str,
-    *,
-    source_skill: str,
-    source_hash: str,
-    created_at: str,
-    expected: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    data = load_library_provenance(layout)
-    if data is None:
-        raise ValueError(f"library provenance metadata is missing: {layout.provenance_path}")
-    if expected is not None and data != expected:
-        raise ValueError("library provenance changed during fork; review and retry")
-    skills = data["skills"]
-    if name in skills:
-        raise ValueError(f"library provenance already exists for: {name}")
-    entry = {
-        "artifact_kind": "skill",
-        "forked_from": {
-            "skill": source_skill,
-            "hash": source_hash,
-        },
-        "created_at": created_at,
     }
     skills[name] = entry
     write_library_provenance(layout, data)
@@ -125,7 +92,6 @@ __all__ = [
     "load_library_identity",
     "load_library_provenance",
     "new_library_identity",
-    "set_fork_provenance",
     "set_import_provenance",
     "write_empty_provenance",
     "write_library_identity",

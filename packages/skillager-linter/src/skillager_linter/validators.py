@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import unicodedata
 from pathlib import Path
@@ -135,27 +134,9 @@ def find_manifest(root: Path) -> Path | None:
 
 def _identity_from_skill_md(root: Path, text: str) -> tuple[str, str]:
     frontmatter = _frontmatter(text)
-    path_name = root.name.replace("-", " ").replace("_", " ").title()
-    top_heading = _first_top_level_heading(text)
-    heading = frontmatter.get("name") or (_descriptive_heading(root.name, top_heading) if top_heading else None) or path_name
+    heading = frontmatter.get("name") or _first_top_level_heading(text) or root.name.replace("-", " ").replace("_", " ").title()
     summary = frontmatter.get("description") or _first_sentence(text, heading)
     return heading, summary
-
-
-def _descriptive_heading(slug: str, heading: str) -> str | None:
-    slug_tokens = {token for token in re.findall(r"[a-z0-9]+", slug.lower()) if len(token) >= 3}
-    heading_tokens = set(re.findall(r"[a-z0-9]+", heading.lower()))
-    if slug_tokens.intersection(heading_tokens):
-        return heading
-    if any(char in heading for char in "{}"):
-        return None
-    if not heading[:1].isalnum():
-        return None
-    if re.search(r"\bv\d+\b", heading.lower()):
-        return None
-    if len(heading.split()) > 5:
-        return None
-    return heading
 
 
 def _required_mapping(value: Any, field: str) -> dict[str, Any]:
@@ -590,15 +571,9 @@ def _frontmatter(text: str) -> dict[str, str]:
         if ":" not in stripped:
             continue
         key, value = stripped.split(":", 1)
-        value = value.strip()
-        parsed: object = value.strip("\"'")
-        if value.startswith('"') and value.endswith('"'):
-            try:
-                parsed = json.loads(value)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        if key.strip() in {"name", "description"} and isinstance(parsed, str) and parsed:
-            result[key.strip()] = parsed
+        value = value.strip().strip("\"'")
+        if key.strip() in {"name", "description"} and value:
+            result[key.strip()] = value
     return result
 
 

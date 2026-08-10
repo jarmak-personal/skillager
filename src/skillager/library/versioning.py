@@ -167,11 +167,10 @@ def library_restore_preview(
     return {
         "schema": LIBRARY_RESTORE_SCHEMA,
         "status": "already-current" if already_current else "preview",
-        "will_restore": False,
         "skill": history["skill"],
         "selected_version": version,
         "current_hash": current.content_hash,
-        "current_tree_fingerprint": _tree_fingerprint(current.files),
+        "_current_tree_fingerprint": _tree_fingerprint(current.files),
         "lint": lint,
         "scan": scan,
         "requires_override": lint["blocking_count"] > 0 or scan["risk"] == "high",
@@ -288,7 +287,6 @@ def restore_library_skill(
         return {
             "schema": LIBRARY_RESTORE_SCHEMA,
             "status": "restored",
-            "will_restore": True,
             "skill": where,
             "restored_version": version,
             "commit": commit,
@@ -296,8 +294,7 @@ def restore_library_skill(
                 "state": record["state"],
                 "scope": record["scope"],
                 "content_hash": record["content_hash"],
-                "approval_key": approval_key,
-                "lint_override": record.get("lint_override"),
+            "lint_override": record.get("lint_override"),
                 "risk_override": record.get("risk_override"),
             },
         }
@@ -374,7 +371,6 @@ def _history_skill(where: dict[str, Any]) -> dict[str, Any]:
             "working_hash",
             "accepted_hash",
             "head_hash",
-            "approval_key",
         )
     }
 

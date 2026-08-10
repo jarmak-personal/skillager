@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shlex
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -15,9 +13,7 @@ from ..library.service import (
     initialize_library,
     library_acceptance_preview,
     library_relocation_preview,
-    library_skill_path,
     library_status,
-    library_where,
     new_library_skill,
     relocate_library,
 )
@@ -49,12 +45,10 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
               skillager library status
               skillager library status lib/my-skill --json
               skillager library new my-skill
-              skillager edit lib/my-skill
               skillager library accept lib/my-skill --yes
               skillager library history lib/my-skill --json
               skillager library diff lib/my-skill --stat
               skillager library restore lib/my-skill --to <content-hash> --yes
-              skillager where lib/my-skill --json
             """
         ),
     )
@@ -97,6 +91,7 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     diff.add_argument("--from", dest="from_hash", help="Historical Skillager content-hash prefix.")
     diff.add_argument("--to", dest="to_hash", help="Historical Skillager content-hash prefix; defaults to working.")
     diff.add_argument("--stat", action="store_true", help="Show metadata-only file and line counts, not content.")
+    diff.add_argument("--json", action="store_true", help="Emit a versioned diff result; use --stat to omit bodies.")
     diff.set_defaults(func=cmd_library_diff)
     restore = library_sub.add_parser("restore", help="Restore a verified historical tree as a new commit.")
     restore.add_argument("skill", help="Library skill name or lib/<name> ID.")
@@ -111,33 +106,10 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     restore.add_argument("--json", action="store_true", help="Emit versioned restore preview or result JSON.")
     restore.set_defaults(func=cmd_library_restore)
 
-    where = sub.add_parser(
-        "where",
-        help="Show canonical library ownership, hashes, Git state, and project exposures.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Locate one personal-library skill and compare its working, accepted, and Git HEAD hashes without showing its body.",
-        epilog="Examples:\n  skillager where lib/my-skill\n  skillager where lib/my-skill --json",
-    )
-    where.add_argument("skill", help="Library skill name or lib/<name> ID.")
-    where.add_argument("--json", action="store_true", help="Emit versioned location metadata as JSON.")
-    where.set_defaults(func=cmd_where)
-
-    edit = sub.add_parser(
-        "edit",
-        help="Print or open a canonical library skill path.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Print the canonical SKILL.md path, or open it with the command configured in $EDITOR.",
-        epilog="Examples:\n  skillager edit lib/my-skill\n  EDITOR=code skillager edit lib/my-skill --open",
-    )
-    edit.add_argument("skill", help="Library skill name or lib/<name> ID.")
-    edit.add_argument("--open", action="store_true", dest="open_editor", help="Open SKILL.md with $EDITOR.")
-    edit.set_defaults(func=cmd_edit)
-
-
 def cmd_library_init(args: argparse.Namespace) -> int:
     result = initialize_library(catalog_root(args), path=args.path, no_git=args.no_git)
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
         return 0
     library = result["library"]
     print(f"Personal skill library: {result['status']}")
@@ -159,16 +131,15 @@ def cmd_library_relocate(args: argparse.Namespace) -> int:
         result = relocate_library(catalog_root(args), args.path)
     else:
         result = library_relocation_preview(catalog_root(args), args.path)
-        result["next_command"] = shlex.join(result["next_command_argv"])
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
         return 0
     if result["status"] == "preview":
         print("Personal library relocation preview (no files will be moved):")
         print(f"From: {result['from_path']}")
         print(f"To: {result['to_path']}")
         print(f"Identity: {result['library_id']}")
-        print(f"Next: {result['next_command']}")
+        print(f"Next: {shlex.join(result['next_command_argv'])}")
         return 0
     print("Personal skill library: relocated")
     print(f"Path: {result['to_path']}")
@@ -180,11 +151,11 @@ def cmd_library_relocate(args: argparse.Namespace) -> int:
 def cmd_library_status(args: argparse.Namespace) -> int:
     result = library_status(catalog_root(args), skill_name=args.skill, project_dir=current_project_dir())
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
         return 0
     if not result["initialized"]:
         print("Personal skill library is not initialized.")
-        print("Next: skillager library init")
+        print(f"Next: {shlex.join(result['next_command_argv'])}")
         return 0
     library = result["library"]
     print(f"Personal skill library: {result['status']}")
@@ -205,20 +176,22 @@ def cmd_library_status(args: argparse.Namespace) -> int:
         print(f"Warning: {warning}")
     for advisory in result["advisories"]:
         print(f"Note: {advisory}")
+    if result.get("next_command_argv"):
+        print(f"Next: {' '.join(result['next_command_argv'])}")
     return 0
 
 
 def cmd_library_new(args: argparse.Namespace) -> int:
     result = new_library_skill(catalog_root(args), args.name)
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
         return 0
     skill = result["skill"]
     print(f"Created pending library skill: {skill['id']}")
-    print(f"Path: {skill['path']}")
+    print(f"SKILL.md: {skill['skill_file']}")
     print(f"Working hash: {skill['working_hash']}")
-    print(f"Next: {result['next_commands'][0]}")
-    print(f"Then: {result['next_commands'][1]}")
+    print("Edit the file above, then review and accept its exact hash.")
+    print(f"Then: {shlex.join(result['next_command_argv'])}")
     return 0
 
 
@@ -227,17 +200,17 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
         raise ValueError("--reason is required with --override-lint")
     if args.reason and not args.override_lint:
         raise ValueError("--reason can only be used with --override-lint")
-    preview = library_acceptance_preview(catalog_root(args), args.skill, project_dir=current_project_dir())
+    preview = library_acceptance_preview(catalog_root(args), args.skill)
     if not args.yes:
         if not sys.stdin.isatty():
             preview = dict(preview)
-            preview["next_command"] = f"skillager library accept {preview['skill']['id']} --yes"
+            preview["next_command_argv"] = ["skillager", "library", "accept", preview["skill"]["id"], "--yes"]
             if args.json:
-                print(json.dumps(preview, indent=2, sort_keys=True))
+                print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
                 return 0
             _print_acceptance_preview(preview)
             print("Preview only; no changes were made.")
-            print(f"Next: {preview['next_command']}")
+            print(f"Next: {shlex.join(preview['next_command_argv'])}")
             return 0
         _print_acceptance_preview(preview)
         response = input("Accept this exact library skill hash? [y/N] ").strip().lower()
@@ -253,12 +226,11 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
         project_dir=current_project_dir(),
     )
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
         return 0
     skill = result["skill"]
     print(f"Accepted: {skill['id']}")
     print(f"Content hash: {skill['working_hash']}")
-    print(f"Approval key: {skill['approval_key']}")
     print(f"Status: {skill['status']}")
     return 0
 
@@ -266,7 +238,7 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
 def cmd_library_history(args: argparse.Namespace) -> int:
     result = library_history(catalog_root(args), args.skill, project_dir=current_project_dir())
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
         return 0
     print(f"Library history: {result['skill']['id']}")
     if not result["available"]:
@@ -295,6 +267,9 @@ def cmd_library_diff(args: argparse.Namespace) -> int:
         stat_only=args.stat,
         project_dir=current_project_dir(),
     )
+    if args.json:
+        print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
+        return 0
     print(f"Library diff: {result['skill']['id']}")
     print(f"From: {result['from']['label']} ({result['from']['content_hash'] or 'empty'})")
     print(f"To: {result['to']['label']} ({result['to']['content_hash'] or 'empty'})")
@@ -323,23 +298,28 @@ def cmd_library_restore(args: argparse.Namespace) -> int:
     )
     if preview["status"] == "already-current":
         if args.json:
-            print(json.dumps(preview, indent=2, sort_keys=True))
+            print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
         else:
             print(f"Already current: {preview['skill']['id']} at {preview['selected_version']['short_hash']}")
         return 0
     if not args.yes:
         if not sys.stdin.isatty():
             preview = dict(preview)
-            preview["next_command"] = (
-                f"skillager library restore {preview['skill']['id']} "
-                f"--to {preview['selected_version']['short_hash']} --yes"
-            )
+            preview["next_command_argv"] = [
+                "skillager",
+                "library",
+                "restore",
+                preview["skill"]["id"],
+                "--to",
+                preview["selected_version"]["short_hash"],
+                "--yes",
+            ]
             if args.json:
-                print(json.dumps(preview, indent=2, sort_keys=True))
+                print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
                 return 0
             _print_restore_preview(preview)
             print("Preview only; no files were changed.")
-            print(f"Next: {preview['next_command']}")
+            print(f"Next: {shlex.join(preview['next_command_argv'])}")
             return 0
         _print_restore_preview(preview)
         response = input("Restore this exact historical tree as a new commit? [y/N] ").strip().lower()
@@ -353,60 +333,17 @@ def cmd_library_restore(args: argparse.Namespace) -> int:
         expected_hash=str(version["content_hash"]),
         expected_commit=str(version["commit"]),
         expected_current_hash=str(preview["current_hash"]),
-        expected_current_fingerprint=str(preview["current_tree_fingerprint"]),
+        expected_current_fingerprint=str(preview["_current_tree_fingerprint"]),
         override_lint=args.override_lint,
         reason=args.reason,
         project_dir=current_project_dir(),
     )
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
         return 0
     print(f"Restored: {result['skill']['id']} -> {result['restored_version']['short_hash']}")
     print(f"Content hash: {result['skill']['working_hash']}")
     print(f"Status: {result['skill']['status']} ({result['skill']['acceptance']})")
-    return 0
-
-
-def cmd_where(args: argparse.Namespace) -> int:
-    result = library_where(catalog_root(args), args.skill, project_dir=current_project_dir())
-    if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
-        return 0
-    skill = result["skill"]
-    print(f"Skill: {skill['id']}")
-    print(f"Ownership: {skill['ownership']}")
-    print(f"Path: {skill['path']}")
-    print(f"Working hash: {skill['working_hash']}")
-    print(f"Accepted hash: {skill['accepted_hash'] or '-'}")
-    print(f"HEAD hash: {skill['head_hash'] or '-'}")
-    print(f"History: {_history_summary(skill['history'])}")
-    print(f"Status: {skill['status']} ({skill['acceptance']})")
-    if skill.get("lineage"):
-        print(f"Forked from: {skill['lineage']['skill']} at {skill['lineage']['hash'][:12]}")
-    if skill.get("imported_from"):
-        print(f"Imported from: {skill['imported_from']['skill_id']} at {skill['imported_from']['content_hash'][:12]}")
-    print(f"Project exposures: {len(skill['exposures'])}")
-    return 0
-
-
-def cmd_edit(args: argparse.Namespace) -> int:
-    path = library_skill_path(catalog_root(args), args.skill)
-    if not args.open_editor:
-        print(path)
-        return 0
-    editor = (os.environ.get("EDITOR") or "").strip()
-    if not editor:
-        raise ValueError("$EDITOR is not set; run plain `skillager edit <skill>` to print the path")
-    command = shlex.split(editor)
-    if not command:
-        raise ValueError("$EDITOR does not contain an executable")
-    completed = subprocess.run([*command, str(path)], check=False)
-    if completed.returncode != 0:
-        raise ValueError(f"editor exited with status {completed.returncode}")
-    status = library_where(catalog_root(args), args.skill, project_dir=current_project_dir())["skill"]
-    print(f"Edited: {status['id']}")
-    print(f"Working hash: {status['working_hash']}")
-    print(f"Acceptance: {status['acceptance']}")
     return 0
 
 
@@ -445,6 +382,14 @@ def _print_diff_stat(stat: dict[str, Any]) -> None:
         print(f"{file['status']}: {file['path']} ({counts})")
 
 
+def _public_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _public_payload(item) for key, item in value.items() if not key.startswith("_")}
+    if isinstance(value, list):
+        return [_public_payload(item) for item in value]
+    return value
+
+
 def _git_summary(git: dict[str, Any] | None) -> str:
     if git is None:
         return "unavailable"
@@ -465,7 +410,6 @@ def _history_summary(history: dict[str, Any]) -> str:
 
 __all__ = [
     "add_library_parser",
-    "cmd_edit",
     "cmd_library_accept",
     "cmd_library_diff",
     "cmd_library_history",
@@ -473,5 +417,4 @@ __all__ = [
     "cmd_library_new",
     "cmd_library_restore",
     "cmd_library_status",
-    "cmd_where",
 ]

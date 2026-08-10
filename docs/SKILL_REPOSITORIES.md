@@ -24,7 +24,7 @@ Initialize the one personal library registered in the selected user catalog:
 ```bash
 skillager library init
 skillager library new release-check
-skillager edit lib/release-check
+# Edit the SKILL.md path returned above.
 skillager library accept lib/release-check --yes
 ```
 

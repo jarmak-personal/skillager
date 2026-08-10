@@ -690,8 +690,6 @@ def _apply_library_provenance(entry: dict[str, Any], provenance_skills: dict[str
     record = provenance_skills.get(name)
     if not isinstance(record, dict):
         return
-    if isinstance(record.get("forked_from"), dict):
-        entry["lineage"] = dict(record["forked_from"])
     if isinstance(record.get("imported_from"), dict):
         entry["imported_from"] = dict(record["imported_from"])
 

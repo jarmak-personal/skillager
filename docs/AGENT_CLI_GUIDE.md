@@ -7,7 +7,7 @@ unless the user explicitly imports one.
 
 Projects may expose a first-party `skillager-working` skill. Treat `skillager working --agent <agent> --json` as the readiness contract for Skillager-managed projects: run it after context resets, keep no-action readiness out of the user conversation, then curate available skills only when the user's task calls for a narrow router, stub, or native skill.
 
-The working contract is `skillager.working.v2`. `exposure_changes` is advisory current-project state and does not change readiness or exit status. Current and intentionally kept-local targets are counted but omitted from its item list; actionable items identify local edits, partial missing targets, exposure-scoped blocks, malformed sidecars, and unmanaged native skills. Each item includes `ownership` so later reconciliation can distinguish library-owned from external sources. Fully deleted targets are explicitly undetectable without a ledger. `inventory` distinguishes source entries from agent-collapsed choices. `curation` is optional goal-search guidance and lists `existing_router_tags` when they should be considered first; only `next` contains readiness-required actions.
+The working contract remains `skillager.working.v1`. Additive `exposure_changes` is advisory current-project state and does not change readiness or exit status. Actionable items identify local edits, partial missing targets, exposure-scoped blocks, malformed sidecars, and unmanaged native skills. `inventory` distinguishes source entries from agent-collapsed choices. `curation` is optional goal-search guidance and lists `existing_router_tags` when they should be considered first; only `next` contains readiness-required actions.
 
 Availability is the eligibility gate. Agent-facing Skillager commands only surface skills the owner has made available. Choose among them by task relevance; do not ask for or reason about scanner, review, or trust diagnostics unless the user is explicitly doing Skillager administration.
 
@@ -17,9 +17,7 @@ Availability is the eligibility gate. Agent-facing Skillager commands only surfa
 - Treat `exposure_changes` as advisory. Mention drift only when it is relevant to the user's task or they ask about exposure/version state; do not treat it as approval or a readiness failure.
 - If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent <agent>` before guessing. Re-run working after repairs if readiness changes.
 - Do not run `skillager setup` or `skillager review ...` unless the user asked for setup or approval changes.
-- Treat `library init`, `library relocate ... --yes`, `library new`, `library accept`, `library restore ... --yes`, `import ... --yes`, `fork ... --yes`, and `edit --open` as user-authorized mutations. Do not run them merely because a pending, historical, moved, or useful external skill is discovered.
-- Treat every `reconcile ... --yes` command as a user-authorized mutation. You may inspect `reconcile --json` first, but do not choose keep-local, quarantine, repair, promote, rollback, or import on the user's behalf.
-- Treat `sync --apply`, `pin`, and `unpin` as user-authorized exposure lifecycle mutations. Bare `sync --json` is safe metadata inspection; relay updates and skip reasons before applying them.
+- Treat `library init`, `library relocate ... --yes`, `library new`, `library accept`, `library restore ... --yes`, and `import ... --yes` as user-authorized mutations. Do not run them merely because a pending, historical, moved, or useful external skill is discovered.
 - Do not run `skillager expose` until you have asked what the user plans to do and can justify the narrow router, stub, or native exposure.
 - You may add available skills to project-local tags and create scoped router/stub/native exposure after the user states their task. Report what changed.
 - Do not run `skillager activate` or `skillager show --content` for unavailable skills. Ask the user to run setup when Skillager says a skill is unavailable.
@@ -36,14 +34,8 @@ These commands do not expose full skill bodies. In a project, normal `list`, `se
 skillager working --agent codex --json
 skillager library status --json
 skillager library status lib/<name> --json
-skillager where lib/<name> --json
-skillager edit lib/<name>
-skillager import --refresh lib/<name> --json
 skillager library history lib/<name> --json
-skillager library diff lib/<name> --from <hash> --to <hash> --stat
-skillager reconcile --agent codex --json
-skillager reconcile <skill-id> --agent codex --json
-skillager sync --agent codex --json
+skillager library diff lib/<name> --from <hash> --to <hash> --stat --json
 skillager list --summary-json --agent codex
 skillager show <skill-id> --json
 skillager search "<user goal>" --json
@@ -52,11 +44,11 @@ skillager tag list --json
 ```
 
 Use `review --collection <name> --summary` or `review --collection <name> --json` only for owner-directed collection review/diagnostics. For project work, prefer the normal project-aware commands above.
-`library status`, a bare `library relocate --path ...` preview, `where`, `library history`, `library diff --stat`, and plain `edit` are metadata-only and read-only. Plain `edit` prints the canonical `SKILL.md` path; only `edit --open` launches an editor. Plain `library diff` is content-bearing and should be used only for explicit human/admin content review. `library init`, `library relocate ... --yes`, `library new`, `library accept`, and `library restore ... --yes` write user-level state and must reflect explicit user intent. Initialization and creation never approve or expose bodies, and generic `--force` or `--include-unreviewed` flags cannot bypass a pending library hash. Ask the user to review and run `skillager library accept lib/<name> --yes` when they want the exact current body made available.
+`library status`, a bare `library relocate --path ...` preview, `library history`, and `library diff --stat` are metadata-only and read-only. Plain `library diff` is content-bearing and should be used only for explicit human/admin content review. `library init`, `library relocate ... --yes`, `library new`, `library accept`, and `library restore ... --yes` write user-level state and must reflect explicit user intent. Initialization and creation never approve or expose bodies, and generic `--force` or `--include-unreviewed` flags cannot bypass a pending library hash. `library new` returns the canonical `SKILL.md` path; ask the user to review and run `skillager library accept lib/<name> --yes` when they want the exact current body made available.
 
-`import --refresh` is metadata-only and read-only. A normal `skillager import <external-id> --json` without `--yes` is also a read-only owner preview, but import review includes scanner/lint administration and should be run only for a user-directed adoption workflow. Never add `--yes` on the user's behalf without their explicit decision to adopt that exact source and destination.
-Bare `reconcile` and reconcile action previews without `--yes` are metadata-only and read-only. Use them when `working.exposure_changes` identifies drift and relay the returned choices. `promote` applies only to edited native library exposures; `import` applies only to edited external native exposures; generated stubs/routers can be kept, repaired, or quarantined but never promoted. `rollback` is library-history recovery. Never add `--yes` until the user has selected that action and target. Quarantine is recoverable and preferred over deletion; Skillager has no reconcile deletion command.
-Bare `sync` is metadata-only and read-only. It resolves accepted library freshness only for managed exposures in the current project. `sync --apply` fully rehashes the target under lock, updates only compatible clean unpinned native/stub targets, and skips every dirty, customized, pinned, blocked, malformed, missing, external, incompatible, or unaccepted-source target. A top-level exposure `pin` is not a review approval: it freezes one clean exposure's current `source_hash` until `unpin`.
+A normal `skillager import <external-id> --json` without `--yes` is a read-only owner preview, but import review includes scanner/lint administration and should be run only for a user-directed adoption workflow. Never add `--yes` on the user's behalf without their explicit decision to adopt that exact source and destination.
+
+When `exposure_changes` reports a local edit, do not infer whether it should be kept or discarded. Exposed copies are managed projections. Compare an intentional edit with the canonical path from `library status`, move intended work into the library, accept the new exact hash, and re-expose only with user authorization. `expose --force` is appropriate only when the user explicitly chooses to replace the local target.
 `working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, `tag list --json`, and `search --json` are intentionally compact for agent use. Do not use `--full-json` during normal project work; reserve it for explicit user-directed Skillager diagnostics.
 Project-aware JSON includes:
 

@@ -32,7 +32,7 @@ class PersonalLibraryImportTransactionTests(unittest.TestCase):
                         "project/changing",
                         destination_name="changing",
                         expected_hash=preview["source_hash"],
-                        expected_source_key=preview["source"]["source_key"],
+                        expected_source_key=preview["_source_key"],
                         project_dir=project,
                     )
             self.assertFalse((library / "skills" / "changing").exists())
@@ -63,7 +63,7 @@ class PersonalLibraryImportTransactionTests(unittest.TestCase):
                         "project/blocked",
                         destination_name="blocked",
                         expected_hash=blocked_preview["source_hash"],
-                        expected_source_key=blocked_preview["source"]["source_key"],
+                        expected_source_key=blocked_preview["_source_key"],
                         project_dir=project,
                     )
             self.assertFalse((library / "skills" / "blocked").exists())
@@ -83,7 +83,7 @@ class PersonalLibraryImportTransactionTests(unittest.TestCase):
                             "project/trust-failure",
                             destination_name="trust-failure",
                             expected_hash=preview["source_hash"],
-                            expected_source_key=preview["source"]["source_key"],
+                            expected_source_key=preview["_source_key"],
                             project_dir=project,
                         )
                 target = library / "skills" / "trust-failure"

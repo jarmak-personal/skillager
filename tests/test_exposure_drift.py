@@ -35,8 +35,6 @@ def write_sidecar(root: Path, **overrides: object) -> dict[str, object]:
         "materialized_fingerprint": content_tree_fingerprint(root),
         "agent": "codex",
         "scope": "project",
-        "customized": False,
-        "ownership": "external",
     }
     data.update(overrides)
     (root / "skillager.materialized.yaml").write_text(dumps(data), encoding="utf-8")
@@ -57,7 +55,7 @@ class ExposureDriftTests(unittest.TestCase):
 
             assert record is not None
             self.assertEqual(record["status"], "current")
-            self.assertEqual(record["ownership"], "external")
+            self.assertNotIn("ownership", record)
             self.assertEqual(hash_mock.call_count, 1)
 
     def test_working_scan_may_reuse_fingerprint_for_advisory_display_only(self) -> None:
@@ -73,7 +71,7 @@ class ExposureDriftTests(unittest.TestCase):
             self.assertEqual(changes["current"], 1)
             self.assertEqual(changes["items"], [])
 
-    def test_local_edit_and_exact_kept_local_precedence(self) -> None:
+    def test_legacy_keep_local_metadata_does_not_hide_a_local_edit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "demo"
             write_target(target)
@@ -96,7 +94,7 @@ class ExposureDriftTests(unittest.TestCase):
             (target / "skillager.materialized.yaml").write_text(dumps(sidecar), encoding="utf-8")
             kept = classify_exposure_target(target)
             assert kept is not None
-            self.assertEqual(kept["status"], "kept_local")
+            self.assertEqual(kept["status"], "local_edit")
 
             (target / "SKILL.md").write_text("# Edited Again\n\nA newer local workflow.\n", encoding="utf-8")
             edited_again = classify_exposure_target(target)
@@ -165,10 +163,10 @@ class ExposureDriftTests(unittest.TestCase):
             self.assertEqual(changes["current"], 1)
             self.assertEqual(changes["unmanaged"], 1)
             self.assertEqual([item["status"] for item in changes["items"]], ["unmanaged"])
-            self.assertEqual(changes["items"][0]["ownership"], "external")
+            self.assertNotIn("ownership", changes["items"][0])
             self.assertNotIn(BODY_SENTINEL, json.dumps(changes))
 
-    def test_deleted_target_is_explicitly_undetectable_without_ledger(self) -> None:
+    def test_deleted_target_is_not_invented_without_a_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project"
             target = project / ".agents" / "skills" / "deleted"
@@ -179,53 +177,7 @@ class ExposureDriftTests(unittest.TestCase):
             changes = scan_project_exposures(project, agent="codex")
 
             self.assertEqual(changes["items"], [])
-            self.assertEqual(changes["fully_deleted_targets"], "undetectable_without_ledger")
-
-    def test_legacy_library_ownership_requires_explicit_library_identity(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            target = root / "project" / ".agents" / "skills" / "lib-demo"
-            write_target(target)
-            write_sidecar(
-                target,
-                id="lib/demo",
-                source_id="lib/demo",
-                source_package="lib",
-                ownership=None,
-            )
-            sidecar = load_mapping(target / "skillager.materialized.yaml")
-            sidecar.pop("ownership", None)
-            (target / "skillager.materialized.yaml").write_text(dumps(sidecar), encoding="utf-8")
-
-            external = classify_exposure_target(target)
-            assert external is not None
-            self.assertEqual(external["ownership"], "external")
-
-            catalog = root / "catalog"
-            catalog.mkdir()
-            (catalog / "collections.json").write_text(
-                json.dumps(
-                    {
-                        "collections": {
-                            "lib": {
-                                "kind": "library",
-                                "library_id": "11111111-1111-1111-1111-111111111111",
-                                "library_root": str(root / "library"),
-                                "path": str(root / "library" / "skills"),
-                            }
-                        }
-                    }
-                ),
-                encoding="utf-8",
-            )
-            changes = scan_project_exposures(root / "project", agent="codex", catalog_root=catalog)
-            self.assertEqual(changes["current"], 1)
-            registered = classify_exposure_target(
-                target,
-                registration={"library_id": "11111111-1111-1111-1111-111111111111"},
-            )
-            assert registered is not None
-            self.assertEqual(registered["ownership"], "external")
+            self.assertNotIn("fully_deleted_targets", changes)
 
 
 if __name__ == "__main__":

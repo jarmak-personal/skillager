@@ -103,7 +103,7 @@ class LibraryVersionSelectionTests(unittest.TestCase):
                         expected_hash=selected["content_hash"],
                         expected_commit=selected["commit"],
                         expected_current_hash=restore_preview["current_hash"],
-                        expected_current_fingerprint=restore_preview["current_tree_fingerprint"],
+                        expected_current_fingerprint=restore_preview["_current_tree_fingerprint"],
                     )
                 skill_file.chmod(0o644)
                 restore_preview = library_restore_preview(catalog, "trust-restore", first_hash)
@@ -116,7 +116,7 @@ class LibraryVersionSelectionTests(unittest.TestCase):
                             expected_hash=selected["content_hash"],
                             expected_commit=selected["commit"],
                             expected_current_hash=restore_preview["current_hash"],
-                            expected_current_fingerprint=restore_preview["current_tree_fingerprint"],
+                            expected_current_fingerprint=restore_preview["_current_tree_fingerprint"],
                         )
                 pending = library_where(catalog, "trust-restore")["skill"]
                 self.assertEqual(pending["working_hash"], first_hash)

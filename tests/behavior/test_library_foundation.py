@@ -23,7 +23,10 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             self.assertEqual(result.stderr, "")
             self.assertEqual(result.json()["schema"], "skillager.library-status.v1")
             self.assertEqual(result.json()["status"], "not-initialized")
-            self.assertEqual(result.json()["next_command"], "skillager library init")
+            self.assertEqual(
+                result.json()["next_command_argv"],
+                ["skillager", "library", "init"],
+            )
             self.assertFalse(catalog.exists())
 
     def test_no_git_custom_init_is_idempotent_and_registered(self) -> None:
@@ -170,10 +173,13 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             self.assertEqual(status.code, 0, status.stderr)
             self.assertEqual(status.json()["status"], "degraded")
             self.assertIn("path is missing", status.json()["warnings"][0])
-            self.assertIn("library relocate", status.json()["recovery_command"])
+            self.assertEqual(
+                status.json()["next_command_argv"][:4],
+                ["skillager", "library", "relocate", "--path"],
+            )
             doctor = cli.run("doctor", "--no-packages", "--json")
-            self.assertEqual(doctor.code, 15, doctor.stderr)
-            self.assertEqual(doctor.json()["status"], "library-attention-needed")
+            self.assertEqual(doctor.code, 0, doctor.stderr)
+            self.assertEqual(doctor.json()["status"], "ready")
             self.assertEqual(doctor.json()["library"]["status"], "degraded")
 
             collections_path = root / "state" / "catalog" / "collections.json"
@@ -192,7 +198,6 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             preview = cli.run("library", "relocate", "--path", str(moved), "--json")
             self.assertEqual(preview.code, 0, preview.stderr)
             self.assertEqual(preview.json()["status"], "preview")
-            self.assertFalse(preview.json()["will_relocate"])
             self.assertEqual(collections_path.read_bytes(), before)
 
             applied = cli.run("library", "relocate", "--path", str(moved), "--yes", "--json")

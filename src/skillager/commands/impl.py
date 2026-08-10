@@ -77,9 +77,7 @@ from .context import (
     root,
 )
 from .library import add_library_parser
-from .lifecycle import add_lifecycle_parsers
 from .importing import add_import_parser
-from .reconcile import add_reconcile_parser
 
 
 HANDOFF_REASON_AGENT_REQUIRED = "agent_required"
@@ -108,11 +106,10 @@ DOCTOR_EXIT_BOOTSTRAP_REPAIR = 11
 DOCTOR_EXIT_LINT_BLOCKED = 12
 DOCTOR_EXIT_MIGRATION_NEEDED = 13
 DOCTOR_EXIT_MANUAL_REPAIR = 14
-DOCTOR_EXIT_LIBRARY_DEGRADED = 15
 SETUP_BOOTSTRAP_REASON_NO_APPROVED = "no_approved_skills"
 SETUP_BOOTSTRAP_REASON_DISABLED = "working_artifacts_disabled"
 SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED = "agent_not_specified"
-WORKING_RESULT_SCHEMA = "skillager.working.v2"
+WORKING_RESULT_SCHEMA = "skillager.working.v1"
 _WORKING_DRIFT_REASON_CODES = {
     "local customization": HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
     "target is not Skillager Working": HANDOFF_REASON_WORKING_WRONG_SOURCE,
@@ -147,11 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
             Skillager is a local personal library, discovery, approval, and exposure
             tool for agent skills.
 
-            Personal library workflow:
-              1. Initialize once with `skillager library init`
+            When you own or adopt a skill:
+              1. Initialize the optional personal library with `skillager library init`
               2. Create with `skillager library new` or adopt one external skill with `skillager import`
               3. Edit and accept the exact reviewed hash
-              4. Expose only what a project needs; use sync/reconcile for later changes
+              4. Expose only what a project needs
 
             Project agent workflow:
               1. skillager working
@@ -166,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
               - Do not activate or expose unavailable skills unless the user explicitly asks.
               - Agents should run `skillager working` after context resets; it is silent on normal success.
               - Agents should ask the user to run `skillager setup` when external skills need owner review.
-              - Prefer project scope inside repos so users can inspect and customize local copies.
+              - Prefer project scope inside repos so users can inspect managed copies; edit owned skills in the library.
               - Use --json when another program or agent needs stable machine-readable output.
 
             Agent command contract:
@@ -188,9 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_doctor_parser(sub)
     add_working_parser(sub)
     add_library_parser(sub)
-    add_lifecycle_parsers(sub)
     add_import_parser(sub)
-    add_reconcile_parser(sub)
     add_collection_parser(sub)
     add_tag_parser(sub)
 
@@ -578,7 +573,7 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             the router slug to pass to --from-router. Exposure does not install
             or repair Skillager Working; use `skillager doctor --fix` for the
             first-party working skill.
-            Customized local copies are not overwritten unless --force is used.
+            Locally edited managed copies are not overwritten unless --force is used.
             """
         ),
         epilog=textwrap.dedent(
@@ -617,7 +612,7 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--list", action="store_true", dest="list_exposures", help="List Skillager-managed exposed targets for the selected agent/scope.")
     p.add_argument("--remove", metavar="EXPOSURE_ID", help="Remove one Skillager-managed exposed target by exposure id.")
     p.add_argument("--dry-run", action="store_true", help="Report target paths without writing files.")
-    p.add_argument("--force", action="store_true", help="Overwrite existing Skillager-managed customized targets.")
+    p.add_argument("--force", action="store_true", help="Overwrite existing Skillager-managed targets with local edits.")
     add_review_filters(p, include_lint_flag=False)
     p.add_argument("--json", action="store_true", help="Emit exposure results as JSON.")
     p.set_defaults(func=cmd_expose)
@@ -1377,6 +1372,7 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
                 print(f"    - {item.get('id')}: {item.get('risk')}, {_counted(item_findings, 'finding')} ({codes})")
             if len(non_low) > 12:
                 print(f"    - ... {_counted(len(non_low) - 12, 'more non-low skill')}")
+            print("    Scanner risk is advisory; exact-hash approval controls availability, and blocks or lint quarantine are listed separately.")
     lint_overrides = _lint_override_items(action)
     if lint_overrides:
         print(f"  - Lint overrides recorded this run: {len(lint_overrides)} (audited)")
@@ -2132,9 +2128,9 @@ def _print_working_result(result: dict[str, Any]) -> None:
     pending = int(result.get("pending_owner_review_count") or 0)
     if pending:
         print(f"  Owner review needed: {_counted(pending, 'skill')}.")
-    changed = int(changes.get("total") or 0)
+    changed = len(changes.get("items") or [])
     if changed:
-        print(f"  Exposure changes need reconciliation: {changed}.")
+        print(f"  {_counted(changed, 'managed exposure')} changed locally; Skillager will not overwrite it.")
     next_commands = list((result.get("next") or {}).get("next_commands") or [])
     if next_commands:
         print("Next:")
@@ -2143,7 +2139,8 @@ def _print_working_result(result: dict[str, Any]) -> None:
     elif (result.get("curation") or {}).get("existing_router_tags"):
         print(str((result.get("curation") or {}).get("message") or ""))
     elif (result.get("curation") or {}).get("recommended"):
-        print("Tell your agent what you plan to do; it can search available metadata and curate a focused router when useful.")
+        print("Optional next step when a specialized skill may help:")
+        print(f"  {(result.get('curation') or {}).get('search_command')}")
 
 
 def _working_pending_external_review(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2312,17 +2309,6 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
             f"Legacy in-tree state exists at {legacy_state.get('path')}. Remove that directory after review, then rerun setup. Skillager no longer migrates legacy state in place.",
             command,
             next_commands=next_commands,
-        )
-    library = view.get("library") or {}
-    if library.get("status") == "degraded":
-        warnings = library.get("warnings") or []
-        detail = str(warnings[0]) if warnings else "the registered personal library needs attention"
-        command = str(library.get("next_command") or "skillager library status")
-        return _doctor_issue(
-            "library-attention-needed",
-            DOCTOR_EXIT_LIBRARY_DEGRADED,
-            f"Personal library is degraded: {detail}",
-            command,
         )
     if view["lint_blocked"]:
         count = len(view["lint_blocked"])
@@ -3891,9 +3877,8 @@ def _compact_skill_metadata(skill: dict[str, Any], *, agent: str | None = None) 
     }
     if skill.get("identity_collision"):
         payload["identity_collision"] = skill["identity_collision"]
-    for key in ("lineage", "imported_from"):
-        if skill.get(key):
-            payload[key] = skill[key]
+    if skill.get("imported_from"):
+        payload["imported_from"] = skill["imported_from"]
     return payload
 
 
@@ -3992,7 +3977,7 @@ def _compact_inventory_item(skill: dict[str, Any]) -> dict[str, Any]:
         "exposure": skill.get("exposure", "hidden"),
         "tags": skill.get("tags", []),
     }
-    for key in ("agent_variant", "lineage"):
+    for key in ("agent_variant",):
         if skill.get(key):
             item[key] = skill[key]
     return item
@@ -5513,6 +5498,15 @@ def _print_router_verification(tag: str, agents: list[str], results: list[dict[s
     )
     if not current_agents:
         return
+    router_result = next(
+        item
+        for item in results
+        if item.get("skill_id") == f"skillager/{tag}" and _agent_next_step_artifact_current(item)
+    )
+    router_slug = Path(str(router_result["target"])).name
+    print()
+    print("Activate a routed skill:")
+    print(f"  skillager activate <skill-id> --from-router {router_slug}")
     print()
     print("Continue curation:")
     for agent in current_agents or agents:

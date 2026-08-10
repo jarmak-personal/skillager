@@ -81,7 +81,7 @@ class SkillagerWorkingTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
-            self.assertEqual(data["schema"], "skillager.working.v2")
+            self.assertEqual(data["schema"], "skillager.working.v1")
             self.assertEqual(data["status"], "ready")
             self.assertTrue(data["can_proceed"])
             self.assertTrue(data["readiness"]["ready"])
@@ -211,7 +211,8 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.assertIn("Skillager ready.", stdout)
             self.assertIn("1 available source entry -> 1 Codex-ready choice", stdout)
             self.assertIn("0 exposed choices, 1 on demand.", stdout)
-            self.assertIn("Tell your agent what you plan to do", stdout)
+            self.assertIn("Optional next step when a specialized skill may help:", stdout)
+            self.assertIn('skillager search "<user-goal>" --agent codex --json', stdout)
 
             code, stdout, stderr = self.run_cli(["working", "--agent", "codex", "--json"], root=root, state=state)
             self.assertEqual(code, 0, stderr)
@@ -225,7 +226,7 @@ class SkillagerWorkingTests(unittest.TestCase):
             )
             self.assertIsNone(data["next"]["command"])
 
-    def test_working_v2_reports_advisory_exposure_drift_without_changing_readiness(self) -> None:
+    def test_working_reports_advisory_exposure_drift_without_changing_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -242,8 +243,6 @@ class SkillagerWorkingTests(unittest.TestCase):
                 "materialized_fingerprint": content_tree_fingerprint(target),
                 "agent": "codex",
                 "scope": "project",
-                "customized": False,
-                "ownership": "external",
             }
             (target / "skillager.materialized.yaml").write_text(dumps(sidecar), encoding="utf-8")
             (target / "SKILL.md").write_text("# Managed\n\nPrivate changed body.\n", encoding="utf-8")
@@ -252,12 +251,12 @@ class SkillagerWorkingTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
-            self.assertEqual(data["schema"], "skillager.working.v2")
+            self.assertEqual(data["schema"], "skillager.working.v1")
             self.assertTrue(data["can_proceed"])
             self.assertEqual(data["status"], "ready")
             self.assertEqual(data["exposure_changes"]["local_edits"], 1)
             self.assertEqual(data["exposure_changes"]["items"][0]["status"], "local_edit")
-            self.assertEqual(data["exposure_changes"]["items"][0]["ownership"], "external")
+            self.assertNotIn("ownership", data["exposure_changes"]["items"][0])
             self.assertNotIn("Private original body", stdout)
             self.assertNotIn("Private changed body", stdout)
 
@@ -275,7 +274,7 @@ class SkillagerWorkingTests(unittest.TestCase):
                 code, stdout, stderr = self.run_cli(["working", "--json"], root=root, state=state)
 
             self.assertEqual(code, 0, stderr)
-            self.assertEqual(json.loads(stdout)["schema"], "skillager.working.v2")
+            self.assertEqual(json.loads(stdout)["schema"], "skillager.working.v1")
 
     def test_working_reuses_saved_library_index_without_resolving_library_freshness(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -299,7 +298,7 @@ class SkillagerWorkingTests(unittest.TestCase):
 
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
-            self.assertEqual(data["schema"], "skillager.working.v2")
+            self.assertEqual(data["schema"], "skillager.working.v1")
             self.assertEqual(data["pending_external_review"][0]["id"], "lib/cached-skill")
 
 

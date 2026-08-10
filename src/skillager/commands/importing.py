@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 import sys
 import textwrap
 from typing import Any
 
-from ..library.importing import import_library_skill, import_preview, import_refresh_preview
+from ..library.importing import import_library_skill, import_preview
 from .context import catalog_root, current_project_dir, root
 
 
@@ -25,13 +26,11 @@ def add_import_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
               skillager import project/orbital-review --json
               skillager import community/brainstorm --as brainstorm --yes
               skillager import demo-package/release-check --yes
-              skillager import --refresh lib/brainstorm --json
             """
         ),
     )
-    parser.add_argument("skill", nargs="?", help="External discovered skill ID.")
+    parser.add_argument("skill", help="External discovered skill ID.")
     parser.add_argument("--as", dest="destination_name", help="Collision-free library skill name.")
-    parser.add_argument("--refresh", metavar="LIBRARY_SKILL", help="Preview current upstream drift for an imported skill.")
     parser.add_argument("--yes", action="store_true", help="Confirm the exact reviewed source hash for import.")
     parser.add_argument(
         "--override-lint",
@@ -39,26 +38,11 @@ def add_import_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         help="Import lint-blocking or high-risk content with an audited --reason.",
     )
     parser.add_argument("--reason", help="Required audit reason with --override-lint.")
-    parser.add_argument("--json", action="store_true", help="Emit versioned import or refresh metadata as JSON.")
+    parser.add_argument("--json", action="store_true", help="Emit versioned import metadata as JSON.")
     parser.set_defaults(func=cmd_import)
 
 
 def cmd_import(args: argparse.Namespace) -> int:
-    if args.refresh:
-        _validate_refresh_args(args)
-        result = import_refresh_preview(
-            root(args),
-            catalog_root(args),
-            args.refresh,
-            project_dir=current_project_dir(),
-        )
-        if args.json:
-            print(json.dumps(result, indent=2, sort_keys=True))
-        else:
-            _print_refresh(result)
-        return 0
-    if not args.skill:
-        raise ValueError("provide an external skill ID or --refresh lib/<name>")
     if args.override_lint and not (args.reason or "").strip():
         raise ValueError("--reason is required with --override-lint")
     if args.reason and not args.override_lint:
@@ -73,11 +57,11 @@ def cmd_import(args: argparse.Namespace) -> int:
     )
     if not args.yes:
         if args.json:
-            print(json.dumps(preview, indent=2, sort_keys=True))
+            print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
             return 0
         _print_preview(preview)
         if not sys.stdin.isatty():
-            print(f"Next: {preview['next_command']}")
+            print(f"Next: {shlex.join(preview['next_command_argv'])}")
             return 0
         response = input("Import and accept this exact external skill hash? [y/N] ").strip().lower()
         if response not in {"y", "yes"}:
@@ -90,37 +74,20 @@ def cmd_import(args: argparse.Namespace) -> int:
         args.skill,
         destination_name=str(preview["destination"]["name"]),
         expected_hash=str(preview["source_hash"]),
-        expected_source_key=str(preview["source"]["source_key"]),
+        expected_source_key=str(preview["_source_key"]),
         override_lint=args.override_lint,
         reason=args.reason,
         project_dir=current_project_dir(),
     )
     if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
+        print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
         return 0
     destination = result["destination"]
     print(f"Imported: {result['source']['id']} -> {destination['id']}")
     print(f"Path: {destination['path']}")
     print(f"Content hash: {destination['working_hash']}")
-    print(f"Approval key: {destination['approval_key']}")
     print(f"Status: {destination['status']} ({destination['acceptance']})")
     return 0
-
-
-def _validate_refresh_args(args: argparse.Namespace) -> None:
-    conflicts = []
-    if args.skill:
-        conflicts.append("external skill ID")
-    if args.destination_name:
-        conflicts.append("--as")
-    if args.yes:
-        conflicts.append("--yes")
-    if args.override_lint:
-        conflicts.append("--override-lint")
-    if args.reason:
-        conflicts.append("--reason")
-    if conflicts:
-        raise ValueError(f"--refresh cannot be combined with {', '.join(conflicts)}")
 
 
 def _print_preview(preview: dict[str, Any]) -> None:
@@ -139,16 +106,12 @@ def _print_preview(preview: dict[str, Any]) -> None:
         print("This hash requires --override-lint --reason <text> before import.")
 
 
-def _print_refresh(result: dict[str, Any]) -> None:
-    print(f"Imported skill: {result['library']['id']}")
-    print(f"Refresh status: {result['status']}")
-    if result.get("reason"):
-        print(f"Reason: {result['reason']}")
-        return
-    print(f"Imported base: {result['base_hash']}")
-    print(f"Current upstream: {result['upstream_hash']}")
-    print(f"Current library: {result['library']['working_hash']}")
-    print("Preview only: no files were changed.")
+def _public_payload(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _public_payload(item) for key, item in value.items() if not key.startswith("_")}
+    if isinstance(value, list):
+        return [_public_payload(item) for item in value]
+    return value
 
 
 __all__ = ["add_import_parser", "cmd_import"]
