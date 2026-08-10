@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from support import chdir
 from skillager.cli import main
-from skillager.commands.impl import _sort_agent_variant_search
+from skillager.commands.impl import _inventory_summary, _sort_agent_variant_search
 from skillager.index import build_index, load_index
 from skillager.search import search as search_skills
 from skillager.skills import discovery as discovery_impl
@@ -19,6 +19,27 @@ from skillager.trust import set_trust, trust_state
 
 
 class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
+
+    def test_inventory_summary_has_a_bounded_metadata_shape_for_large_catalogs(self) -> None:
+        skills = [
+            {
+                "id": f"community/skill-{index}",
+                "name": f"Skill {index}",
+                "summary": "LONG SUMMARY MUST NOT BE REPEATED " * 40,
+                "trust": "reviewed",
+                "source": {"type": "collection", "collection": "community"},
+                "exposure": "hidden",
+                "tags": [],
+            }
+            for index in range(100)
+        ]
+
+        payload = _inventory_summary(skills)
+        rendered = json.dumps(payload)
+
+        self.assertNotIn("LONG SUMMARY", rendered)
+        self.assertLess(len(rendered), 30_000)
+        self.assertEqual(len(payload["skills"]), 100)
 
     def test_search_does_not_match_path_derived_id_as_free_text(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -124,7 +145,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
         source_inventory = search_skills(skills, "vibespatial", include_untrusted=False)
         self.assertEqual([item["id"] for item in source_inventory], ["vibespatial/generic"])
 
-    def test_multi_term_search_drops_tag_only_matches_but_single_term_tag_search_remains_useful(self) -> None:
+    def test_multi_term_search_preserves_deliberately_curated_tag_matches(self) -> None:
         skills = [
             {
                 "id": "project/spatial",
@@ -147,7 +168,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
         focused = search_skills(skills, "GIS spatial Python", include_untrusted=False)
         tag_inventory = search_skills(skills, "GIS", include_untrusted=False)
 
-        self.assertEqual([item["id"] for item in focused], ["project/spatial"])
+        self.assertEqual([item["id"] for item in focused], ["project/spatial", "project/cuda"])
         self.assertEqual({item["id"] for item in tag_inventory}, {"project/spatial", "project/cuda"})
 
     def test_search_suppresses_generic_body_only_matches_in_long_goals(self) -> None:

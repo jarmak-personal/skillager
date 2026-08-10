@@ -104,6 +104,26 @@ def content_tree_fingerprint(root: Path) -> str:
     return digest.hexdigest()
 
 
+def require_canonical_content_tree(root: Path, *, action: str = "mutation") -> None:
+    """Refuse symlinks and files deliberately excluded from the authoritative tree."""
+
+    root = root.resolve()
+    canonical = {path.relative_to(root).as_posix() for path in iter_content_files(root)}
+    noncanonical: list[str] = []
+    for path in root.rglob("*"):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink() or (path.is_file() and relative not in canonical):
+            noncanonical.append(relative)
+    if noncanonical:
+        visible = ", ".join(sorted(noncanonical)[:5])
+        remainder = len(noncanonical) - 5
+        suffix = f" (and {remainder} more)" if remainder > 0 else ""
+        raise ValueError(
+            f"{action} refuses symlinks or files outside the canonical content tree; "
+            f"preserve or remove them first: {visible}{suffix}"
+        )
+
+
 __all__ = [
     "CONTENT_TREE_EXCLUDES",
     "TREE_FINGERPRINT_SCHEMA",
@@ -113,4 +133,5 @@ __all__ = [
     "content_tree_manifest",
     "copy_content_tree",
     "iter_content_files",
+    "require_canonical_content_tree",
 ]

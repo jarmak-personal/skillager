@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog.impl import refresh_collection
-from ..skills.tree import iter_content_files
+from ..skills.tree import iter_content_files, require_canonical_content_tree
 from ..state.locking import resource_locks
 from ..trust import approval_key_for, content_hash, content_hash_entries, set_trust
 from .candidate import index_library_candidate
@@ -152,7 +152,7 @@ def library_restore_preview(
     version = resolve_history_version(history["versions"], to_hash)
     name = normalize_skill_name(skill_name)
     target = registration.layout.skill_root(name)
-    _require_canonical_working_tree(target)
+    require_canonical_content_tree(target, action="library restore")
     endpoint = _historical_endpoint(registration.layout.root, target, version)
     with tempfile.TemporaryDirectory(prefix="skillager-restore-preview-", dir=registration.layout.root.parent) as tmp:
         candidate = Path(tmp) / name
@@ -206,7 +206,7 @@ def restore_library_skill(
         if current["working_hash"] == expected_hash:
             raise ValueError("library skill already matches the selected historical version")
         target = registration.layout.skill_root(name)
-        _require_canonical_working_tree(target)
+        require_canonical_content_tree(target, action="library restore")
         current_endpoint = _working_endpoint(target, expected_current_hash)
         if _tree_fingerprint(current_endpoint.files) != expected_current_fingerprint:
             raise ValueError("library skill tree changed since restore preview; review it again")
@@ -233,7 +233,7 @@ def restore_library_skill(
                 override_lint=override_lint,
                 reason=reason,
             )
-            _require_canonical_working_tree(target)
+            require_canonical_content_tree(target, action="library restore")
             final_current = _working_endpoint(target, expected_current_hash)
             if _tree_fingerprint(final_current.files) != expected_current_fingerprint:
                 raise ValueError("library skill changed while restore was being prepared; no files were written")
@@ -426,23 +426,6 @@ def _tree_fingerprint(files: tuple[GitTreeFile, ...]) -> str:
         digest.update(file.content)
         digest.update(b"\0")
     return digest.hexdigest()
-
-
-def _require_canonical_working_tree(target: Path) -> None:
-    canonical = {path.relative_to(target.resolve()).as_posix() for path in iter_content_files(target)}
-    noncanonical: list[str] = []
-    for path in target.rglob("*"):
-        relative = path.relative_to(target).as_posix()
-        if path.is_symlink() or (path.is_file() and relative not in canonical):
-            noncanonical.append(relative)
-    if noncanonical:
-        visible = ", ".join(sorted(noncanonical)[:5])
-        remainder = len(noncanonical) - 5
-        suffix = f" (and {remainder} more)" if remainder > 0 else ""
-        raise ValueError(
-            "library restore refuses current symlinks or files outside the canonical content tree; "
-            f"preserve or remove them first: {visible}{suffix}"
-        )
 
 
 def _materialize_tree(files: tuple[GitTreeFile, ...], destination: Path) -> None:

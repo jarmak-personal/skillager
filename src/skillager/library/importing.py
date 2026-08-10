@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,7 @@ def import_preview(
             "source_type": str((source.get("source") or {}).get("type") or "unknown"),
         },
     }
+    next_command_argv = _import_argv(source_skill_id, name, override=requires_override)
     return {
         "schema": IMPORT_SCHEMA,
         "status": "preview",
@@ -75,7 +77,8 @@ def import_preview(
         "lint": lint,
         "scan": scan,
         "requires_override": requires_override,
-        "next_command": _import_command(source_skill_id, name, override=requires_override),
+        "next_command": shlex.join(next_command_argv),
+        "next_command_argv": next_command_argv,
         "project": str(project_dir.resolve()) if project_dir is not None else None,
     }
 
@@ -429,10 +432,10 @@ def _refresh_degraded(
     }
 
 
-def _import_command(source_skill_id: str, name: str, *, override: bool) -> str:
-    command = f"skillager import {source_skill_id} --as {name} --yes"
+def _import_argv(source_skill_id: str, name: str, *, override: bool) -> list[str]:
+    command = ["skillager", "import", source_skill_id, "--as", name, "--yes"]
     if override:
-        command += ' --override-lint --reason "<why>"'
+        command.extend(["--override-lint", "--reason", "<why>"])
     return command
 
 

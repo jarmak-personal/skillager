@@ -13,6 +13,7 @@ from support import chdir
 from skillager.cli import _print_expose_results, build_parser, main
 from skillager.index import build_index, load_index
 from skillager.materialize import materialize_skills
+from skillager.exposure.impl import materialize_one
 from skillager.simple_yaml import load_mapping
 from skillager.skills.tree import content_tree_fingerprint
 from skillager.trust import content_hash, set_trust
@@ -30,6 +31,35 @@ def write_manifest(skill_dir: Path, audience: str) -> None:
 
 
 class SkillagerMaterializeTests(unittest.TestCase):
+
+    def test_native_exposure_refuses_source_that_changes_during_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            source.mkdir()
+            (source / "SKILL.md").write_text("# Accepted\n", encoding="utf-8")
+            accepted_hash = content_hash(source)
+            skill = {
+                "id": "project/demo",
+                "root": str(source),
+                "source": {"type": "project"},
+                "content_hash": accepted_hash,
+                "trust": "reviewed",
+            }
+
+            from skillager.exposure import impl as exposure_impl
+
+            original_copy = exposure_impl._copy_skill_tree
+
+            def racing_copy(source_root: Path, candidate: Path) -> None:
+                original_copy(source_root, candidate)
+                (source_root / "SKILL.md").write_text("# Unreviewed\n", encoding="utf-8")
+
+            with patch("skillager.exposure.impl._copy_skill_tree", side_effect=racing_copy):
+                with self.assertRaisesRegex(ValueError, "changed during exposure"):
+                    materialize_one(skill, target=target, agent="codex", scope="project")
+            self.assertFalse(target.exists())
 
     def test_materialize_index_mode_is_removed(self) -> None:
         parser = build_parser()

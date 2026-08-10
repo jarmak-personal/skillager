@@ -38,9 +38,11 @@ Then restart your agent in the project and have it run:
 skillager working --agent codex --json
 ```
 
-Setup installs one first-party `skillager-working` skill. It covers quiet agent-owned
-selection/exposure and explicit user-directed personal-library work; Skillager does
-not inject instructions into `AGENTS.md`, `agents.md`, or `CLAUDE.md`.
+Once setup has approved inventory, it installs one first-party `skillager-working`
+skill. It covers quiet agent-owned selection/exposure and explicit user-directed
+personal-library work; Skillager does not inject instructions into `AGENTS.md`,
+`agents.md`, or `CLAUDE.md`. A genuinely empty project can be ready without that
+artifact because there is no managed inventory for the agent to curate yet.
 
 `setup` discovers local/project skills, package-provided skills, collections, and native agent skills. It scans them and only makes content available after your review. Register an external personal/team repository with `skillager collection add ~/skills/workflows --name workflows` when you want it in reusable inventory. Skillager is installed once as a user tool; it does not need to live inside every project environment.
 
@@ -119,9 +121,13 @@ skillager library status
 # Choose the location once, or explicitly operate without Git history.
 skillager library init --path ~/skills/personal
 skillager library init --no-git
+
+# If the same library directory is moved later, preview and confirm re-registration.
+skillager library relocate --path ~/skills/moved-personal
+skillager library relocate --path ~/skills/moved-personal --yes
 ```
 
-Initialization can adopt an existing directory without moving files. Existing skill bodies are indexed as pending metadata: initialization does not approve them, reveal their contents, or expose them to an agent. `library status` is read-only and reports identity, path, Git health, and an optional skill's working hash.
+Initialization can adopt an existing directory without moving files. Existing skill bodies are indexed as pending metadata: initialization does not approve them, reveal their contents, or expose them to an agent. `library status` is read-only and reports identity, path, Git health, and an optional skill's working hash. If the registered path disappears, `doctor` reports a library readiness failure; `library relocate` changes only the registration after verifying the UUID and existing layout at the new path.
 
 The no-Git form is useful for disposable environments and is also an opt-in,
 isolated runnable documentation example:
@@ -142,9 +148,9 @@ skillager library accept lib/orbital-review --yes
 skillager expose lib/orbital-review --mode stub --agent codex --scope project
 ```
 
-`library new` never overwrites an existing skill. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates a path-scoped Git commit when Git is enabled. In non-interactive use, omitting `--yes` prints a body-safe hash/risk/lint preview and the exact confirmed command without changing state. `where`, `library status`, and plain `edit` are metadata-only and read-only; `edit --open` launches `$EDITOR` and may make an accepted skill pending.
+`library new` never overwrites an existing skill. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, rejects symlinks and excluded files, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates a path-scoped Git commit when Git is enabled. In non-interactive use, omitting `--yes` prints a body-safe hash/risk/lint preview, exits successfully, and gives the exact confirmed command without changing state. `where`, `library status`, and plain `edit` are metadata-only and read-only; `edit --open` launches `$EDITOR` and may make an accepted skill pending.
 
-The machine-readable contracts are versioned as `skillager.library-init.v1`, `skillager.library-status.v1`, `skillager.library-new.v1`, `skillager.library-accept.v1`, `skillager.library-history.v1`, `skillager.library-restore.v1`, `skillager.library-fork.v1`, and `skillager.where.v1`.
+The machine-readable contracts are versioned as `skillager.library-init.v1`, `skillager.library-relocate.v1`, `skillager.library-status.v1`, `skillager.library-new.v1`, `skillager.library-accept.v1`, `skillager.library-history.v1`, `skillager.library-restore.v1`, `skillager.library-fork.v1`, and `skillager.where.v1`.
 
 Adopt one project, collection, environment, package, editable-source, or native skill through the explicit import boundary:
 
@@ -174,7 +180,7 @@ skillager fork lib/pr-review --as pr-review-legacy --description "Review legacy 
 skillager fork lib/pr-review --as pr-review-legacy --description "Review legacy release branches" --from <hash> --yes
 ```
 
-Fork requires a distinct destination and description, writes exact `forked_from` lineage to library provenance, scans/lints the resulting tree, and accepts its new content hash. The preview is metadata-only and does not create the destination.
+Fork requires a distinct destination and description, writes exact `forked_from` lineage to library provenance, scans/lints the resulting tree, and accepts its new content hash. The preview is metadata-only and does not create the destination. `where`, normal list/show metadata, and summary inventory expose that lineage so related variants remain understandable.
 
 Propagate accepted library heads lazily in the project where you are working:
 

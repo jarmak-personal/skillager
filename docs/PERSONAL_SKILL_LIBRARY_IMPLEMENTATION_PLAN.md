@@ -224,6 +224,7 @@ release.
 
 ```bash
 skillager library init [--path <dir>] [--no-git] [--json]
+skillager library relocate --path <dir> [--yes] [--json]
 skillager library status [<skill>] [--json]
 skillager library new <name> [--json]
 skillager library accept <skill> [--yes] [--override-lint --reason <text>] [--json]

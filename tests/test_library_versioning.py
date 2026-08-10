@@ -5,7 +5,14 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from skillager.library.service import accept_library_skill, initialize_library, library_where, new_library_skill
+from skillager.library.git import repository_status
+from skillager.library.service import (
+    accept_library_skill,
+    initialize_library,
+    library_acceptance_preview,
+    library_where,
+    new_library_skill,
+)
 from skillager.library.versioning import (
     library_restore_preview,
     resolve_history_version,
@@ -15,6 +22,30 @@ from tests.support import chdir
 
 
 class LibraryVersionSelectionTests(unittest.TestCase):
+    def test_library_acceptance_refuses_symlink_without_changing_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            catalog = root / "catalog"
+            library = root / "library"
+            with patch("pathlib.Path.home", return_value=root / "home"), chdir(project):
+                initialize_library(catalog, path=library)
+                new_library_skill(catalog, "linked")
+                skill = library / "skills" / "linked"
+                outside = root / "unreviewed.txt"
+                outside.write_text("unreviewed bytes\n", encoding="utf-8")
+                (skill / "linked.txt").symlink_to(outside)
+                before = repository_status(library, mode="system")["head"]
+                working_hash = library_where(catalog, "linked")["skill"]["working_hash"]
+
+                with self.assertRaisesRegex(ValueError, "library acceptance refuses symlinks"):
+                    library_acceptance_preview(catalog, "linked")
+                with self.assertRaisesRegex(ValueError, "library acceptance refuses symlinks"):
+                    accept_library_skill(catalog, "linked", expected_hash=working_hash)
+                self.assertEqual(repository_status(library, mode="system")["head"], before)
+                self.assertTrue((skill / "linked.txt").is_symlink())
+
     def test_content_hash_prefix_must_be_unique_and_never_resolves_git_ids(self) -> None:
         versions = [
             {"content_hash": "aa" + "0" * 62},

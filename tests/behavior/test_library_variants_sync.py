@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import tempfile
 import unittest
 from pathlib import Path
@@ -107,6 +109,13 @@ class LibraryVariantsSyncBehaviorTests(unittest.TestCase):
             self.assert_code(variant)
             self.assertNotEqual(source.json()["skill"]["name"], variant.json()["skill"]["name"])
             self.assertNotEqual(source.json()["skill"]["summary"], variant.json()["skill"]["summary"])
+            where = cli.run("where", "lib/pandas-2", "--json")
+            self.assert_code(where)
+            self.assertEqual(where.json()["skill"]["lineage"], result["lineage"])
+            listed = cli.run("list", "--summary-json")
+            self.assert_code(listed)
+            fork_row = next(item for item in listed.json()["skills"] if item["id"] == "lib/pandas-2")
+            self.assertEqual(fork_row["lineage"], result["lineage"])
 
     def test_historical_fork_records_the_exact_selected_hash(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -164,6 +173,27 @@ class LibraryVariantsSyncBehaviorTests(unittest.TestCase):
             shown = cli.run("show", "lib/pandas-windows", "--json")
             self.assert_code(shown)
             self.assertEqual(shown.json()["skill"]["summary"], description)
+
+    def test_fork_preview_renders_description_as_one_shell_argument(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            _project, cli, _library, _skill, _source_hash = self.create_library_skill(tmp)
+            description = "Legacy workflow; $(touch should-not-run) and 'quoted' values."
+            preview = cli.run(
+                "fork",
+                "lib/pandas",
+                "--as",
+                "pandas-safe-command",
+                "--description",
+                description,
+                "--json",
+            )
+            self.assert_code(preview)
+            payload = preview.json()
+            argv = payload["next_command_argv"]
+            self.assertEqual(shlex.split(payload["next_command"]), argv)
+            self.assertEqual(argv[argv.index("--description") + 1], description)
+            self.assertFalse((tmp / "project" / "should-not-run").exists())
 
     def test_sync_is_preview_first_updates_only_clean_unpinned_exposures_and_preserves_provenance(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -290,6 +320,67 @@ class LibraryVariantsSyncBehaviorTests(unittest.TestCase):
             safe_item = next(item for item in unresolved.json()["items"] if item["skill_id"] == "lib/safe")
             self.assertEqual(safe_item["reason"], "unresolved-drift")
             self.assertTrue(target.joinpath("draft.tmp").is_file())
+
+    def test_sync_refuses_newly_incompatible_accepted_version(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            project, cli, _library, skill, first_hash = self.create_library_skill(tmp, name="agent-specific")
+            self.assert_code(cli.run("expose", "lib/agent-specific", "--agent", "codex"))
+            target = project / ".agents" / "skills" / "lib-agent-specific"
+            before = target.joinpath("SKILL.md").read_bytes()
+            skill.joinpath("skillager.yaml").write_text(
+                "schema: skillager.skill.v1\n"
+                "audience:\n"
+                "  - dev\n"
+                "activation:\n"
+                "  default: manual\n"
+                "compatibility:\n"
+                "  exclusive_to: claude\n",
+                encoding="utf-8",
+            )
+            accepted = cli.run("library", "accept", "lib/agent-specific", "--yes", "--json")
+            self.assert_code(accepted)
+            self.assertNotEqual(accepted.json()["skill"]["working_hash"], first_hash)
+
+            preview = cli.run("sync", "--agent", "codex", "--json")
+            self.assert_code(preview)
+            item = preview.json()["items"][0]
+            self.assertEqual(item["reason"], "incompatible")
+            self.assertFalse(item["will_update"])
+            self.assertIn("claude", item["detail"])
+            applied = cli.run("sync", "--agent", "codex", "--apply", "--json")
+            self.assert_code(applied)
+            self.assertEqual(applied.json()["update_count"], 0)
+            self.assertEqual(target.joinpath("SKILL.md").read_bytes(), before)
+
+    def test_sync_detects_same_size_edit_even_when_mtime_is_restored(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            project, cli, _library, skill, _first_hash = self.create_library_skill(tmp, name="fingerprint")
+            self.assert_code(cli.run("expose", "lib/fingerprint", "--agent", "codex"))
+            target = project / ".agents" / "skills" / "lib-fingerprint"
+            target_skill = target / "SKILL.md"
+            original = target_skill.read_bytes()
+            original_stat = target_skill.stat()
+
+            skill.joinpath("SKILL.md").write_text(
+                "# Fingerprint\n\nA newly accepted canonical version.\n",
+                encoding="utf-8",
+            )
+            self.assert_code(cli.run("library", "accept", "lib/fingerprint", "--yes"))
+            edited = original.replace(b"PRIVATE", b"ALTERED", 1)
+            self.assertEqual(len(edited), len(original))
+            target_skill.write_bytes(edited)
+            target_skill.touch()
+            os.utime(target_skill, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+            preview = cli.run("sync", "--agent", "codex", "--json")
+            self.assert_code(preview)
+            self.assertEqual(preview.json()["items"][0]["reason"], "dirty")
+            applied = cli.run("sync", "--agent", "codex", "--apply", "--json")
+            self.assert_code(applied)
+            self.assertEqual(applied.json()["update_count"], 0)
+            self.assertEqual(target_skill.read_bytes(), edited)
 
     def test_pin_to_a_different_version_refuses_without_rewriting_the_exposure(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

@@ -41,6 +41,7 @@ def scan_project_exposures(
         project_dir,
         agent=agent,
         catalog_root=catalog_root,
+        authoritative=False,
     )
     counts = {key: 0 for key in _COUNT_KEYS.values()}
     for record in records:
@@ -59,6 +60,7 @@ def list_project_exposures(
     *,
     agent: str | None = None,
     catalog_root: Path | None = None,
+    authoritative: bool = True,
 ) -> list[dict[str, Any]]:
     """Return every discoverable current-project exposure classification."""
 
@@ -90,6 +92,7 @@ def list_project_exposures(
                         sidecar=sidecar,
                         fallback_agent=root_agent,
                         registration=registration,
+                        authoritative=authoritative,
                     )
                     if record is not None:
                         records.append(record)
@@ -104,6 +107,7 @@ def classify_exposure_target(
     sidecar: Path | None = None,
     fallback_agent: str = "codex",
     registration: dict[str, Any] | None = None,
+    authoritative: bool = True,
 ) -> dict[str, Any] | None:
     """Classify one sidecar-backed target; return None for Skillager Working."""
 
@@ -135,7 +139,7 @@ def classify_exposure_target(
 
     try:
         fingerprint = content_tree_fingerprint(target)
-        current_hash = _hash_from_matching_fingerprint(data, fingerprint)
+        current_hash = None if authoritative else _hash_from_matching_fingerprint(data, fingerprint)
         if current_hash is None:
             current_hash = content_hash(target)
     except OSError as exc:
@@ -170,10 +174,7 @@ def classify_exposure_target(
 
 def _hash_from_matching_fingerprint(data: dict[str, Any], fingerprint: str) -> str | None:
     customized_hash = data.get("customized_hash")
-    if (
-        isinstance(customized_hash, str)
-        and data.get("customized_fingerprint") == fingerprint
-    ):
+    if isinstance(customized_hash, str) and data.get("customized_fingerprint") == fingerprint:
         return customized_hash
     materialized_hash = data.get("materialized_hash")
     if isinstance(materialized_hash, str) and data.get("materialized_fingerprint") == fingerprint:
@@ -279,21 +280,12 @@ def _unmanaged_record(target: Path, *, agent: str) -> dict[str, Any]:
 
 
 def _sidecar_ownership(data: dict[str, Any], registration: dict[str, Any] | None) -> str:
-    if data.get("ownership") in {"library", "external"}:
-        return str(data["ownership"])
+    if data.get("ownership") == "external":
+        return "external"
     if registration is None:
         return "external"
-    source_id = str(data.get("source_id") or data.get("id") or "")
     source_library_id = data.get("source_library_id")
-    if source_library_id is not None:
-        return "library" if source_library_id == registration.get("library_id") else "external"
-    if (
-        source_id.startswith(f"{LIBRARY_NAMESPACE}/")
-        and data.get("source_type") == "collection"
-        and data.get("source_package") == LIBRARY_NAMESPACE
-    ):
-        return "library"
-    return "external"
+    return "library" if source_library_id is not None and source_library_id == registration.get("library_id") else "external"
 
 
 def _library_registration(catalog_root: Path | None) -> dict[str, Any] | None:

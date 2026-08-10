@@ -14,10 +14,12 @@ from ..library.service import (
     accept_library_skill,
     initialize_library,
     library_acceptance_preview,
+    library_relocation_preview,
     library_skill_path,
     library_status,
     library_where,
     new_library_skill,
+    relocate_library,
 )
 from ..library.versioning import (
     library_diff,
@@ -43,6 +45,7 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
               skillager library init
               skillager library init --path ~/skills/personal
               skillager library init --no-git
+              skillager library relocate --path ~/skills/personal --yes
               skillager library status
               skillager library status lib/my-skill --json
               skillager library new my-skill
@@ -61,6 +64,11 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     init.add_argument("--no-git", action="store_true", help="Initialize without Git history support.")
     init.add_argument("--json", action="store_true", help="Emit versioned initialization metadata as JSON.")
     init.set_defaults(func=cmd_library_init)
+    relocate = library_sub.add_parser("relocate", help="Re-register the same personal-library identity at a moved path.")
+    relocate.add_argument("--path", type=Path, required=True, help="Existing moved library root with the registered UUID.")
+    relocate.add_argument("--yes", action="store_true", help="Confirm the registration path update.")
+    relocate.add_argument("--json", action="store_true", help="Emit versioned relocation preview or result JSON.")
+    relocate.set_defaults(func=cmd_library_relocate)
     status = library_sub.add_parser("status", help="Inspect library identity and Git state without changing it.")
     status.add_argument("skill", nargs="?", help="Optional library skill name or lib/<name> ID.")
     status.add_argument("--json", action="store_true", help="Emit versioned status metadata as JSON.")
@@ -141,6 +149,31 @@ def cmd_library_init(args: argparse.Namespace) -> int:
     print(f"Indexed: {indexed} skill{'s' if indexed != 1 else ''}; none were approved or exposed")
     for warning in result["warnings"]:
         print(f"Warning: {warning}")
+    for advisory in result["advisories"]:
+        print(f"Note: {advisory}")
+    return 0
+
+
+def cmd_library_relocate(args: argparse.Namespace) -> int:
+    if args.yes:
+        result = relocate_library(catalog_root(args), args.path)
+    else:
+        result = library_relocation_preview(catalog_root(args), args.path)
+        result["next_command"] = shlex.join(result["next_command_argv"])
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0
+    if result["status"] == "preview":
+        print("Personal library relocation preview (no files will be moved):")
+        print(f"From: {result['from_path']}")
+        print(f"To: {result['to_path']}")
+        print(f"Identity: {result['library_id']}")
+        print(f"Next: {result['next_command']}")
+        return 0
+    print("Personal skill library: relocated")
+    print(f"Path: {result['to_path']}")
+    print(f"Identity: {result['library_id']}")
+    print(f"Indexed: {result['indexed']} skill{'s' if result['indexed'] != 1 else ''}")
     return 0
 
 
@@ -170,6 +203,8 @@ def cmd_library_status(args: argparse.Namespace) -> int:
         print(f"Acceptance: {skill['acceptance']}")
     for warning in result["warnings"]:
         print(f"Warning: {warning}")
+    for advisory in result["advisories"]:
+        print(f"Note: {advisory}")
     return 0
 
 
@@ -196,15 +231,14 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
     if not args.yes:
         if not sys.stdin.isatty():
             preview = dict(preview)
-            preview["status"] = "confirmation-required"
             preview["next_command"] = f"skillager library accept {preview['skill']['id']} --yes"
             if args.json:
                 print(json.dumps(preview, indent=2, sort_keys=True))
-                return 1
+                return 0
             _print_acceptance_preview(preview)
-            print("Confirmation required; no changes were made.")
+            print("Preview only; no changes were made.")
             print(f"Next: {preview['next_command']}")
-            return 1
+            return 0
         _print_acceptance_preview(preview)
         response = input("Accept this exact library skill hash? [y/N] ").strip().lower()
         if response not in {"y", "yes"}:
@@ -296,18 +330,17 @@ def cmd_library_restore(args: argparse.Namespace) -> int:
     if not args.yes:
         if not sys.stdin.isatty():
             preview = dict(preview)
-            preview["status"] = "confirmation-required"
             preview["next_command"] = (
                 f"skillager library restore {preview['skill']['id']} "
                 f"--to {preview['selected_version']['short_hash']} --yes"
             )
             if args.json:
                 print(json.dumps(preview, indent=2, sort_keys=True))
-                return 1
+                return 0
             _print_restore_preview(preview)
-            print("Confirmation required; no files were changed.")
+            print("Preview only; no files were changed.")
             print(f"Next: {preview['next_command']}")
-            return 1
+            return 0
         _print_restore_preview(preview)
         response = input("Restore this exact historical tree as a new commit? [y/N] ").strip().lower()
         if response not in {"y", "yes"}:
@@ -348,6 +381,10 @@ def cmd_where(args: argparse.Namespace) -> int:
     print(f"HEAD hash: {skill['head_hash'] or '-'}")
     print(f"History: {_history_summary(skill['history'])}")
     print(f"Status: {skill['status']} ({skill['acceptance']})")
+    if skill.get("lineage"):
+        print(f"Forked from: {skill['lineage']['skill']} at {skill['lineage']['hash'][:12]}")
+    if skill.get("imported_from"):
+        print(f"Imported from: {skill['imported_from']['skill_id']} at {skill['imported_from']['content_hash'][:12]}")
     print(f"Project exposures: {len(skill['exposures'])}")
     return 0
 

@@ -40,6 +40,7 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             self.assertEqual(initialized.json()["schema"], "skillager.library-init.v1")
             self.assertTrue(initialized.json()["created"])
             self.assertEqual(initialized.json()["git"]["mode"], "disabled")
+            self.assertIn("history is disabled", initialized.json()["advisories"][0])
             self.assertFalse((library / ".git").exists())
             self.assertTrue((library / "skills" / ".gitkeep").is_file())
             identity = json.loads((library / ".skillager" / "library.json").read_text(encoding="utf-8"))
@@ -71,6 +72,7 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             library = root / "home" / ".skillager" / "library"
             self.assertEqual(data["git"]["mode"], "system")
             self.assertTrue(data["git"]["clean"])
+            self.assertIn("no Git remote", data["advisories"][0])
             self.assertEqual(data["commit"]["identity"]["source"], "skillager-fallback")
             author = subprocess.run(
                 ["git", "log", "-1", "--format=%an <%ae>"],
@@ -154,6 +156,50 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             self.assertEqual(relocation.code, 2)
             self.assertIn("relocation is not implicit", relocation.stderr)
             self.assertFalse(second.exists())
+
+    def test_moved_library_is_diagnosed_and_requires_explicit_identity_checked_relocation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _project, cli = make_basic_workspace(root)
+            first = root / "first"
+            moved = root / "moved"
+            self.assertEqual(cli.run("library", "init", "--path", str(first), "--no-git").code, 0)
+            shutil.move(first, moved)
+
+            status = cli.run("library", "status", "--json")
+            self.assertEqual(status.code, 0, status.stderr)
+            self.assertEqual(status.json()["status"], "degraded")
+            self.assertIn("path is missing", status.json()["warnings"][0])
+            self.assertIn("library relocate", status.json()["recovery_command"])
+            doctor = cli.run("doctor", "--no-packages", "--json")
+            self.assertEqual(doctor.code, 15, doctor.stderr)
+            self.assertEqual(doctor.json()["status"], "library-attention-needed")
+            self.assertEqual(doctor.json()["library"]["status"], "degraded")
+
+            collections_path = root / "state" / "catalog" / "collections.json"
+            before = collections_path.read_bytes()
+            imposter = root / "imposter"
+            shutil.copytree(moved, imposter)
+            identity_path = imposter / ".skillager" / "library.json"
+            identity = json.loads(identity_path.read_text(encoding="utf-8"))
+            identity["library_id"] = "11111111-1111-1111-1111-111111111111"
+            identity_path.write_text(json.dumps(identity), encoding="utf-8")
+            refused = cli.run("library", "relocate", "--path", str(imposter), "--yes")
+            self.assertEqual(refused.code, 2)
+            self.assertIn("does not have the registered personal-library identity", refused.stderr)
+            self.assertEqual(collections_path.read_bytes(), before)
+
+            preview = cli.run("library", "relocate", "--path", str(moved), "--json")
+            self.assertEqual(preview.code, 0, preview.stderr)
+            self.assertEqual(preview.json()["status"], "preview")
+            self.assertFalse(preview.json()["will_relocate"])
+            self.assertEqual(collections_path.read_bytes(), before)
+
+            applied = cli.run("library", "relocate", "--path", str(moved), "--yes", "--json")
+            self.assertEqual(applied.code, 0, applied.stderr)
+            self.assertEqual(applied.json()["status"], "relocated")
+            self.assertEqual(Path(applied.json()["library"]["root"]), moved.resolve())
+            self.assertEqual(cli.run("library", "status", "--json").json()["status"], "ready")
 
     @unittest.skipUnless(shutil.which("git"), "system Git is required")
     def test_existing_repository_with_staged_changes_is_refused_before_metadata_writes(self) -> None:

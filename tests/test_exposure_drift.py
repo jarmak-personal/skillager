@@ -45,18 +45,33 @@ def write_sidecar(root: Path, **overrides: object) -> dict[str, object]:
 
 class ExposureDriftTests(unittest.TestCase):
 
-    def test_current_fingerprint_hit_skips_full_hash(self) -> None:
+    def test_current_fingerprint_hit_still_requires_full_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "demo"
             write_target(target)
             write_sidecar(target)
 
-            with patch.object(drift_impl, "content_hash", side_effect=AssertionError("full hash should be skipped")):
+            original_hash = drift_impl.content_hash
+            with patch.object(drift_impl, "content_hash", wraps=original_hash) as hash_mock:
                 record = classify_exposure_target(target)
 
             assert record is not None
             self.assertEqual(record["status"], "current")
             self.assertEqual(record["ownership"], "external")
+            self.assertEqual(hash_mock.call_count, 1)
+
+    def test_working_scan_may_reuse_fingerprint_for_advisory_display_only(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp) / "project"
+            target = project / ".agents" / "skills" / "demo"
+            write_target(target)
+            write_sidecar(target)
+
+            with patch.object(drift_impl, "content_hash", side_effect=AssertionError("advisory scan rehashed")):
+                changes = scan_project_exposures(project, agent="codex")
+
+            self.assertEqual(changes["current"], 1)
+            self.assertEqual(changes["items"], [])
 
     def test_local_edit_and_exact_kept_local_precedence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -166,7 +181,7 @@ class ExposureDriftTests(unittest.TestCase):
             self.assertEqual(changes["items"], [])
             self.assertEqual(changes["fully_deleted_targets"], "undetectable_without_ledger")
 
-    def test_legacy_library_ownership_requires_reserved_registration(self) -> None:
+    def test_legacy_library_ownership_requires_explicit_library_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             target = root / "project" / ".agents" / "skills" / "lib-demo"
@@ -210,7 +225,7 @@ class ExposureDriftTests(unittest.TestCase):
                 registration={"library_id": "11111111-1111-1111-1111-111111111111"},
             )
             assert registered is not None
-            self.assertEqual(registered["ownership"], "library")
+            self.assertEqual(registered["ownership"], "external")
 
 
 if __name__ == "__main__":

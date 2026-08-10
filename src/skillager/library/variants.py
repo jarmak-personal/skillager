@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,6 +71,13 @@ def fork_preview(
     scan = _compact_scan(candidate_entry.get("scan"))
     requires_override = lint["blocking_count"] > 0 or scan["risk"] == "high"
     source_id = f"{LIBRARY_NAMESPACE}/{source_name}"
+    next_command_argv = _fork_argv(
+        source_id,
+        destination,
+        normalized_description,
+        from_hash=str(selected["content_hash"]) if from_hash is not None else None,
+        override=requires_override,
+    )
     return {
         "schema": LIBRARY_FORK_SCHEMA,
         "status": "preview",
@@ -99,13 +107,8 @@ def fork_preview(
         "scan": scan,
         "requires_override": requires_override,
         "git": {"mode": identity.git_mode},
-        "next_command": _fork_command(
-            source_id,
-            destination,
-            normalized_description,
-            from_hash=str(selected["content_hash"]) if from_hash is not None else None,
-            override=requires_override,
-        ),
+        "next_command": shlex.join(next_command_argv),
+        "next_command_argv": next_command_argv,
     }
 
 
@@ -397,23 +400,20 @@ def _require_new_fork_destination(target: Path) -> None:
         raise ValueError(f"library skill already exists: {LIBRARY_NAMESPACE}/{target.name}; choose a collision-free --as name")
 
 
-def _fork_command(
+def _fork_argv(
     source: str,
     destination: str,
     description: str,
     *,
     from_hash: str | None,
     override: bool,
-) -> str:
-    command = (
-        f"skillager fork {source} --as {destination} "
-        f"--description {json.dumps(description, ensure_ascii=False)}"
-    )
+) -> list[str]:
+    command = ["skillager", "fork", source, "--as", destination, "--description", description]
     if from_hash is not None:
-        command += f" --from {from_hash}"
-    command += " --yes"
+        command.extend(["--from", from_hash])
+    command.append("--yes")
     if override:
-        command += ' --override-lint --reason "<why>"'
+        command.extend(["--override-lint", "--reason", "<why>"])
     return command
 
 

@@ -6,9 +6,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..catalog.impl import load_collections, refresh_collection, register_library_collection, select_collection_skills
+from ..catalog.impl import (
+    load_collections,
+    refresh_collection,
+    register_library_collection,
+    relocate_library_collection,
+    select_collection_skills,
+)
 from ..lint import blocking_findings
 from ..simple_yaml import load_mapping
+from ..skills.tree import require_canonical_content_tree
 from ..state.locking import resource_lock, resource_locks
 from ..trust import approval_key_for, load_trust, make_lint_override, set_trust
 from .git import commit_paths, git_available, head_content_hash, initialize_repository, path_changes, repository_status
@@ -28,6 +35,7 @@ LIBRARY_STATUS_SCHEMA = "skillager.library-status.v1"
 LIBRARY_NEW_SCHEMA = "skillager.library-new.v1"
 LIBRARY_ACCEPT_SCHEMA = "skillager.library-accept.v1"
 LIBRARY_WHERE_SCHEMA = "skillager.where.v1"
+LIBRARY_RELOCATE_SCHEMA = "skillager.library-relocate.v1"
 
 
 def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: bool = False) -> dict[str, Any]:
@@ -93,6 +101,51 @@ def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: 
         "git": status["git"],
         "history": status["history"],
         "warnings": status["warnings"],
+        "advisories": status["advisories"],
+    }
+
+
+def library_relocation_preview(catalog_root: Path, path: Path) -> dict[str, Any]:
+    registration = _registered_library_or_conflict(catalog_root)
+    if registration is None:
+        raise ValueError("personal skill library is not initialized; run `skillager library init`")
+    candidate = LibraryLayout.from_root(path)
+    if candidate.root == registration.layout.root:
+        raise ValueError("relocation path is already the registered personal library")
+    _require_library_layout(candidate)
+    identity = load_library_identity(candidate)
+    if identity is None or identity.library_id != registration.library_id:
+        raise ValueError("relocation candidate does not have the registered personal-library identity")
+    if load_library_provenance(candidate) is None:
+        raise ValueError(f"library provenance metadata is missing: {candidate.provenance_path}")
+    if identity.git_mode == "system":
+        git = repository_status(candidate.root, mode=identity.git_mode)
+        if not git.get("available") or not git.get("repository"):
+            raise ValueError("Git-backed relocation candidate is not its own Git working tree")
+    return {
+        "schema": LIBRARY_RELOCATE_SCHEMA,
+        "status": "preview",
+        "will_relocate": False,
+        "library_id": registration.library_id,
+        "from_path": str(registration.layout.root),
+        "to_path": str(candidate.root),
+        "next_command_argv": ["skillager", "library", "relocate", "--path", str(candidate.root), "--yes"],
+    }
+
+
+def relocate_library(catalog_root: Path, path: Path) -> dict[str, Any]:
+    with resource_lock(catalog_root / "library-init"):
+        preview = library_relocation_preview(catalog_root, path)
+        relocate_library_collection(catalog_root, Path(preview["to_path"]), str(preview["library_id"]))
+        index = refresh_collection(catalog_root, LIBRARY_NAMESPACE)
+    status = library_status(catalog_root)
+    return {
+        **preview,
+        "status": "relocated",
+        "will_relocate": True,
+        "indexed": len(index.get("skills", [])),
+        "errors": index.get("errors", []),
+        "library": status["library"],
     }
 
 
@@ -132,6 +185,8 @@ def new_library_skill(catalog_root: Path, name: str) -> dict[str, Any]:
 
 def library_acceptance_preview(catalog_root: Path, skill_name: str, *, project_dir: Path | None = None) -> dict[str, Any]:
     registration, identity = _require_library_identity(catalog_root)
+    normalized = normalize_skill_name(skill_name)
+    require_canonical_content_tree(registration.layout.skill_root(normalized), action="library acceptance")
     skill = _library_skill_entry(catalog_root, skill_name)
     approval_key = _library_approval_key(skill)
     git = repository_status(registration.layout.root, mode=identity.git_mode)
@@ -171,6 +226,7 @@ def accept_library_skill(
     with resource_locks(resources):
         registration, identity = _require_library_identity(catalog_root)
         layout = registration.layout
+        require_canonical_content_tree(layout.skill_root(normalized), action="library acceptance")
         skill = _library_skill_entry(catalog_root, normalized)
         working_hash = str(skill["content_hash"])
         if working_hash != expected_hash:
@@ -281,7 +337,9 @@ def library_status(
             "counts": {"skills": 0},
             "skill": None,
             "warnings": [],
+            "advisories": [],
             "next_command": "skillager library init",
+            "recovery_command": None,
         }
 
     layout = registration.layout
@@ -309,12 +367,20 @@ def library_status(
     git_mode = identity.git_mode if identity is not None else "disabled"
     git = repository_status(layout.root, mode=git_mode) if layout.root.is_dir() else _missing_git_status(git_mode)
     history = _history_availability(identity, git) if identity is not None else {"available": False, "reason": "identity-missing"}
+    advisories: list[str] = []
     if git.get("error"):
         warnings.append(str(git["error"]))
     if git.get("conflicts"):
         warnings.append("library Git repository has unresolved conflicts")
     if git.get("operation"):
         warnings.append(f"library Git repository has an in-progress {git['operation']} operation")
+    if identity is not None and identity.git_mode == "disabled":
+        advisories.append("library history is disabled (--no-git); ordinary ownership remains available")
+    elif identity is not None and git.get("repository"):
+        if not git.get("remote"):
+            advisories.append("library has no Git remote; consider a private backup remote")
+        if any(git.get(key) for key in ("staged", "unstaged", "untracked")):
+            advisories.append("library Git repository has uncommitted changes")
     names, path_warnings = _library_skill_names(layout)
     warnings.extend(path_warnings)
     selected = (
@@ -340,7 +406,13 @@ def library_status(
         "counts": {"skills": len(names)},
         "skill": selected,
         "warnings": warnings,
-        "next_command": None,
+        "advisories": advisories,
+        "next_command": "skillager library status" if warnings else None,
+        "recovery_command": (
+            "skillager library relocate --path <moved-library-path>"
+            if not layout.root.is_dir()
+            else None
+        ),
     }
 
 
@@ -469,7 +541,7 @@ def _skill_status(
         state = "accepted_uncommitted"
     else:
         state = "clean"
-    return {
+    result = {
         "id": skill["id"],
         "name": skill.get("name") or skill["id"],
         "summary": skill.get("summary"),
@@ -488,6 +560,10 @@ def _skill_status(
         "history": _history_availability(identity, git),
         "exposures": _library_exposures(project_dir, str(skill["id"])),
     }
+    for key in ("lineage", "imported_from"):
+        if skill.get(key):
+            result[key] = skill[key]
+    return result
 
 
 def _history_availability(identity: LibraryIdentity, git: dict[str, Any]) -> dict[str, Any]:
@@ -537,7 +613,16 @@ def _library_skill_entry(catalog_root: Path, value: str) -> dict[str, Any]:
     )
     for skill in skills:
         if skill.get("id") == skill_id:
-            return skill
+            result = dict(skill)
+            registration = load_library_registration(catalog_root)
+            provenance = load_library_provenance(registration.layout) if registration is not None else None
+            record = (provenance or {}).get("skills", {}).get(name)
+            if isinstance(record, dict):
+                if isinstance(record.get("forked_from"), dict):
+                    result["lineage"] = dict(record["forked_from"])
+                if isinstance(record.get("imported_from"), dict):
+                    result["imported_from"] = dict(record["imported_from"])
+            return result
     raise ValueError(f"library skill not found: {skill_id}")
 
 
@@ -554,7 +639,7 @@ def _library_approval_key(skill: dict[str, Any]) -> str:
 
 
 def _compact_library_skill(skill: dict[str, Any]) -> dict[str, Any]:
-    return {
+    result = {
         "id": skill.get("id"),
         "name": skill.get("name"),
         "summary": skill.get("summary"),
@@ -563,6 +648,10 @@ def _compact_library_skill(skill: dict[str, Any]) -> dict[str, Any]:
         "trust": skill.get("trust"),
         "approval_key": _library_approval_key(skill),
     }
+    for key in ("lineage", "imported_from"):
+        if skill.get(key):
+            result[key] = skill[key]
+    return result
 
 
 def _compact_lint(lint: dict[str, Any] | None) -> dict[str, Any]:
@@ -718,13 +807,16 @@ __all__ = [
     "LIBRARY_INIT_SCHEMA",
     "LIBRARY_ACCEPT_SCHEMA",
     "LIBRARY_NEW_SCHEMA",
+    "LIBRARY_RELOCATE_SCHEMA",
     "LIBRARY_STATUS_SCHEMA",
     "LIBRARY_WHERE_SCHEMA",
     "accept_library_skill",
     "initialize_library",
     "library_acceptance_preview",
+    "library_relocation_preview",
     "library_skill_path",
     "library_status",
     "library_where",
     "new_library_skill",
+    "relocate_library",
 ]

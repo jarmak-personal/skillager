@@ -9,7 +9,8 @@ package, native-agent, and collection skills.
 Highlights:
 
 - Initialize one plain-file, optionally Git-backed personal library with the reserved
-  `lib/<name>` namespace.
+  `lib/<name>` namespace, diagnose a missing registered path, and explicitly
+  re-register the same UUID after the directory moves.
 - Create or explicitly import one skill, then accept only its exact scanned and linted
   content hash.
 - Inspect content-addressed history and diffs, restore an old version as a new
@@ -20,6 +21,11 @@ Highlights:
   native/stub updates, and pin an exposure to its current source hash.
 - Keep metadata commands body-safe and keep ownership separate from approval and
   exposure.
+- Fail closed on display-ID collisions, source/exposure races, same-size timestamp
+  spoofing, incompatible sync updates, legacy sidecars without a library UUID, and
+  noncanonical acceptance trees.
+- Keep summary inventory bounded, surface fork lineage in ordinary metadata, retain
+  curated-tag search matches, and make successful non-mutating previews exit zero.
 
 Compatibility and migration:
 

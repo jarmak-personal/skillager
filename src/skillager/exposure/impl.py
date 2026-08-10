@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import os
 import shutil
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -64,7 +66,7 @@ def materialize_skills(
                     results.append(materialize_stub_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force))
                 else:
                     results.append(materialize_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force))
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 results.append(_result(skill, target, "skipped", str(exc), agent=agent, scope=scope))
     return results
 
@@ -636,24 +638,48 @@ def materialize_one(
                 return _result(skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
         if dry_run:
             return _result(skill, target, "would_write", None, agent=agent, scope=scope)
+        expected_hash = skill.get("content_hash")
+        if not isinstance(expected_hash, str):
+            raise ValueError("source identity is incomplete; refresh inventory before exposure")
+        with tempfile.TemporaryDirectory(prefix=".skillager-expose-", dir=target.parent) as raw_temp:
+            temp_root = Path(raw_temp)
+            candidate = temp_root / "candidate"
+            candidate.mkdir()
+            _copy_skill_tree(source_root, candidate)
+            materialized_hash = content_hash(candidate)
+            if materialized_hash != expected_hash or content_hash(source_root) != expected_hash:
+                raise ValueError("source changed during exposure; review the new hash before exposing it")
+            candidate_sidecar = candidate / "skillager.materialized.yaml"
+            sidecar_data = _sidecar(
+                skill,
+                agent=agent,
+                scope=scope,
+                materialized_hash=materialized_hash,
+                materialized_fingerprint=content_tree_fingerprint(candidate),
+            )
+            sidecar_data.update(decisions)
+            candidate_sidecar.write_text(dumps(sidecar_data), encoding="utf-8")
+            _install_verified_candidate(candidate, target, temp_root=temp_root, expected_hash=expected_hash)
+        return _result(skill, target, "materialized", None, agent=agent, scope=scope)
+
+
+def _install_verified_candidate(candidate: Path, target: Path, *, temp_root: Path, expected_hash: str) -> None:
+    backup = temp_root / "previous"
+    had_target = target.exists()
+    if had_target:
+        os.replace(target, backup)
+    try:
+        os.replace(candidate, target)
+        if content_hash(target) != expected_hash:
+            raise ValueError("exposed content failed final hash verification")
+    except Exception:
         if target.exists():
             shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
-        _copy_skill_tree(Path(skill["root"]), target)
-        materialized_hash = content_hash(target)
-        sidecar_data = _sidecar(
-            skill,
-            agent=agent,
-            scope=scope,
-            materialized_hash=materialized_hash,
-            materialized_fingerprint=content_tree_fingerprint(target),
-        )
-        sidecar_data.update(decisions)
-        sidecar.write_text(
-            dumps(sidecar_data),
-            encoding="utf-8",
-        )
-        return _result(skill, target, "materialized", None, agent=agent, scope=scope)
+        if had_target and backup.exists():
+            os.replace(backup, target)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
 
 
 def target_dir(*, agent: str, scope: str, skill: dict[str, Any], project_dir: Path | None = None) -> Path:

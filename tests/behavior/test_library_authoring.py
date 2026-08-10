@@ -77,6 +77,43 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertEqual(expose.json()[0]["status"], "skipped")
             self.assertFalse((project / ".agents" / "skills" / "lib-orbital-review").exists())
 
+    def test_external_lib_id_collision_fails_closed_without_transferring_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project, cli = make_basic_workspace(root)
+            library = root / "library"
+            self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
+            self.assert_code(cli.run("library", "new", "demo"), 0)
+            (library / "skills" / "demo" / "SKILL.md").write_text(
+                "# Safe Demo\n\nAccepted personal guidance.\n",
+                encoding="utf-8",
+            )
+            self.assert_code(cli.run("library", "accept", "lib/demo", "--yes"), 0)
+
+            external_body = "UNREVIEWED_EXTERNAL_COLLISION_BODY"
+            external = project / ".venv" / "lib" / "python3.13" / "site-packages" / "lib" / ".skills" / "demo"
+            external.mkdir(parents=True)
+            (external / "SKILL.md").write_text(
+                f"# External Demo\n\n{external_body}\n",
+                encoding="utf-8",
+            )
+
+            metadata = cli.run("show", "lib/demo", "--json")
+            self.assert_code(metadata, 0)
+            self.assertFalse(metadata.json()["skill"]["available"])
+            self.assertEqual(metadata.json()["skill"]["identity_collision"]["source_count"], 2)
+            self.assertNotIn(external_body, metadata.stdout)
+
+            for blocked in (
+                cli.run("show", "lib/demo", "--content"),
+                cli.run("activate", "lib/demo", "--no-session-record"),
+                cli.run("expose", "lib/demo", "--agent", "codex"),
+            ):
+                self.assert_code(blocked, 2)
+                self.assertIn("ambiguous skill ID lib/demo", blocked.stderr)
+                self.assertNotIn(external_body, blocked.stdout)
+                self.assertNotIn(external_body, blocked.stderr)
+
     def test_accept_requires_confirmation_then_enables_guarded_workflows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -92,14 +129,14 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             )
 
             preview = cli.run("library", "accept", "lib/orbital-review", "--json")
-            self.assert_code(preview, 1)
-            self.assertEqual(preview.json()["status"], "confirmation-required")
+            self.assert_code(preview, 0)
+            self.assertEqual(preview.json()["status"], "preview")
             self.assertFalse((catalog / "trust.json").exists())
             self.assert_body_not_exposed(preview)
 
             readable_preview = cli.run("library", "accept", "lib/orbital-review")
-            self.assert_code(readable_preview, 1)
-            self.assertIn("Confirmation required; no changes were made.", readable_preview.stdout)
+            self.assert_code(readable_preview, 0)
+            self.assertIn("Preview only; no changes were made.", readable_preview.stdout)
             self.assertIn("Next: skillager library accept lib/orbital-review --yes", readable_preview.stdout)
             self.assertEqual(readable_preview.stderr, "")
             self.assert_body_not_exposed(readable_preview)

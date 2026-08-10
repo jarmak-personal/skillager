@@ -154,15 +154,15 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             self.git(library, cli.env, "remote", "add", "origin", "https://example.invalid/library.git")
 
             preview = cli.run("library", "restore", "restorable", "--to", first_hash[:12], "--json")
-            self.assert_code(preview, 1)
-            self.assertEqual(preview.json()["status"], "confirmation-required")
+            self.assert_code(preview, 0)
+            self.assertEqual(preview.json()["status"], "preview")
             self.assertEqual(skill_file.read_text(encoding="utf-8"), self.body("Restorable", SECOND_BODY))
             self.assertFalse(reference.exists())
             self.assertNotIn(FIRST_BODY, preview.stdout)
 
             readable_preview = cli.run("library", "restore", "restorable", "--to", first_hash[:12])
-            self.assert_code(readable_preview, 1)
-            self.assertIn("Confirmation required; no files were changed.", readable_preview.stdout)
+            self.assert_code(readable_preview, 0)
+            self.assertIn("Preview only; no files were changed.", readable_preview.stdout)
             self.assertIn(
                 f"Next: skillager library restore lib/restorable --to {first_hash[:12]} --yes",
                 readable_preview.stdout,
@@ -290,7 +290,7 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             safe_hash = safe.json()["skill"]["working_hash"]
 
             preview = cli.run("library", "restore", "risky-version", "--to", risky_hash[:12], "--json")
-            self.assert_code(preview, 1)
+            self.assert_code(preview, 0)
             self.assertTrue(preview.json()["requires_override"])
             refused = cli.run("library", "restore", "risky-version", "--to", risky_hash[:12], "--yes")
             self.assert_code(refused, 2)

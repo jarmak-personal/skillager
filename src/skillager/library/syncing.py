@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog.impl import load_collections
+from ..compatibility import compatibility_problem
 from ..exposure.drift import classify_exposure_target, list_project_exposures
 from ..exposure.impl import MATERIALIZED_SCHEMA, render_stub_skill
 from ..exposure.reconcile import require_exposure, write_reconciled_sidecar
@@ -216,6 +217,10 @@ def _evaluate_sync_record(
         return _skip(item, "source-missing")
     if source.get("trust") not in {"reviewed", "trusted", "pinned"}:
         return _skip(item, "unaccepted-source")
+    problem = compatibility_problem(source, str(record.get("agent") or ""))
+    if problem:
+        item["detail"] = problem
+        return _skip(item, "incompatible")
     prospective_hash = _prospective_materialized_hash(record, source)
     blocked_hashes = {str(value) for value in data.get("exposure_blocked_hashes") or []}
     if prospective_hash in blocked_hashes:
@@ -258,6 +263,9 @@ def _apply_sync_item(
         _require_matching_library_sidecar(catalog_root, data)
         if data.get("pin_hash") is not None:
             raise ValueError("exposure was pinned since sync preview")
+        materialized_hash = _required_hash(data.get("materialized_hash"), "materialized")
+        if content_hash(target) != materialized_hash:
+            raise ValueError("exposure content changed since sync preview")
 
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".skillager-sync-", dir=target.parent) as tmp:

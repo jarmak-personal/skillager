@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,7 @@ from ..exposure.reconcile import (
     write_reconciled_sidecar,
 )
 from ..simple_yaml import load_mapping
-from ..skills.tree import content_tree_fingerprint, content_tree_manifest, copy_content_tree
+from ..skills.tree import content_tree_fingerprint, content_tree_manifest, copy_content_tree, require_canonical_content_tree
 from ..state.locking import resource_locks
 from ..trust import approval_key_for, content_hash, set_trust
 from .candidate import index_library_candidate
@@ -30,7 +31,6 @@ from .service import (
 )
 from .versioning import (
     _materialize_tree,
-    _require_canonical_working_tree,
     library_history,
     resolve_history_version,
 )
@@ -132,7 +132,7 @@ def promote_exposure(
         if identity.git_mode == "system" and where.get("head_hash") != expected_base_hash:
             raise ValueError("library Git HEAD and exposure base diverged; no files were changed")
         library_target = registration.layout.skill_root(name)
-        _require_canonical_working_tree(library_target)
+        require_canonical_content_tree(library_target, action="library promotion")
         git = repository_status(registration.layout.root, mode=identity.git_mode)
         _require_safe_git_mutation(git, allow_target_staged=False)
         if any(path_changes(git, registration.layout.root, library_target).values()):
@@ -587,16 +587,17 @@ def _rollback_unavailable(record: dict[str, Any], reason: str, next_action: str)
 
 
 def _next_command(action: str, record: dict[str, Any], *, destination: str | None = None) -> str:
-    command = f"skillager reconcile {action} {record['skill_id']}"
+    command = ["skillager", "reconcile", action, str(record["skill_id"])]
     if destination is not None:
-        command += f" --as {destination}"
-    return f"{command} --agent {record['agent']} --yes"
+        command.extend(["--as", destination])
+    command.extend(["--agent", str(record["agent"]), "--yes"])
+    return shlex.join(command)
 
 
 def _require_matching_library(data: dict[str, Any], library_id: str) -> None:
     recorded = data.get("source_library_id")
-    if recorded is not None and recorded != library_id:
-        raise ValueError("exposure belongs to a different personal library identity")
+    if recorded != library_id:
+        raise ValueError("exposure has no matching personal-library identity; treat legacy provenance as external")
 
 
 def _load_sidecar(target: Path) -> dict[str, Any]:

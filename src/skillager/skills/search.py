@@ -181,7 +181,7 @@ def _fts5_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any
         skill = skills[int(rowid) - 1]
         body_text = body_texts[skill["id"]]
         reasons = _reasons(skill, terms, body_text=body_text)
-        if not reasons or _only_provenance_matches(reasons, terms):
+        if not reasons or _only_weak_provenance_matches(reasons, terms):
             continue
         item = _with_score(
             skill,
@@ -203,7 +203,7 @@ def _fallback_search(skills: list[dict[str, Any]], query: str) -> list[dict[str,
         reasons: list[str] = ["id:exact"] if exact and skill["id"] == exact["id"] else []
         if terms:
             reasons.extend(_reasons(skill, terms, body_text=body_texts[skill["id"]]))
-        if "id:exact" not in reasons and _only_provenance_matches(reasons, terms):
+        if "id:exact" not in reasons and _only_weak_provenance_matches(reasons, terms):
             continue
         if reasons or (not terms and not query.strip()):
             body_text = body_texts.get(skill["id"], "")
@@ -212,11 +212,11 @@ def _fallback_search(skills: list[dict[str, Any]], query: str) -> list[dict[str,
     return sorted(results, key=lambda item: (-item["score"], _visibility_rank(item), item["id"]))
 
 
-def _only_provenance_matches(reasons: list[str], terms: list[str]) -> bool:
+def _only_weak_provenance_matches(reasons: list[str], terms: list[str]) -> bool:
     if len(terms) <= 1 or not reasons:
         return False
     fields = {reason.partition(":")[0] for reason in reasons}
-    return fields.issubset({"source", "tags"})
+    return fields == {"source"}
 
 
 def _included(

@@ -17,6 +17,7 @@ from ..library.model import (
     normalize_library_id,
     normalize_skill_name,
 )
+from ..library.metadata import load_library_provenance
 from ..review_gates import apply_review_metadata
 from ..scan import scan_path
 from ..schema import QuarantinedSkill, SchemaError, Skill, load_skill_from_dir, quarantine_skill_from_dir
@@ -131,6 +132,30 @@ def register_library_collection(state_root: Path, library_root: Path, library_id
         if existing != registration:
             raise ValueError("a different personal skill library is already registered")
         return dict(current)
+
+    return mutate_user_json(collections_path(state_root), {"collections": {}}, mutation)
+
+
+def relocate_library_collection(state_root: Path, library_root: Path, library_id: str) -> dict[str, Any]:
+    """Update only the path of the registered library with the same stable UUID."""
+
+    layout = LibraryLayout.from_root(library_root)
+    if not layout.root.is_dir():
+        raise ValueError(f"library root does not exist: {layout.root}")
+    if layout.skills.is_symlink() or not layout.skills.is_dir():
+        raise ValueError(f"library skills path must be a non-symlinked directory: {layout.skills}")
+    normalized_id = normalize_library_id(library_id)
+    desired = LibraryRegistration(library_id=normalized_id, layout=layout).to_mapping()
+
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        current = data.setdefault("collections", {}).get(LIBRARY_NAMESPACE)
+        if not isinstance(current, dict) or current.get("kind") != LIBRARY_COLLECTION_KIND:
+            raise ValueError("personal skill library is not initialized")
+        existing = LibraryRegistration.from_mapping(current)
+        if existing.library_id != normalized_id:
+            raise ValueError("registered personal-library identity changed during relocation")
+        data["collections"][LIBRARY_NAMESPACE] = desired
+        return dict(desired)
 
     return mutate_user_json(collections_path(state_root), {"collections": {}}, mutation)
 
@@ -597,6 +622,12 @@ def _index_collection_skills(
     errors: list[dict[str, str]] = []
     source = _collection_source(name, root, collection)
     library_id = source.get("library_id")
+    provenance_skills: dict[str, Any] = {}
+    if library_id is not None:
+        layout = LibraryLayout.from_root(Path(str(source["library_root"])))
+        provenance = load_library_provenance(layout)
+        if isinstance(provenance, dict):
+            provenance_skills = provenance.get("skills", {})
     try:
         skill_dirs = _skill_dirs(root)
     except OSError as exc:
@@ -622,6 +653,7 @@ def _index_collection_skills(
             _apply_approval_metadata(entry, approval_key, trust)
             apply_review_metadata(entry)
             entry["audience_guess"] = classify_audience(skill)
+            _apply_library_provenance(entry, provenance_skills)
             skills.append(entry)
         except (SchemaError, OSError, ValueError) as exc:
             quarantined = quarantine_skill_from_dir(skill_dir, source, exc)
@@ -646,10 +678,22 @@ def _index_collection_skills(
                     entry["signature"] = signature
                 _apply_approval_metadata(entry, approval_key, trust)
                 apply_review_metadata(entry)
+                _apply_library_provenance(entry, provenance_skills)
                 skills.append(entry)
             errors.append({"path": str(skill_dir), "error": str(exc)})
     skills.sort(key=lambda item: item["id"])
     return skills, errors
+
+
+def _apply_library_provenance(entry: dict[str, Any], provenance_skills: dict[str, Any]) -> None:
+    name = str(entry.get("id") or "").partition("/")[2]
+    record = provenance_skills.get(name)
+    if not isinstance(record, dict):
+        return
+    if isinstance(record.get("forked_from"), dict):
+        entry["lineage"] = dict(record["forked_from"])
+    if isinstance(record.get("imported_from"), dict):
+        entry["imported_from"] = dict(record["imported_from"])
 
 
 def _collection_skill(

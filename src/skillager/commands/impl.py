@@ -39,6 +39,7 @@ from ..collections import (
 from ..families import agent_variant_family_key, canonical_agent_variant_slug
 from ..exposure.drift import scan_project_exposures
 from ..index import build_index, find_skill, load_index
+from ..library.service import library_status
 from ..materialize import (
     TRUSTED_STATES,
     WORKING_REASON_LOCAL_CUSTOMIZATION,
@@ -107,6 +108,7 @@ DOCTOR_EXIT_BOOTSTRAP_REPAIR = 11
 DOCTOR_EXIT_LINT_BLOCKED = 12
 DOCTOR_EXIT_MIGRATION_NEEDED = 13
 DOCTOR_EXIT_MANUAL_REPAIR = 14
+DOCTOR_EXIT_LIBRARY_DEGRADED = 15
 SETUP_BOOTSTRAP_REASON_NO_APPROVED = "no_approved_skills"
 SETUP_BOOTSTRAP_REASON_DISABLED = "working_artifacts_disabled"
 SETUP_BOOTSTRAP_REASON_AGENT_NOT_SPECIFIED = "agent_not_specified"
@@ -2259,12 +2261,14 @@ def _build_doctor_result(
         include_global=include_global,
         use_saved_scope=True,
     )
+    view["library"] = _doctor_library_health(catalog_root)
     diagnosis = _doctor_diagnosis(view, agent=agent)
     return {
         "schema": "skillager.doctor.v1",
         "project": str(project_dir),
         "agent": agent,
         "readiness": view["readiness"],
+        "library": view["library"],
         "state": _doctor_state(view),
         "status": diagnosis["status"],
         "exit_code": diagnosis["exit_code"],
@@ -2308,6 +2312,17 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
             f"Legacy in-tree state exists at {legacy_state.get('path')}. Remove that directory after review, then rerun setup. Skillager no longer migrates legacy state in place.",
             command,
             next_commands=next_commands,
+        )
+    library = view.get("library") or {}
+    if library.get("status") == "degraded":
+        warnings = library.get("warnings") or []
+        detail = str(warnings[0]) if warnings else "the registered personal library needs attention"
+        command = str(library.get("next_command") or "skillager library status")
+        return _doctor_issue(
+            "library-attention-needed",
+            DOCTOR_EXIT_LIBRARY_DEGRADED,
+            f"Personal library is degraded: {detail}",
+            command,
         )
     if view["lint_blocked"]:
         count = len(view["lint_blocked"])
@@ -2413,6 +2428,21 @@ def _doctor_setup_next(agent: str | None) -> tuple[str | None, list[str]]:
     return None, ["skillager setup --agent codex", "skillager setup --agent claude"]
 
 
+def _doctor_library_health(catalog_root: Path) -> dict[str, Any]:
+    try:
+        return library_status(catalog_root)
+    except (OSError, ValueError) as exc:
+        return {
+            "schema": "skillager.library-status.v1",
+            "status": "degraded",
+            "initialized": True,
+            "warnings": [str(exc)],
+            "advisories": [],
+            "next_command": "skillager library status",
+            "recovery_command": None,
+        }
+
+
 def _doctor_apply_fix(result: dict[str, Any], *, project_dir: Path, agent: str | None) -> dict[str, Any]:
     artifact_action = (result.get("readiness") or {}).get("artifacts") or {}
     reason_code = artifact_action.get("reason_code")
@@ -2458,6 +2488,10 @@ def _print_doctor_result(result: dict[str, Any], *, migration_details: bool = Fa
     print(f"  Review: {'ready' if readiness.get('review_ready') else 'needs review'}")
     print(f"  Artifacts: {_readiness_handoff_state(readiness)}")
     print(f"  Exposure: {_exposure_summary_text(exposure)}")
+    library = result.get("library") or {}
+    advisory_count = len(library.get("advisories") or [])
+    advisory_suffix = f" ({advisory_count} advisor{'y' if advisory_count == 1 else 'ies'})" if advisory_count else ""
+    print(f"  Library: {library.get('status', 'unknown')}{advisory_suffix}")
     overrides = ((result.get("state") or {}).get("lint_overrides") or {})
     override_ids = overrides.get("ids") or []
     override_suffix = f" ({', '.join(override_ids)})" if override_ids else ""
@@ -3855,6 +3889,11 @@ def _compact_skill_metadata(skill: dict[str, Any], *, agent: str | None = None) 
         "agent_variant": skill.get("agent_variant"),
         "compatibility": _compact_compatibility(skill, agent=agent),
     }
+    if skill.get("identity_collision"):
+        payload["identity_collision"] = skill["identity_collision"]
+    for key in ("lineage", "imported_from"):
+        if skill.get(key):
+            payload[key] = skill[key]
     return payload
 
 
@@ -3868,6 +3907,9 @@ def _compact_lint_blocked_skill_metadata(skill: dict[str, Any]) -> dict[str, Any
 
 def _public_full_skill_metadata(skill: dict[str, Any]) -> dict[str, Any]:
     payload = dict(skill)
+    for key in list(payload):
+        if key.startswith("_"):
+            payload.pop(key, None)
     targets = payload.pop("materialized_targets", None)
     if isinstance(targets, list):
         payload["exposure_targets"] = [
@@ -3944,23 +3986,16 @@ def _inventory_summary(
 
 
 def _compact_inventory_item(skill: dict[str, Any]) -> dict[str, Any]:
-    source = skill.get("source") or {}
-    return {
+    item = {
         "id": skill.get("id"),
-        "name": skill.get("name"),
-        "summary": skill.get("summary"),
         "available": _is_available_skill(skill),
-        "source": {
-            key: value
-            for key, value in source.items()
-            if key in {"type", "collection", "package", "agent"}
-        },
-        "availability": skill.get("availability", []),
         "exposure": skill.get("exposure", "hidden"),
         "tags": skill.get("tags", []),
-        "agent_hint": skill.get("agent_hint") or _agent_hint(skill),
-        "agent_variant": skill.get("agent_variant"),
     }
+    for key in ("agent_variant", "lineage"):
+        if skill.get(key):
+            item[key] = skill[key]
+    return item
 
 
 def _inventory_source_groups(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -4143,6 +4178,16 @@ def _same_skill_variant(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 def cmd_show(args: argparse.Namespace) -> int:
     skill = _find_project_skill(root(args), args.skill_id, catalog_root=catalog_root(args), include_lint_blocked=True)
+    if skill.get("identity_collision"):
+        if args.content:
+            raise ValueError(_identity_collision_message(skill))
+        if args.json:
+            collision_payload = _public_full_skill_metadata(skill) if args.full_json else _compact_skill_metadata(skill)
+            print(json.dumps({"skill": collision_payload}, indent=2, sort_keys=True))
+        else:
+            print(_format_skill(skill))
+            print(f"identity_collision: {_identity_collision_message(skill)}")
+        return 0
     if skill.get("trust") == "lint_blocked":
         if args.content:
             raise ValueError(f"skill content is not available while lint-blocked: {args.skill_id}")
@@ -4157,6 +4202,8 @@ def cmd_show(args: argparse.Namespace) -> int:
         raise ValueError(f"skill is not available: {args.skill_id}; ask the user to run `skillager setup`")
     if args.content and skill.get("trust") not in {"reviewed", "trusted", "pinned"}:
         raise ValueError(f"skill content is not available: {args.skill_id}; {_approval_hint(skill)}")
+    if args.content:
+        _require_authoritative_skill_body(skill)
     if args.json:
         payload: dict[str, Any] = {"skill": _public_full_skill_metadata(skill) if args.full_json else _compact_skill_metadata(skill)}
         if args.content:
@@ -4182,6 +4229,8 @@ def cmd_activate(args: argparse.Namespace) -> int:
         include_collection_inventory=bool(args.from_router),
         include_lint_blocked=True,
     )
+    if skill.get("identity_collision"):
+        raise ValueError(_identity_collision_message(skill))
     if skill.get("trust") == "lint_blocked":
         raise ValueError(
             f"skill is lint-blocked: {args.skill_id}; inspect setup/review output, then fix the source or approve with --override-lint --reason"
@@ -4196,6 +4245,7 @@ def cmd_activate(args: argparse.Namespace) -> int:
         raise ValueError(f"skill is blocked: {args.skill_id}")
     if skill.get("trust") == "discovered" and not args.force:
         raise ValueError(f"skill is not available: {args.skill_id}; {_approval_hint(skill)}")
+    _require_authoritative_skill_body(skill)
     activation_agent = _activation_agent(args, skill)
     problem = compatibility_problem(skill, activation_agent)
     if problem and not args.allow_incompatible:
@@ -4204,6 +4254,19 @@ def cmd_activate(args: argparse.Namespace) -> int:
         print(f"warning: {warning}", file=sys.stderr)
     print(render_skill(skill, fmt=args.format))
     return 0
+
+
+def _require_authoritative_skill_body(skill: dict[str, Any]) -> None:
+    root_value = skill.get("root")
+    expected = skill.get("content_hash")
+    if not isinstance(root_value, str) or not isinstance(expected, str):
+        raise ValueError("skill source identity is incomplete; refresh inventory before body access")
+    try:
+        actual = content_hash(Path(root_value))
+    except OSError as exc:
+        raise ValueError("skill source is unavailable; refresh inventory before body access") from exc
+    if actual != expected:
+        raise ValueError("skill source changed since its reviewed hash; refresh inventory and review the new hash before body access")
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -4328,7 +4391,7 @@ def _base_project_skill_map(state_root: Path, *, catalog_root: Path, project_dir
     by_id: dict[str, dict[str, Any]] = {}
     for skill in data.get("skills", []):
         item = _with_project_inventory_fields(skill, exposure)
-        by_id[item["id"]] = item
+        _merge_skill_inventory(by_id, item)
     return by_id
 
 
@@ -4401,6 +4464,8 @@ def _validate_taggable_skill_ids(state_root: Path, catalog_root: Path, project_d
         if not skill:
             missing.append(skill_id)
             continue
+        if skill.get("identity_collision"):
+            raise ValueError(_identity_collision_message(skill))
         trust = skill.get("trust")
         if trust not in TRUSTED_STATES:
             unavailable.append((skill_id, trust or "unknown"))
@@ -4468,7 +4533,17 @@ def _merge_skill_inventory(by_id: dict[str, dict[str, Any]], item: dict[str, Any
     if skill_id not in by_id:
         by_id[skill_id] = item
         return
-    existing = dict(by_id[skill_id])
+    existing_item = by_id[skill_id]
+    if existing_item.get("identity_collision"):
+        by_id[skill_id] = _extend_identity_collision(existing_item, item)
+        return
+    if _inventory_identity(existing_item) != _inventory_identity(item):
+        by_id[skill_id] = _identity_collision(existing_item, item)
+        return
+    if existing_item.get("content_hash") != item.get("content_hash"):
+        by_id[skill_id] = _identity_collision(existing_item, item, reason="source identity has conflicting content versions")
+        return
+    existing = dict(existing_item)
     existing["availability"] = sorted(set(existing.get("availability", [])) | set(item.get("availability", [])))
     existing["tags"] = sorted(set(existing.get("tags", [])) | set(item.get("tags", [])))
     targets = {target.get("path"): target for target in existing.get("materialized_targets", []) if target.get("path")}
@@ -4481,6 +4556,82 @@ def _merge_skill_inventory(by_id: dict[str, dict[str, Any]], item: dict[str, Any
     existing["trust"] = item.get("trust", existing.get("trust"))
     existing["exposure"] = item.get("exposure", existing.get("exposure", "hidden"))
     by_id[skill_id] = existing
+
+
+def _inventory_identity(skill: dict[str, Any]) -> str:
+    approval_key = skill.get("approval_key")
+    if isinstance(approval_key, str) and approval_key:
+        return approval_key
+    source = skill.get("source") or {}
+    fields = (
+        source.get("type"),
+        source.get("library_id"),
+        source.get("collection"),
+        source.get("package"),
+        source.get("path"),
+        skill.get("root"),
+        skill.get("entrypoint"),
+    )
+    return "fallback:" + "\0".join(str(value or "") for value in fields)
+
+
+def _identity_collision(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    *,
+    reason: str = "distinct sources claim the same public skill ID",
+) -> dict[str, Any]:
+    sources = [_collision_source(first), _collision_source(second)]
+    return {
+        "id": first["id"],
+        "name": first.get("name") or second.get("name") or first["id"],
+        "summary": f"Unavailable: {reason}.",
+        "source": {"type": "identity-collision"},
+        "trust": "identity_collision",
+        "activation": None,
+        "availability": sorted(set(first.get("availability", [])) | set(second.get("availability", []))),
+        "tags": sorted(set(first.get("tags", [])) | set(second.get("tags", []))),
+        "exposure": "hidden",
+        "materialized_targets": [],
+        "identity_collision": {
+            "reason": reason,
+            "source_count": len(sources),
+            "sources": sources,
+            "resolution": "rename or remove one source; Skillager will not choose or transfer trust across identities",
+        },
+        "_collision_identities": [_inventory_identity(first), _inventory_identity(second)],
+    }
+
+
+def _extend_identity_collision(collision: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
+    identities = list(collision.get("_collision_identities") or [])
+    identity = _inventory_identity(item)
+    if identity in identities:
+        return collision
+    result = dict(collision)
+    details = dict(result.get("identity_collision") or {})
+    sources = list(details.get("sources") or [])
+    identities.append(identity)
+    sources.append(_collision_source(item))
+    details["source_count"] = len(sources)
+    details["sources"] = sources
+    result["identity_collision"] = details
+    result["_collision_identities"] = identities
+    result["availability"] = sorted(set(result.get("availability", [])) | set(item.get("availability", [])))
+    result["tags"] = sorted(set(result.get("tags", [])) | set(item.get("tags", [])))
+    return result
+
+
+def _collision_source(skill: dict[str, Any]) -> dict[str, Any]:
+    source = skill.get("source") or {}
+    return {
+        "type": source.get("type") or "unknown",
+        "collection": source.get("collection"),
+        "package": source.get("package") or skill.get("package"),
+        "ownership": source.get("ownership") or "external",
+        "root": skill.get("root"),
+        "entrypoint": skill.get("entrypoint"),
+    }
 
 
 def _with_project_inventory_fields(skill: dict[str, Any], exposure: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
@@ -5230,14 +5381,26 @@ def _require_materialize_matches(
     if not requested_ids:
         return
     inventory_ids = {skill["id"] for skill in inventory}
+    collisions = {skill["id"]: skill for skill in inventory if skill.get("identity_collision")}
     selected_ids = {skill["id"] for skill in selected}
     for skill_id in requested_ids:
+        if skill_id in collisions:
+            raise ValueError(_identity_collision_message(collisions[skill_id]))
         if skill_id not in inventory_ids:
             raise KeyError(f"skill not found: {skill_id}")
         if tag_skill_ids is not None and skill_id not in tag_skill_ids:
             raise ValueError(f"skill is not listed by the selected tag: {skill_id}")
         if skill_id not in selected_ids:
             raise ValueError(f"skill is not selectable with the requested filters: {skill_id}")
+
+
+def _identity_collision_message(skill: dict[str, Any]) -> str:
+    collision = skill.get("identity_collision") or {}
+    count = int(collision.get("source_count") or 2)
+    return (
+        f"ambiguous skill ID {skill.get('id')}: {count} distinct source identities claim it; "
+        "Skillager will not choose a source or transfer trust. Rename or remove one source, then refresh inventory"
+    )
 
 
 def _explicit_router_missing_results(
