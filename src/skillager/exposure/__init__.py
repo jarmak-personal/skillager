@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from .impl import (
-    AGENT_NOTE,
     TRUSTED_STATES,
     WORKING_SKILL_ID,
-    agent_note_paths,
     explicit_router_slug,
     materialize_router,
     materialize_skills,
@@ -25,10 +23,8 @@ from .reconcile import (
 )
 
 __all__ = [
-    "AGENT_NOTE",
     "TRUSTED_STATES",
     "WORKING_SKILL_ID",
-    "agent_note_paths",
     "explicit_router_slug",
     "materialize_router",
     "materialize_skills",

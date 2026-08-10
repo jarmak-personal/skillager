@@ -40,13 +40,10 @@ from ..families import agent_variant_family_key, canonical_agent_variant_slug
 from ..exposure.drift import scan_project_exposures
 from ..index import build_index, find_skill, load_index
 from ..materialize import (
-    AGENT_NOTE,
     TRUSTED_STATES,
     WORKING_REASON_LOCAL_CUSTOMIZATION,
     WORKING_REASON_UNMANAGED,
     WORKING_SKILL_ID,
-    agent_note_paths,
-    ensure_agent_notes,
     explicit_router_slug,
     materialize_skills,
     materialize_working_skill,
@@ -92,9 +89,6 @@ HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION = "working_local_customization"
 HANDOFF_REASON_WORKING_WRONG_SOURCE = "working_wrong_source"
 HANDOFF_REASON_WORKING_UNREADABLE_SIDECAR = "working_unreadable_sidecar"
 HANDOFF_REASON_WORKING_DRIFT = "working_drift"
-HANDOFF_REASON_PROJECT_NOTE_MISSING = "project_note_missing"
-HANDOFF_REASON_PROJECT_NOTE_STALE = "project_note_stale"
-HANDOFF_REASON_PROJECT_NOTE_UNKNOWN = "project_note_unknown"
 HANDOFF_REASON_HANDOFF_ARTIFACTS = "handoff_artifacts"
 HANDOFF_REASON_CODES = (
     HANDOFF_REASON_AGENT_REQUIRED,
@@ -105,9 +99,6 @@ HANDOFF_REASON_CODES = (
     HANDOFF_REASON_WORKING_WRONG_SOURCE,
     HANDOFF_REASON_WORKING_UNREADABLE_SIDECAR,
     HANDOFF_REASON_WORKING_DRIFT,
-    HANDOFF_REASON_PROJECT_NOTE_MISSING,
-    HANDOFF_REASON_PROJECT_NOTE_STALE,
-    HANDOFF_REASON_PROJECT_NOTE_UNKNOWN,
     HANDOFF_REASON_HANDOFF_ARTIFACTS,
 )
 DOCTOR_EXIT_READY = 0
@@ -124,10 +115,6 @@ _WORKING_DRIFT_REASON_CODES = {
     "local customization": HANDOFF_REASON_WORKING_LOCAL_CUSTOMIZATION,
     "target is not Skillager Working": HANDOFF_REASON_WORKING_WRONG_SOURCE,
     "unreadable sidecar": HANDOFF_REASON_WORKING_UNREADABLE_SIDECAR,
-}
-_PROJECT_NOTE_REASON_CODES = {
-    "missing": HANDOFF_REASON_PROJECT_NOTE_MISSING,
-    "stale": HANDOFF_REASON_PROJECT_NOTE_STALE,
 }
 REVIEW_ACTION_VERBS = {"approve", "pin", "block", "unblock"}
 
@@ -360,8 +347,8 @@ def add_setup_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -
     add_review_filters(p)
     add_review_actions(p, setup=True)
     target = p.add_mutually_exclusive_group()
-    target.add_argument("--agent", action="append", choices=["codex", "claude"], help="Refresh this agent's first-party project working artifacts after setup. Repeat to target multiple agents.")
-    target.add_argument("--all-agents", action="store_true", help="Refresh first-party project working artifacts for both Codex and Claude after setup.")
+    target.add_argument("--agent", action="append", choices=["codex", "claude"], help="Refresh this agent's first-party skillager-working skill after setup. Repeat to target multiple agents.")
+    target.add_argument("--all-agents", action="store_true", help="Refresh the first-party skillager-working skill for both Codex and Claude after setup.")
     p.add_argument("--no-bootstrap", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--details", action="store_true", help="Print every selected skill. Default output is compact.")
     p.add_argument("--non-interactive", action="store_true", help="Print report only; do not prompt for choices.")
@@ -379,7 +366,7 @@ def add_doctor_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             """\
             Diagnose the current project readiness without approving skills,
             activating skills, or exposing third-party content. Doctor rebuilds
-            metadata, reports review and working artifact readiness, and chooses one exact
+            metadata, reports review and working-skill readiness, and chooses one exact
             next action. With --fix, doctor may repair first-party working
             artifacts only.
             """
@@ -393,8 +380,8 @@ def add_doctor_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             """
         ),
     )
-    p.add_argument("--agent", choices=["codex", "claude"], help="Agent target for working artifact readiness and repairs.")
-    p.add_argument("--fix", action="store_true", help="Repair first-party working artifacts when that is the selected next action. Requires --agent to write.")
+    p.add_argument("--agent", choices=["codex", "claude"], help="Agent target for working-skill readiness and repairs.")
+    p.add_argument("--fix", action="store_true", help="Repair the first-party skillager-working skill when that is the selected next action. Requires --agent to write.")
     p.add_argument("--no-packages", action="store_true", help="Skip installed package skill discovery.")
     p.add_argument("--include-global", action="store_true", help="Include already-installed global skills in diagnostics.")
     p.add_argument("--no-session-record", action="store_true", help=argparse.SUPPRESS)
@@ -587,8 +574,8 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             available metadata only, not full skill bodies; unavailable or
             incompatible members are skipped. Expose output and JSON identify
             the router slug to pass to --from-router. Exposure does not install
-            or repair Skillager Working or project working notes; use
-            `skillager doctor --fix` for first-party working artifacts.
+            or repair Skillager Working; use `skillager doctor --fix` for the
+            first-party working skill.
             Customized local copies are not overwritten unless --force is used.
             """
         ),
@@ -1949,8 +1936,7 @@ def _handoff_ready(artifacts: dict[str, Any]) -> bool:
     if not artifacts:
         return False
     working = artifacts.get("working_skill") or {}
-    notes = artifacts.get("project_notes") or []
-    return working.get("status") == "present" and bool(notes) and all(note.get("status") == "present" for note in notes)
+    return working.get("status") == "present"
 
 
 def _handoff_repair_action(artifacts: dict[str, Any], *, agent: str | None) -> dict[str, Any] | None:
@@ -1959,7 +1945,7 @@ def _handoff_repair_action(artifacts: dict[str, Any], *, agent: str | None) -> d
             "kind": "agent-required",
             "reason": "agent not specified",
             "reason_code": HANDOFF_REASON_AGENT_REQUIRED,
-            "message": "Pass --agent codex or --agent claude to check first-party working artifacts.",
+            "message": "Pass --agent codex or --agent claude to check the first-party working skill.",
             "command": None,
         }
     working = artifacts.get("working_skill") or {}
@@ -1983,13 +1969,8 @@ def _handoff_repair_action(artifacts: dict[str, Any], *, agent: str | None) -> d
         }
     if working_status in {"missing", "stale"}:
         return _bootstrap_repair_action(agent, f"working skill {working_status}", reason_code=_working_status_reason_code(working_status))
-    notes = artifacts.get("project_notes") or []
-    stale_note = next((note for note in notes if note.get("status") != "present"), None)
-    if stale_note:
-        status = str(stale_note.get("status") or "unknown")
-        return _bootstrap_repair_action(agent, f"project note {status}", reason_code=_project_note_reason_code(status))
     if _artifacts_need_attention(artifacts):
-        return _bootstrap_repair_action(agent, "working artifacts need refresh", reason_code=HANDOFF_REASON_HANDOFF_ARTIFACTS)
+        return _bootstrap_repair_action(agent, "working skill needs refresh", reason_code=HANDOFF_REASON_HANDOFF_ARTIFACTS)
     return None
 
 
@@ -2005,17 +1986,13 @@ def _working_drift_reason_code(reason: str) -> str:
     return _WORKING_DRIFT_REASON_CODES.get(reason, HANDOFF_REASON_WORKING_DRIFT)
 
 
-def _project_note_reason_code(status: str) -> str:
-    return _PROJECT_NOTE_REASON_CODES.get(status, HANDOFF_REASON_PROJECT_NOTE_UNKNOWN)
-
-
 def _bootstrap_repair_action(agent: str, reason: str, *, reason_code: str) -> dict[str, Any]:
     command = f"skillager doctor --agent {agent} --fix"
     return {
         "kind": "artifact-repair",
         "reason": reason,
         "reason_code": reason_code,
-        "message": f"Run `{command}` to refresh Skillager's first-party project working artifacts.",
+        "message": f"Run `{command}` to refresh Skillager's first-party working skill.",
         "command": command,
     }
 
@@ -2375,7 +2352,7 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
         return _doctor_issue(
             "manual-artifact-repair-needed",
             DOCTOR_EXIT_MANUAL_REPAIR,
-            artifact_action.get("message") or "Repair local Skillager working artifacts manually before refreshing.",
+            artifact_action.get("message") or "Repair the local Skillager working skill manually before refreshing.",
             None,
         )
     if view["review_needed"]:
@@ -2397,7 +2374,7 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
             return _doctor_issue(
                 "agent-required",
                 DOCTOR_EXIT_BOOTSTRAP_REPAIR,
-                "Review is complete. Choose which agent's working artifacts to check.",
+                "Review is complete. Choose which agent's working skill to check.",
                 None,
                 next_commands=["skillager doctor --agent codex", "skillager doctor --agent claude"],
             )
@@ -2405,7 +2382,7 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
         return _doctor_issue(
             "artifact-attention-needed",
             DOCTOR_EXIT_BOOTSTRAP_REPAIR,
-            artifact_action.get("message") or "Refresh Skillager's first-party project working artifacts.",
+            artifact_action.get("message") or "Refresh Skillager's first-party working skill.",
             str(command) if command else None,
         )
     return _doctor_issue("ready", DOCTOR_EXIT_READY, "Skillager is ready.", None)
@@ -2491,7 +2468,7 @@ def _print_doctor_result(result: dict[str, Any], *, migration_details: bool = Fa
     if fix:
         print()
         if fix.get("applied"):
-            print("Fix: working artifact repair applied.")
+            print("Fix: working-skill repair applied.")
         else:
             print(f"Fix: not applied ({fix.get('reason', 'no repair available')}).")
     print()
@@ -2512,28 +2489,9 @@ def _bootstrap_agents(args: argparse.Namespace) -> list[str]:
     return sorted(dict.fromkeys(args.agent or []))
 
 
-def _bootstrap_note_statuses(project_dir: Path, *, agents: list[str]) -> dict[str, dict[str, Any]]:
-    statuses: dict[str, dict[str, Any]] = {}
-    for agent in agents:
-        for path in agent_note_paths(project_dir, agents=[agent]):
-            statuses[str(path)] = _handoff_note_status(path)
-    return statuses
-
-
 def _perform_bootstrap(*, agents: list[str], project_dir: Path, dry_run: bool, force: bool) -> dict[str, Any]:
-    note_before = _bootstrap_note_statuses(project_dir, agents=agents)
     working_results = _bootstrap_working_results(agents=agents, project_dir=project_dir, dry_run=dry_run, force=force)
     artifacts = [_bootstrap_working_artifact(item) for item in working_results]
-    note_agents = _bootstrap_note_agents(working_results)
-    artifacts.extend(
-        _bootstrap_note_artifacts(
-            project_dir,
-            agents=agents,
-            note_agents=note_agents,
-            before=note_before,
-            dry_run=dry_run,
-        )
-    )
     return {
         "artifacts": artifacts,
         "summary": _bootstrap_summary(artifacts),
@@ -2549,14 +2507,12 @@ def _public_bootstrap_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _bootstrap_working_results(*, agents: list[str], project_dir: Path, dry_run: bool, force: bool) -> list[dict[str, Any]]:
-    # Bootstrap writes project notes itself so note state stays per-agent in the result.
     return materialize_working_skill(
         agents=agents,
         scope="project",
         project_dir=project_dir,
         dry_run=dry_run,
         force=force,
-        include_notes=False,
     )
 
 
@@ -2575,63 +2531,6 @@ def _bootstrap_working_artifact(item: dict[str, Any]) -> dict[str, Any]:
         "unmanaged_artifact_blocked": reason == WORKING_REASON_UNMANAGED,
     }
     return result
-
-
-def _bootstrap_note_agents(working_results: list[dict[str, Any]]) -> list[str]:
-    agents = []
-    for item in working_results:
-        status = item.get("status")
-        reason = item.get("reason")
-        if status in {"materialized", "would_write"} or (status == "skipped" and reason == "already up to date"):
-            agent = item.get("agent")
-            if isinstance(agent, str):
-                agents.append(agent)
-    return sorted(dict.fromkeys(agents))
-
-
-def _bootstrap_note_artifacts(
-    project_dir: Path,
-    *,
-    agents: list[str],
-    note_agents: list[str],
-    before: dict[str, dict[str, Any]],
-    dry_run: bool,
-) -> list[dict[str, Any]]:
-    if note_agents and not dry_run:
-        ensure_agent_notes(project_dir, agents=note_agents)
-    enabled = set(note_agents)
-    artifacts: list[dict[str, Any]] = []
-    for agent in agents:
-        for path in agent_note_paths(project_dir, agents=[agent]):
-            prior = before.get(str(path)) or _handoff_note_status(path)
-            status = prior.get("status")
-            if agent not in enabled:
-                artifacts.append(_bootstrap_note_artifact(agent, path, "skipped", "working skill not ready"))
-            elif status == "present":
-                artifacts.append(_bootstrap_note_artifact(agent, path, "skipped", "already up to date"))
-            elif dry_run:
-                artifacts.append(_bootstrap_note_artifact(agent, path, "would_write", f"currently {status}"))
-            else:
-                after = _handoff_note_status(path)
-                if after.get("status") == "present":
-                    artifacts.append(_bootstrap_note_artifact(agent, path, "materialized", None))
-                else:
-                    artifacts.append(_bootstrap_note_artifact(agent, path, "skipped", f"still {after.get('status', 'unknown')}"))
-    return artifacts
-
-
-def _bootstrap_note_artifact(agent: str, path: Path, status: str, reason: str | None) -> dict[str, Any]:
-    return {
-        "kind": "project_note",
-        "agent": agent,
-        "scope": "project",
-        "target": str(path),
-        "status": status,
-        "reason": reason,
-        "blocked_by_local_state": False,
-        "local_customization_blocked": False,
-        "unmanaged_artifact_blocked": False,
-    }
 
 
 def _public_bootstrap_artifact(item: dict[str, Any]) -> dict[str, Any]:
@@ -2790,20 +2689,8 @@ def _resolve_expose_agents(args: argparse.Namespace, state_root: Path, *, mutati
 
 
 def _handoff_artifacts(project_dir: Path, *, agent: str) -> dict[str, Any]:
-    notes = [_handoff_note_status(path) for path in agent_note_paths(project_dir, agents=[agent])]
     working = _working_artifact_status(project_dir, agent=agent)
-    return {"project_notes": notes, "working_skill": working}
-
-
-def _handoff_note_status(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"path": str(path), "status": "missing"}
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if "## Skillager" not in text:
-        return {"path": str(path), "status": "missing"}
-    if AGENT_NOTE not in text:
-        return {"path": str(path), "status": "stale"}
-    return {"path": str(path), "status": "present"}
+    return {"project_notes": [], "working_skill": working}
 
 
 def _working_artifact_status(project_dir: Path, *, agent: str) -> dict[str, Any]:
@@ -2881,7 +2768,7 @@ def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any
     if handoff_action.get("kind") == "manual":
         return {
             "status": "manual-artifact-repair-needed",
-            "message": handoff_action.get("message") or "Repair local Skillager working artifacts manually before refreshing.",
+            "message": handoff_action.get("message") or "Repair the local Skillager working skill manually before refreshing.",
             "command": None,
             "next_commands": [],
         }
@@ -2899,7 +2786,7 @@ def _handoff_next(state: dict[str, Any], *, agent: str, readiness: dict[str, Any
         command = handoff_action.get("command") or f"skillager doctor --agent {agent} --fix"
         return {
             "status": "artifact-attention-needed",
-            "message": handoff_action.get("message") or f"Refresh Skillager's project working artifacts for {agent}.",
+            "message": handoff_action.get("message") or f"Refresh Skillager's working skill for {agent}.",
             "command": command,
             "next_commands": [command],
         }
@@ -2970,9 +2857,6 @@ def _available_inventory_summary(
 
 
 def _artifacts_need_attention(artifacts: dict[str, Any]) -> bool:
-    notes = artifacts.get("project_notes") or []
-    if any(note.get("status") != "present" for note in notes):
-        return True
     working = artifacts.get("working_skill") or {}
     return working.get("status") != "present"
 
@@ -3012,12 +2896,6 @@ def _readiness_next_actions(readiness: dict[str, Any]) -> list[str]:
 def _print_handoff(handoff: dict[str, Any]) -> None:
     state = handoff["state"]
     print(_style("Skillager handoff complete", "bold"))
-    note_updates = handoff.get("note_updates") or []
-    if note_updates:
-        print()
-        print("Updated project note:")
-        for item in note_updates:
-            print(f"  {item.get('path')}")
     print()
     readiness = handoff.get("readiness") or {}
     exposure = readiness.get("exposure") or {}
@@ -3044,8 +2922,6 @@ def _print_handoff(handoff: dict[str, Any]) -> None:
     print(f"  Migration: {migration_text}")
     artifacts = state["artifacts"]
     print(f"  Working skill: {artifacts['working_skill'].get('status')}")
-    note_statuses = ", ".join(f"{Path(note['path']).name}={note['status']}" for note in artifacts.get("project_notes", []))
-    print(f"  Project note: {note_statuses or 'missing'}")
     print(f"  Attached tags: {', '.join(state['attached_tags']) if state['attached_tags'] else 'none'}")
     print(f"  Exposed router tags: {', '.join(state['exposed_router_tags']) if state['exposed_router_tags'] else 'none'}")
     print(
@@ -3480,11 +3356,11 @@ def _status_message(
     if readiness and not readiness.get("artifacts_ready") and (readiness.get("exposure") or {}).get("approved"):
         artifacts = readiness.get("artifacts") or {}
         if artifacts.get("kind") == "agent-required":
-            return "Skillager: review is complete. Run `skillager doctor --agent codex` or `skillager doctor --agent claude` to check working artifact readiness."
+            return "Skillager: review is complete. Run `skillager doctor --agent codex` or `skillager doctor --agent claude` to check working-skill readiness."
         command = artifacts.get("command")
         if command:
-            return f"Skillager: review is complete, but working artifacts need refresh. Run `{command}`."
-        return f"Skillager: review is complete, but working artifacts need manual repair. {artifacts.get('message', '').strip()}"
+            return f"Skillager: review is complete, but the working skill needs refresh. Run `{command}`."
+        return f"Skillager: review is complete, but the working skill needs manual repair. {artifacts.get('message', '').strip()}"
     return "Skillager: no skills pending owner review. Use available metadata and expose only when the task needs it."
 
 
@@ -5023,7 +4899,7 @@ def cmd_expose(args: argparse.Namespace) -> int:
         raise ValueError("--mode router requires --tag or explicit skill IDs")
     _require_expose_selection(args)
     agents = _resolve_expose_agents(args, root(args), mutating=not args.dry_run)
-    agent_notes_ready_before = _agent_notes_ready(Path.cwd(), agents=agents) if args.scope == "project" else False
+    working_ready_before = _working_artifacts_ready(Path.cwd(), agents=agents) if args.scope == "project" else False
     materialized_targets_before = _materialized_target_paths(Path.cwd(), agents=agents) if args.scope == "project" else set()
     if mode == "router":
         skills: list[dict[str, Any]]
@@ -5164,7 +5040,7 @@ def cmd_expose(args: argparse.Namespace) -> int:
                 )
             if _should_print_agent_next_steps(
                 results,
-                agent_notes_ready_before=agent_notes_ready_before,
+                working_ready_before=working_ready_before,
                 materialized_targets_before=materialized_targets_before,
             ):
                 _print_agent_next_steps(results)
@@ -5340,7 +5216,7 @@ def _require_expose_selection(args: argparse.Namespace) -> None:
         return
     raise ValueError(
         "expose requires explicit skill IDs, --tag, or --all-reviewed. "
-        "To refresh first-party working artifacts, run skillager doctor --agent <agent> --fix."
+        "To refresh the first-party working skill, run skillager doctor --agent <agent> --fix."
     )
 
 
@@ -5480,20 +5356,11 @@ def _print_router_verification(tag: str, agents: list[str], results: list[dict[s
         print(f"  skillager working --agent {agent}")
 
 
-def _agent_notes_ready(project_dir: Path, *, agents: list[str]) -> bool:
-    notes = agent_note_paths(project_dir, agents=agents)
-    if not notes:
-        return False
-    for note in notes:
-        if not note.exists():
-            return False
-        try:
-            text = note.read_text(encoding="utf-8")
-        except OSError:
-            return False
-        if "## Skillager" not in text:
-            return False
-    return True
+def _working_artifacts_ready(project_dir: Path, *, agents: list[str]) -> bool:
+    return bool(agents) and all(
+        _working_artifact_status(project_dir, agent=agent).get("status") == "present"
+        for agent in agents
+    )
 
 
 def _materialized_target_paths(project_dir: Path, *, agents: list[str]) -> set[Path]:
@@ -5512,7 +5379,7 @@ def _materialized_target_paths(project_dir: Path, *, agents: list[str]) -> set[P
 def _should_print_agent_next_steps(
     results: list[dict[str, Any]],
     *,
-    agent_notes_ready_before: bool = False,
+    working_ready_before: bool = False,
     materialized_targets_before: set[Path] | None = None,
 ) -> bool:
     changed = [item for item in results if item.get("status") == "materialized" and item.get("skill_id") and item.get("skill_id") != "skillager/working"]
@@ -5529,7 +5396,7 @@ def _should_print_agent_next_steps(
         except OSError:
             return True
     # If no new target appeared, only print restart guidance for a fresh project.
-    return not agent_notes_ready_before and not materialized_targets_before
+    return not working_ready_before and not materialized_targets_before
 
 
 def cmd_manifest_init(args: argparse.Namespace) -> int:
@@ -5928,7 +5795,7 @@ def _print_setup_next_steps(skills: list[dict[str, Any]]) -> None:
 
 
 def _print_setup_bootstrap_result(result: dict[str, Any]) -> None:
-    print(_style("Skillager working artifacts", "bold"))
+    print(_style("Skillager working skill", "bold"))
     for item in result.get("artifacts", []):
         line = _setup_bootstrap_artifact_line(item)
         if line:
@@ -5952,8 +5819,6 @@ def _setup_bootstrap_artifact_line(item: dict[str, Any]) -> str | None:
     status = _public_artifact_status(item.get("status"))
     if kind == "working_skill":
         line = f"{item.get('skill_id')}: {status}"
-    elif kind == "project_note":
-        line = f"{item.get('agent')} project note: {status}"
     else:
         return None
     if item.get("target"):
@@ -5966,9 +5831,9 @@ def _setup_bootstrap_artifact_line(item: dict[str, Any]) -> str | None:
 def _print_setup_bootstrap_reminder(result: dict[str, Any]) -> None:
     commands = result.get("next_commands") or []
     if len(commands) == 1:
-        print(f"Working artifacts not ready: run {commands[0]}")
+        print(f"Working skill not ready: run {commands[0]}")
     elif commands:
-        print("Working artifacts not ready. Run one of:")
+        print("Working skill not ready. Run one of:")
         for command in commands:
             print(f"  - {command}")
 
@@ -6470,7 +6335,7 @@ def _print_setup_completion_summary(
     print(_style("Skillager setup complete", "bold"))
     print("Ready:")
     print("  - Owner review: no action needed")
-    print("  - Working artifacts: installed")
+    print("  - Working skill: installed")
     print()
     print("What you have:")
     source_entries = int(inventory.get("available_source_entries") or 0)
@@ -6653,14 +6518,6 @@ def _print_agent_next_steps(results: list[dict[str, Any]]) -> None:
             print(f"    - {target_base}")
     if project_dir:
         print(f"  - Restart {_agent_label(agents)} in this directory: {project_dir}")
-        if first_party_artifacts:
-            notes = agent_note_paths(project_dir, agents=agents)
-            if len(notes) == 1:
-                print(f"  - Project working note: {notes[0]}")
-            else:
-                print("  - Project working notes:")
-                for note in notes:
-                    print(f"    - {note}")
     else:
         print(f"  - Restart {_agent_label(agents)} in the directory where you ran Skillager.")
     if first_party_artifacts:
@@ -6673,12 +6530,12 @@ def _print_agent_next_steps(results: list[dict[str, Any]]) -> None:
 def _agent_next_step_artifact_current(item: dict[str, Any]) -> bool:
     if item.get("status") == "materialized":
         return True
-    return item.get("kind") in {"working_skill", "project_note"} and item.get("status") == "skipped" and item.get("reason") == "already up to date"
+    return item.get("kind") == "working_skill" and item.get("status") == "skipped" and item.get("reason") == "already up to date"
 
 
 def _first_party_handoff_current(results: list[dict[str, Any]]) -> bool:
     return any(
-        (item.get("kind") in {"working_skill", "project_note"} or item.get("skill_id") == WORKING_SKILL_ID)
+        (item.get("kind") == "working_skill" or item.get("skill_id") == WORKING_SKILL_ID)
         and _agent_next_step_artifact_current(item)
         for item in results
     )
@@ -6725,7 +6582,7 @@ def _common_audience(skills: list[dict[str, Any]]) -> str | None:
 
 
 def _materialized_target_bases(results: list[dict[str, Any]]) -> list[Path]:
-    targets = [Path(item["target"]) for item in results if item.get("target") and _agent_next_step_artifact_current(item) and item.get("kind") != "project_note"]
+    targets = [Path(item["target"]) for item in results if item.get("target") and _agent_next_step_artifact_current(item)]
     if not targets:
         return []
     return sorted({target.parent for target in targets})

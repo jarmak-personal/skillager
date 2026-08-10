@@ -204,9 +204,9 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertTrue(data["working_artifacts"]["performed"])
             self.assertTrue(data["working_artifacts"]["ready"])
             self.assertEqual(data["working_artifacts"]["agents"], ["codex"])
-            self.assertEqual(data["working_artifacts"]["summary"]["by_status"], {"written": 2})
+            self.assertEqual(data["working_artifacts"]["summary"]["by_status"], {"written": 1})
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
-            self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertFalse((root / "AGENTS.md").exists())
             status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
             self.assertEqual(status_scope["agents"], ["codex"])
             with (
@@ -241,7 +241,7 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-packages", "--summary-json"]), 0)
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
-            self.assertTrue((root / "AGENTS.md").exists())
+            self.assertFalse((root / "AGENTS.md").exists())
             self.assertFalse((subdir / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertFalse((subdir / "AGENTS.md").exists())
 
@@ -291,7 +291,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--agent", "codex", "--no-bootstrap", "--no-packages"]), 0)
             text = output.getvalue()
-            self.assertIn("Working artifacts not ready: run skillager doctor --agent codex --fix", text)
+            self.assertIn("Working skill not ready: run skillager doctor --agent codex --fix", text)
             self.assertNotIn("Next step: tell your agent what you plan to do", text)
             status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
             self.assertEqual(status_scope["agents"], ["codex"])
@@ -320,13 +320,15 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(data["working_artifacts"]["next_commands"], ["skillager doctor --agent codex --fix", "skillager doctor --agent claude --fix"])
             self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
 
-    def test_setup_all_agents_writes_both_working_artifact_targets(self) -> None:
+    def test_setup_all_agents_writes_both_working_targets_without_touching_agent_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (root / "AGENTS.md").write_text("# Existing Codex instructions\n", encoding="utf-8")
+            (root / "CLAUDE.md").write_text("# Existing Claude instructions\n", encoding="utf-8")
             with (
                 patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
                 patch("skillager.discovery.find_project_root", return_value=root),
@@ -341,8 +343,8 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(data["working_artifacts"]["agents"], ["codex", "claude"])
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertTrue((root / ".claude" / "skills" / "skillager-working" / "SKILL.md").exists())
-            self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
-            self.assertIn("skillager working", (root / "CLAUDE.md").read_text(encoding="utf-8"))
+            self.assertEqual((root / "AGENTS.md").read_text(encoding="utf-8"), "# Existing Codex instructions\n")
+            self.assertEqual((root / "CLAUDE.md").read_text(encoding="utf-8"), "# Existing Claude instructions\n")
 
     def test_setup_explicit_path_inventory_remains_available_afterward(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -515,7 +517,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("owner review prompts were not repeated", text)
             self.assertIn("Local scanner: scanned 1 current skill", text)
             self.assertTrue((project / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
-            self.assertTrue((project / "AGENTS.md").exists())
+            self.assertFalse((project / "AGENTS.md").exists())
 
     def test_setup_fresh_project_explains_project_reset_scope(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -791,9 +793,10 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("Next step", text)
             self.assertIn(f"Skills were written to: {root / '.agents' / 'skills'}", text)
             self.assertIn(f"Restart Codex in this directory: {root}", text)
-            self.assertIn(f"Project working note: {root / 'AGENTS.md'}", text)
+            self.assertNotIn("Project working note:", text)
             self.assertIn("skillager working", text)
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+            self.assertFalse((root / "AGENTS.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-low" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-high" / "SKILL.md").exists())
 
@@ -1005,7 +1008,7 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["setup", "--audience", "other", "--no-packages", "--agent", "codex", "--no-bootstrap"]), 0)
             text = stdout.getvalue()
-            self.assertIn("Working artifacts not ready: run skillager doctor --agent codex --fix", text)
+            self.assertIn("Working skill not ready: run skillager doctor --agent codex --fix", text)
             self.assertIn("Native skill selection", text)
             self.assertIn("project/gis-domain: exposed", text)
             self.assertIn("Skillager-managed native skills from the native skill directory", text)

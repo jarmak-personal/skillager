@@ -38,6 +38,10 @@ Then restart your agent in the project and have it run:
 skillager working --agent codex --json
 ```
 
+Setup installs one first-party `skillager-working` skill. It covers quiet agent-owned
+selection/exposure and explicit user-directed personal-library work; Skillager does
+not inject instructions into `AGENTS.md`, `agents.md`, or `CLAUDE.md`.
+
 `setup` discovers local/project skills, package-provided skills, collections, and native agent skills. It scans them and only makes content available after your review. Register an external personal/team repository with `skillager collection add ~/skills/workflows --name workflows` when you want it in reusable inventory. Skillager is installed once as a user tool; it does not need to live inside every project environment.
 
 `working --json` uses the `skillager.working.v2` schema. Its advisory `exposure_changes` block reports current-project managed copies that are locally edited, intentionally kept local, partially missing, blocked, malformed, or unmanaged. Additive `inventory` and `curation` blocks distinguish source entries from agent-collapsed choices and suggest goal search without turning it into a required readiness action. When a router is already exposed, curation points to it first instead of recommending another router. Drift does not change readiness or the command's exit code. Plain `working` prints only a concise human status and next hint. Fully deleted exposure directories cannot be detected because Skillager intentionally keeps no cross-project exposure ledger.
@@ -96,7 +100,7 @@ Metadata commands stay metadata-only: `working`, `list`, `search`, `show` withou
 | Promote an edited library exposure | `skillager reconcile promote lib/pr-review --yes` |
 | Adopt an edited external exposure | `skillager reconcile import workflows/pr-review --as pr-review-local --yes` |
 | Recover an exposure from library history | `skillager reconcile rollback lib/pr-review --yes` |
-| Repair Skillager working artifacts | `skillager doctor --agent codex --fix` |
+| Repair the Skillager working skill | `skillager doctor --agent codex --fix` |
 | Approve a skill | `skillager review approve workflows/pr-review` |
 | Expose a tag as a router | `skillager expose --tag workflows --mode router --agent codex --scope project` |
 | Expose explicit skills as one router | `skillager expose workflows/pr-review workflows/release-check --mode router --agent codex --scope project` |

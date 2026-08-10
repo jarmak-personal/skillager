@@ -60,7 +60,7 @@ skillager setup --collection community --agent codex
 
 Ordinary `skillager setup --agent <agent>` also includes registered collections. For fully trusted personal or company repositories, `skillager setup --collection community --bulk-approve --agent codex` is the fast path; `--yolo` is the fun alias for the same bulk approval path. Bulk approval reviews selected lint-blocked skills with an audited shortcut override. For untrusted repositories, use the normal review flow.
 
-`setup --collection <name> --agent <agent>` reviews that registered collection and refreshes that agent's first-party working artifacts after approval. If review is complete but `working --agent <agent> --json` still reports missing or stale artifacts, run `skillager doctor --agent <agent> --fix`.
+`setup --collection <name> --agent <agent>` reviews that registered collection and refreshes that agent's first-party working skill after approval. If review is complete but `working --agent <agent> --json` still reports a missing or stale working skill, run `skillager doctor --agent <agent> --fix`.
 
 Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager review --collection <name> --include-lint-blocked --json` to inspect them without printing hostile manifest contents. Repository authors can run `uvx --from skillager-linter skillager-lint .` in CI before publishing.
 

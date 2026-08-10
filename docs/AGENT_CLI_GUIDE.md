@@ -13,7 +13,7 @@ Availability is the eligibility gate. Agent-facing Skillager commands only surfa
 
 ## Rules
 
-- Start resumed work with `skillager working --agent <agent> --json`; only mention it when readiness requires user action or the task calls for Skillager curation.
+- Start resumed work with `skillager working --agent <agent> --json`; only mention it when readiness requires user action or the task calls for Skillager curation. A readiness review gate blocks managed-body use and exposure, but does not block an explicitly requested personal-library draft from being created or edited while unrelated review waits. The draft remains pending and unavailable until its own acceptance and project gates are satisfied.
 - Treat `exposure_changes` as advisory. Mention drift only when it is relevant to the user's task or they ask about exposure/version state; do not treat it as approval or a readiness failure.
 - If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent <agent>` before guessing. Re-run working after repairs if readiness changes.
 - Do not run `skillager setup` or `skillager review ...` unless the user asked for setup or approval changes.
@@ -100,14 +100,14 @@ skillager expose <skill-id> --agent codex --allow-incompatible
 
 ## Agentic Setup Flow
 
-After setup, Skillager installs or refreshes the `skillager-working` readiness skill for the chosen agent. The user may also have exposed a small always-relevant native set during setup. In the next agent session, run `skillager working --agent <agent> --json`; then use available metadata and the user's goal to curate tags and decide whether to expose:
+After setup, Skillager installs or refreshes the `skillager-working` readiness skill for the chosen agent without modifying `AGENTS.md`, `agents.md`, or `CLAUDE.md`. That one skill covers both quiet agent operation and explicit user-directed personal-library work. The user may also have exposed a small always-relevant native set during setup. In the next agent session, run `skillager working --agent <agent> --json`; then use available metadata and the user's goal to curate tags and decide whether to expose:
 
 - a narrow native skill for a specific recurring workflow
 - a stub for an available command the user wants easy access to by name
 - a router skill for a broad project-local tag or explicit short skill set
 - nothing, if the existing project exposure is enough
 
-Before changing tags or exposure, build your own slate from available metadata and the user's stated goal. Start with `skillager search "<user goal>" --agent codex --json`; run a few focused searches when the goal has multiple facets, such as domain terms, package/project names, and workflow terms. Search JSON is ranked monotonically by its displayed floating-point `score` and includes match `reasons`; generic natural-language terms do not create body-only results, while distinctive reviewed-body terms remain searchable. Use `--limit <n>` to widen or narrow the slate. Search `--full-json` implies JSON and is only for explicit diagnostics such as `score_detail`, source paths, and full exposure records. Use `skillager list --summary-json --agent codex` when you need orientation before a targeted search. Consider 5-20 plausible available skills or skill groups when enough relevant options exist. A group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation. Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task. Include adjacent options the user may reasonably want, such as a brainstorm/research suite for ideation or a review/debugging suite for validation. If fewer than five relevant available candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
+Before changing tags or exposure, search available metadata using the user's actual goal. Run a few focused searches only when the goal has distinct facets, such as domain terms, package/project names, and workflow terms. Search JSON is ranked monotonically by its displayed floating-point `score` and includes match `reasons`; generic natural-language terms do not create body-only results, while distinctive reviewed-body terms remain searchable. Use `--limit <n>` to widen or narrow results. Search `--full-json` implies JSON and is only for explicit diagnostics such as `score_detail`, source paths, and full exposure records. Use `skillager list --summary-json --agent codex` only when you need orientation before a targeted search. Prefer an existing matching router, choose the narrowest directly useful path, and keep the long tail on demand; do not manufacture a candidate-count or confidence-scoring ritual.
 
 Do not use review diagnostics as curation criteria for available skills. Availability is the gate; relevance to the user's stated task decides selection and exposure.
 
@@ -219,6 +219,6 @@ Tell the user exactly what happened and ask them to run setup:
 Skillager reports new or changed skills. Please run `skillager setup` from this project directory before I use Skillager-managed skills.
 ```
 
-When you know your agent target, prefer `skillager setup --agent codex` or `skillager setup --agent claude` so setup can refresh the first-party working artifacts after review.
+When you know your agent target, prefer `skillager setup --agent codex` or `skillager setup --agent claude` so setup can refresh that agent's first-party working skill after review.
 
 If working reports skills pending owner review, tell the user that Skillager has additional skills which are not available yet and ask them to run setup. If readiness looks broken or stale, ask them to run `skillager doctor --agent <agent> --fix`.

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import re
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,23 +19,6 @@ ROUTER_SCHEMA = "skillager.router.v1"
 WORKING_SKILL_ID = "skillager/working"
 WORKING_REASON_LOCAL_CUSTOMIZATION = "target has local customizations"
 WORKING_REASON_UNMANAGED = "target exists without Skillager provenance"
-AGENT_NOTE = (
-    "Run `skillager working --agent <agent> --json` after context resets or resumed sessions. It is the quiet readiness check; use only available/exposed "
-    "Skillager-managed skills, ask before setup or approval changes, ask the user to run `skillager doctor --agent <agent>` if state seems off, "
-    "and report curation/exposure changes."
-)
-AGENT_NOTE_SECTION = f"## Skillager\n{AGENT_NOTE}\n"
-LEGACY_AGENT_NOTES = (
-    "Run `skillager handoff` at session start. Follow its Next item, use only available/materialized "
-    "Skillager-managed skills, ask before setup or approval changes, ask the user to run `skillager doctor --agent <agent>` if state seems off, "
-    "and report curation/exposure changes.",
-    "Run `skillager status` at session start. Use only reviewed/materialized Skillager-managed skills; "
-    "ask the user to run `skillager setup` if review is needed.",
-    "Skillager-managed skills are installed for this project; run `skillager --help` "
-    "for review/exposure commands, and only use available exposed skills.",
-    "Skillager-managed skills are installed for this project; at session start run `skillager status`, "
-    "and if it reports new/unreviewed skills ask the user to run `skillager setup` before using them.",
-)
 
 
 def materialize_skills(
@@ -254,7 +236,6 @@ def materialize_working_skill(
     project_dir: Path | None = None,
     dry_run: bool = False,
     force: bool = False,
-    include_notes: bool = True,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for agent in agents:
@@ -264,8 +245,6 @@ def materialize_working_skill(
             results.append(materialize_working_skill_one(target=target, agent=agent, scope=scope, dry_run=dry_run, force=force))
         except OSError as exc:
             results.append(_result(skill, target, "skipped", str(exc), agent=agent, scope=scope))
-    if include_notes and scope == "project" and not dry_run and any(item["status"] == "materialized" for item in results):
-        ensure_agent_notes((project_dir or Path.cwd()).resolve(), agents=agents)
     return results
 
 
@@ -310,43 +289,48 @@ def materialize_working_skill_one(
 
 def render_working_skill(agent: str = "codex") -> str:
     return f"""---
-name: "Skillager Working"
-description: "Use Skillager safely from an agent: quiet readiness checks, available metadata only, agent-managed tags, and guarded activation."
+name: skillager-working
+description: "Operate Skillager safely in a managed project: run quiet readiness checks, find and activate available skills, curate narrow exposure, and help the user manage skills in their personal library. Use after context resets, when specialized skills may help, or when the user asks to create, edit, import, version, sync, or reconcile skills."
 ---
 
 # Skillager Working
 
-Use when starting work in a project that has Skillager-managed skills, when `skillager working` reports available skills, or when the user asks you to set up, expose, route, activate, or review skills.
+Use Skillager as the agent's local skill-management layer. Handle routine metadata search,
+selection, activation, and narrow exposure yourself. Bring the user in for owner review,
+acceptance, overrides, or version-changing decisions.
 
-This skill is a protocol for using Skillager safely. It does not approve third-party skills and it does not contain any third-party skill bodies.
+## Core Contract
 
-Availability is the eligibility gate. If a skill appears in normal Skillager list/search/show/tag output, choose by task relevance. Do not look for or use owner review diagnostics during normal agent work.
+- Availability is the eligibility gate. Use only skills returned by normal Skillager
+  list, search, show, or tag metadata commands.
+- Approval and exposure are separate. Approval records an exact reviewed content hash;
+  exposure writes a native skill, stub, or router for an agent.
+- Personal-library ownership never approves changed bytes. A pending `lib/<name>` skill
+  remains metadata-visible but cannot be activated, exposed, routed, or synced.
+- External project, package, environment, collection, and native-agent skills remain at
+  their source unless the user explicitly imports one into the personal library.
+- Do not inspect owner review or scanner diagnostics during ordinary task selection.
 
 ## Session Start
 
 1. Run `skillager working --agent {agent} --json` after context resets or resumed sessions.
-2. If readiness needs no user action, continue with the user's request. Do not mention Skillager unless the task needs a skill, review, curation, exposure, activation, or repair.
-3. External package, environment, collection, and global skills require owner review before body access or activation.
-4. If Skillager reports unavailable or newly discovered skills, ask the user to run setup or review before using them.
-5. If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent {agent}` in their terminal, or `skillager doctor --agent {agent} --fix` for first-party working artifact repair. Re-run `skillager working --agent {agent} --json` after repairs if readiness changes.
+2. Treat `next` as required before using or exposing managed skill bodies, and
+   `curation` as optional task guidance. An explicit owner request may still create or
+   edit a pending personal-library draft while unrelated project review waits; do not
+   accept, activate, expose, or sync that draft until its own gates are satisfied.
+3. If no user action is needed, continue quietly. Mention Skillager only when a skill,
+   owner decision, curation change, exposure, activation, drift, or repair matters.
+4. Treat `exposure_changes` as advisory. Preview reconciliation when useful; never
+   mutate an exposure merely because drift was detected.
+5. If review is needed, ask the user to run the exact setup/review command. If the
+   first-party working skill is stale or missing, ask for
+   `skillager doctor --agent {agent} --fix`, then rerun `working`.
 
-## Query Cadence
+## Find And Use Skills
 
-Do not search Skillager on every user message. Search only when:
+Safe metadata commands do not reveal full skill bodies:
 
-- The user starts a new domain or task.
-- The current task would benefit from specialized skills not already exposed.
-- You are unsure how to approach the task and an available skill may contain the right workflow.
-- The user adds project-local skills.
-- The user asks about available skills.
-
-Once you choose a native skill or router path for a task, keep using that choice until the task changes. Keep Skillager checks quiet unless review, tag curation, exposure, activation, or user approval is needed.
-
-## Safe Metadata Commands
-
-These commands are safe because they do not reveal full skill bodies:
-
-```bash
+```text
 skillager working --agent {agent} --json
 skillager list --summary-json --agent {agent}
 skillager search "<user goal>" --agent {agent} --json
@@ -355,66 +339,60 @@ skillager tag show <tag> --json
 skillager tag list --json
 ```
 
-Use these to decide which available skills are relevant.
+Search when the task enters a new domain, a specialized workflow may help, the user
+asks what is available, or project-local skills changed. Start with the user's actual
+goal and use a few focused searches for multi-part work. Prefer an existing matching
+router. Keep using the chosen path until the task changes.
 
-## Agent Selection Slate
+- Activate an available router member with
+  `skillager activate <skill-id> --from-router <router-slug>`.
+- Add relevant available skills to a focused project tag with
+  `skillager tag add <tag> <skill-id>...`.
+- Expose a recurring broad tag as a compact router:
+  `skillager expose --tag <tag> --mode router --agent {agent} --scope project`.
+- Expose a named recurring skill as a stub:
+  `skillager expose <skill-id> --mode stub --agent {agent} --scope project`.
+- Expose a tiny always-relevant project skill as native:
+  `skillager expose <skill-id> --mode native --agent {agent} --scope project`.
+- Prefer no new exposure for one-off work. Report any tag or exposure change.
+- Never use `--force` or an override flag unless the user explicitly requests that
+  exact action.
 
-Before curating tags or exposure for a new task, build your own slate from available metadata and the user's stated goal:
+## Owner-Directed Personal Library
 
-- Start with `skillager search "<user goal>" --agent {agent} --json`.
-- Run a few focused searches when the goal has multiple facets, for example domain terms, package/project names, and workflow terms.
-- Search JSON is ranked and includes `score` and `reasons`; use `--limit <n>` to widen or narrow the slate. Use `--full-json` only for diagnostics such as `score_detail`, source paths, and full exposure records.
-- Use `skillager list --summary-json --agent {agent}` when you need orientation before a targeted search.
-- Consider 5-20 plausible available skills or skill groups when enough relevant options exist.
-- A skill group can be an existing tag, a collection subset, or a workflow suite such as ideation, review, debugging, release, or domain-specific implementation.
-- Give each candidate a confidence score from 0-100 and a short reason tied to the user's stated task.
-- Include both the best direct fit and adjacent options the user may reasonably want, such as a brainstorm/research suite for ideation or a review/debugging suite for validation.
-- If fewer than five relevant available candidates exist, say that and continue with the smaller slate. Do not list more than 20 candidates.
-- Curate and expose only the narrow final choice that fits the task; keep the broader slate as context for the user.
+Use these metadata-only commands to orient without exposing bodies:
 
-## Exposure Policy
+```text
+skillager library status [<lib-skill>] --json
+skillager where <lib-skill> --json
+skillager library history <lib-skill> --json
+skillager reconcile [<skill-id>] --agent {agent} --json
+skillager sync --agent {agent} --json
+```
 
-- Every available skill can be activated through Skillager. Not every available skill should be exposed.
-- Tags are agent-maintained curation for available skills. Add relevant available skills to an existing tag or create a focused tag when it helps the current project.
-- Curate focused project-local tags with:
-  `skillager tag add <tag> <skill-id> [<skill-id> ...]`
-- A tag exists for this project as soon as it is created or receives a skill.
-- Use search for the long tail.
-- Use routers for broad recurring tags:
-  `skillager expose --tag <tag> --mode router --agent {agent} --scope project`
-- Use stubs for specific skills the user is likely to ask for by name:
-  `skillager expose <skill-id> --mode stub --agent {agent} --scope project`
-- Use native exposure for tiny always-relevant project skills:
-  `skillager expose <skill-id> --agent {agent} --scope project`
-- Prefer no new exposure for one-off tasks.
-- You may tag and expose available skills after the user states their task; report what changed and how to adjust it.
-- Never use override flags unless the user explicitly asks for that exact override.
+When the user asks to manage owned skills, inspect the relevant command's `--help`
+before mutating state and follow generated preview/next-command output. Never guess
+flags. A request to create or edit a named skill authorizes that narrow draft workflow
+and any required library initialization, but not acceptance or an override. A request
+to expose a named skill to a named agent and scope authorizes that narrow exposure once
+the skill is available; it does not waive the acceptance gate.
 
-## Exposure Signals
-
-User naming or explicit request decides exposure. If the user asks for a skill or workflow by name, use the narrowest available path that satisfies that request.
-
-User naming and task fit are the strongest exposure signals. Static metadata hints are supporting evidence; isolated static hints do not decide exposure alone.
-
-Static hints include:
-
-- `user-invokable` metadata.
-- Native agent provenance.
-- Clear workflow name.
-- Focused summary.
-
-Runtime signals include:
-
-- The user asks for the skill or workflow by name.
-- The current task clearly matches a specific available skill.
-
-## Activation Policy
-
-- Activate only available skills.
-- For router-listed skills, use:
-  `skillager activate <skill-id> --from-router skillager-<tag>`
-- Do not activate skills outside a router tag unless available metadata clearly matches the task.
-- If no available skill fits, continue without activating a Skillager-managed skill.
+1. For a new owned skill, inspect library status, initialize only when required, create
+   it with `skillager library new <name> --json`, locate it with `skillager where
+   lib/<name> --json`, then edit that canonical file with normal agent tools. Use an
+   available skill-authoring workflow for content and validation guidance, but do not
+   run a second scaffold initializer. Do not convert external inventory implicitly.
+2. Preview acceptance, restore, import, reconciliation, and sync before any
+   version-changing action. Preserve and show the exact generated next command.
+3. Run confirmation-bearing commands (`--yes`) or `sync --apply` only after the user
+   authorizes that exact preview. Never infer acceptance from authorship or ownership.
+4. Keep local exposure edits separate from library changes. Use `reconcile --help`
+   and its preview to choose keep-local, quarantine, repair, promote, rollback, or
+   import; do not silently merge divergence.
+5. Treat pin and unpin as explicit project policy. A pin freezes one clean exposure at
+   its exact source hash; it does not create another library version.
+6. If lint blocks a skill, stop for owner review. Use `--override-lint` only when the
+   user explicitly approves the exact override and supplies an audited reason.
 """
 
 
@@ -746,79 +724,6 @@ def content_hashes(skills: list[dict[str, Any]]) -> str:
     return digest.hexdigest()
 
 
-def agent_note_paths(project_dir: Path | None = None, *, agents: list[str] | None = None) -> list[Path]:
-    project = (project_dir or Path.cwd()).resolve()
-    targets = set(agents or ["codex"])
-    paths: list[Path] = []
-    if "codex" in targets or not targets:
-        codex_existing = [path for path in [project / "AGENTS.md", project / "agents.md"] if path.exists()]
-        paths.append(codex_existing[0] if codex_existing else project / "AGENTS.md")
-    if "claude" in targets:
-        paths.append(project / "CLAUDE.md")
-    if not paths:
-        paths.append(project / "AGENTS.md")
-    deduped: list[Path] = []
-    for path in paths:
-        if path not in deduped:
-            deduped.append(path)
-    return deduped
-
-
-def ensure_agent_notes(project_dir: Path | None = None, *, agents: list[str] | None = None) -> list[Path]:
-    paths = agent_note_paths(project_dir, agents=agents)
-    for path in paths:
-        _ensure_agent_note(path)
-    return paths
-
-
-def refresh_legacy_agent_notes(project_dir: Path | None = None, *, agents: list[str] | None = None) -> list[dict[str, str]]:
-    updates: list[dict[str, str]] = []
-    for path in agent_note_paths(project_dir, agents=agents):
-        updated = _refresh_legacy_agent_note(path)
-        if updated:
-            updates.append({"path": str(path), "status": "updated"})
-    return updates
-
-
-def _refresh_legacy_agent_note(path: Path) -> bool:
-    if not path.exists():
-        return False
-    content = path.read_text(encoding="utf-8")
-    if AGENT_NOTE in content:
-        return False
-    for legacy in LEGACY_AGENT_NOTES:
-        if legacy in content:
-            path.write_text(_replace_legacy_agent_note(content, legacy), encoding="utf-8")
-            return True
-    return False
-
-
-def _ensure_agent_note(path: Path) -> None:
-    if path.exists():
-        content = path.read_text(encoding="utf-8")
-        if "## Skillager" in content and AGENT_NOTE in content:
-            return
-        for legacy in LEGACY_AGENT_NOTES:
-            if legacy in content:
-                path.write_text(_replace_legacy_agent_note(content, legacy), encoding="utf-8")
-                return
-        prefix = "" if content.endswith("\n") or not content else "\n"
-        path.write_text(f"{content}{prefix}{AGENT_NOTE_SECTION}", encoding="utf-8")
-        return
-    path.write_text(AGENT_NOTE_SECTION, encoding="utf-8")
-
-
-def _replace_legacy_agent_note(content: str, legacy: str) -> str:
-    legacy_start = content.index(legacy)
-    line_start = content.rfind("\n", 0, legacy_start) + 1
-    before_legacy = content[:line_start]
-    heading_matches = list(re.finditer(r"(?m)^#{2,}\s+Skillager\s*$", before_legacy))
-    if heading_matches:
-        heading_line_start = heading_matches[-1].start()
-        return f"{content[:heading_line_start]}{AGENT_NOTE_SECTION.rstrip()}{content[legacy_start + len(legacy):]}"
-    return content.replace(legacy, AGENT_NOTE_SECTION.rstrip(), 1)
-
-
 def slugify(skill_id: str) -> str:
     return "".join(char if char.isalnum() else "-" for char in skill_id.lower()).strip("-")
 
@@ -868,7 +773,7 @@ def _working_skill(agent: str) -> dict[str, Any]:
     return {
         "id": WORKING_SKILL_ID,
         "name": "Skillager Working",
-        "summary": "Use Skillager safely from an agent: quiet readiness checks, available metadata only, agent-managed tags, narrow router/native exposure, and guarded activation.",
+        "summary": "Operate Skillager safely: quiet readiness, available-skill selection, narrow exposure, and owner-directed personal-library workflows.",
         "source": {"type": "skillager-working"},
         "content_hash": source_hash,
         "trust": "reviewed",

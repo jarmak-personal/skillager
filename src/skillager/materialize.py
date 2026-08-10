@@ -9,18 +9,14 @@ for _name in dir(_impl):
     if not _name.startswith("__"):
         globals()[_name] = getattr(_impl, _name)
 
-AGENT_NOTE = _impl.AGENT_NOTE
 TRUSTED_STATES = _impl.TRUSTED_STATES
 WORKING_REASON_LOCAL_CUSTOMIZATION = _impl.WORKING_REASON_LOCAL_CUSTOMIZATION
 WORKING_REASON_UNMANAGED = _impl.WORKING_REASON_UNMANAGED
 WORKING_SKILL_ID = _impl.WORKING_SKILL_ID
-agent_note_paths = _impl.agent_note_paths
-ensure_agent_notes = _impl.ensure_agent_notes
 explicit_router_slug = _impl.explicit_router_slug
 materialize_router = _impl.materialize_router
 materialize_skills = _impl.materialize_skills
 materialize_working_skill = _impl.materialize_working_skill
-refresh_legacy_agent_notes = _impl.refresh_legacy_agent_notes
 render_working_skill = _impl.render_working_skill
 target_dir = _impl.target_dir
 working_source_hash = _impl.working_source_hash
@@ -41,18 +37,14 @@ sys.modules[__name__].__class__ = _FacadeModule
 
 
 __all__ = [
-    "AGENT_NOTE",
     "TRUSTED_STATES",
     "WORKING_REASON_LOCAL_CUSTOMIZATION",
     "WORKING_REASON_UNMANAGED",
     "WORKING_SKILL_ID",
-    "agent_note_paths",
-    "ensure_agent_notes",
     "explicit_router_slug",
     "materialize_router",
     "materialize_skills",
     "materialize_working_skill",
-    "refresh_legacy_agent_notes",
     "render_working_skill",
     "target_dir",
     "working_source_hash",

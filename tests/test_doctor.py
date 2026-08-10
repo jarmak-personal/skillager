@@ -248,11 +248,12 @@ class SkillagerDoctorTests(unittest.TestCase):
             self.assertTrue(data["fix"]["applied"])
             self.assertIsNone(data["fix"]["reason"])
             self.assertEqual(data["fix"]["reason_code"], "working_missing")
-            self.assertEqual([artifact["status"] for artifact in data["fix"]["artifacts"]], ["written", "written"])
-            self.assertEqual(data["fix"]["summary"]["by_status"], {"written": 2})
+            self.assertEqual([artifact["status"] for artifact in data["fix"]["artifacts"]], ["written"])
+            self.assertEqual(data["fix"]["summary"]["by_status"], {"written": 1})
             self.assertNotIn('"materialized"', output.getvalue())
             self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
-            self.assertIn("skillager working", (root / "AGENTS.md").read_text(encoding="utf-8"))
+            self.assertFalse((root / "AGENTS.md").exists())
+            self.assertEqual(data["state"]["artifacts"]["project_notes"], [])
             self.assertFalse((state / "sessions").exists())
 
     def test_doctor_fix_requires_explicit_agent_even_when_env_detects_agent(self) -> None:

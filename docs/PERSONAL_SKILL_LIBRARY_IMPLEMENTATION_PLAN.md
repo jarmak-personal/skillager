@@ -763,6 +763,18 @@ smaller meaningfully matched result set. The retained audit directory is
 `/tmp/skillager-setup-dNqvXi` (`/private/tmp/skillager-setup-dNqvXi` after macOS
 canonicalization).
 
+First-party skill consolidation follow-up (2026-08-09): kept one compatibility-stable
+`skillager-working` artifact instead of adding a second user-administration skill. The
+same agent consumes both paths, while a second installed artifact would duplicate CLI
+help and add another stale/readiness lifecycle. The revised skill stays compact: it
+owns quiet readiness, available-skill selection, tags, exposure, and activation, then
+adds an explicit preview-first boundary for user-directed library authoring,
+acceptance, history, reconciliation, pinning, and sync. Setup and doctor now install
+or repair only that skill. They no longer create, update, or require `AGENTS.md`,
+`agents.md`, or `CLAUDE.md`; the existing `project_notes` JSON field remains as an
+empty compatibility field. Older injected `## Skillager` sections are no longer used
+and may be removed manually without affecting readiness.
+
 ## Behavioral Test Matrix
 
 All new end-to-end tests invoke the installed/public CLI through subprocesses with
