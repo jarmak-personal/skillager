@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
+
+from .state.locking import resource_lock
+from .state.statefiles import read_user_json, write_user_json
 
 
 PROJECT_TAGS_SCHEMA = "skillager.project-tags.v1"
+MutationResult = TypeVar("MutationResult")
 
 
 def tags_path(project_dir: Path) -> Path:
@@ -14,18 +17,40 @@ def tags_path(project_dir: Path) -> Path:
 
 
 def load_tags(project_dir: Path) -> dict[str, Any]:
-    path = tags_path(project_dir)
+    path = _validated_tags_path(project_dir)
     if not path.exists():
-        return {"schema": PROJECT_TAGS_SCHEMA, "tags": {}}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return normalize_tags(data)
+        return _empty_tags()
+    return normalize_tags(read_user_json(path, _empty_tags()))
 
 
 def save_tags(project_dir: Path, data: dict[str, Any]) -> None:
-    normalized = normalize_tags(data)
-    path = tags_path(project_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(normalized, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    replacement = normalize_tags(data)
+
+    def mutation(current: dict[str, Any]) -> None:
+        current.clear()
+        current.update(replacement)
+
+    mutate_tags(project_dir, mutation)
+
+
+def mutate_tags(
+    project_dir: Path,
+    mutation: Callable[[dict[str, Any]], MutationResult],
+) -> MutationResult:
+    """Apply one atomic project-tag mutation under a project-contained lock."""
+
+    project_root = project_dir.expanduser().resolve()
+    path = _validated_tags_path(project_root)
+    with resource_lock(path):
+        path = _validated_tags_path(project_root)
+        current = normalize_tags(read_user_json(path, _empty_tags()))
+        previous = normalize_tags(current)
+        result = mutation(current)
+        normalized = normalize_tags(current)
+        if normalized != previous:
+            path = _validated_tags_path(project_root, create_parent=True)
+            write_user_json(path, normalized)
+        return result
 
 
 def normalize_tags(data: dict[str, Any]) -> dict[str, Any]:
@@ -60,12 +85,14 @@ def normalize_tags(data: dict[str, Any]) -> dict[str, Any]:
 
 def create_tag(project_dir: Path, tag: str, *, catalog_state_dir: Path | None = None) -> dict[str, Any]:
     tag = normalize_tag(tag)
-    data = load_tags(project_dir)
-    _remember_catalog_state(data, catalog_state_dir)
-    data.setdefault("tags", {}).setdefault(tag, {"skills": []})
-    _touch_tag(data["tags"][tag])
-    save_tags(project_dir, data)
-    return {"tag": tag, "skills": data["tags"][tag]["skills"]}
+
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        _remember_catalog_state(data, catalog_state_dir)
+        data.setdefault("tags", {}).setdefault(tag, {"skills": []})
+        _touch_tag(data["tags"][tag])
+        return {"tag": tag, "skills": data["tags"][tag]["skills"]}
+
+    return mutate_tags(project_dir, mutation)
 
 
 def set_tag_skills(
@@ -78,23 +105,25 @@ def set_tag_skills(
     catalog_state_dir: Path | None = None,
 ) -> dict[str, Any]:
     tag = normalize_tag(tag)
-    data = load_tags(project_dir)
-    _remember_catalog_state(data, catalog_state_dir)
-    tags = data.setdefault("tags", {})
-    current = tags.setdefault(tag, {"skills": []})
-    if sync:
-        skills = sorted(dict.fromkeys(skill_ids))
-    else:
-        skills = sorted(set(current.get("skills") or []) | set(skill_ids))
-    current["skills"] = skills
-    if source_collection:
-        collections = set(current.get("source_collections") or [])
-        collections.add(normalize_tag(source_collection))
-        current["source_collections"] = sorted(collections)
-        current["managed_by"] = "collection"
-    _touch_tag(current)
-    save_tags(project_dir, data)
-    return {"tag": tag, "skills": skills}
+
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        _remember_catalog_state(data, catalog_state_dir)
+        tags = data.setdefault("tags", {})
+        current = tags.setdefault(tag, {"skills": []})
+        if sync:
+            skills = sorted(dict.fromkeys(skill_ids))
+        else:
+            skills = sorted(set(current.get("skills") or []) | set(skill_ids))
+        current["skills"] = skills
+        if source_collection:
+            collections = set(current.get("source_collections") or [])
+            collections.add(normalize_tag(source_collection))
+            current["source_collections"] = sorted(collections)
+            current["managed_by"] = "collection"
+        _touch_tag(current)
+        return {"tag": tag, "skills": skills}
+
+    return mutate_tags(project_dir, mutation)
 
 
 def add_tag_skills(
@@ -109,33 +138,40 @@ def add_tag_skills(
 
 def remove_tag_skills(project_dir: Path, tag: str, skill_ids: list[str]) -> dict[str, Any]:
     tag = normalize_tag(tag)
-    data = load_tags(project_dir)
-    tags = data.setdefault("tags", {})
-    entry = tags.setdefault(tag, {"skills": []})
-    remove = set(skill_ids)
-    entry["skills"] = [skill_id for skill_id in entry.get("skills", []) if skill_id not in remove]
-    _touch_tag(entry)
-    save_tags(project_dir, data)
-    return {"tag": tag, "skills": entry["skills"]}
+
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        tags = data.setdefault("tags", {})
+        entry = tags.setdefault(tag, {"skills": []})
+        remove = set(skill_ids)
+        entry["skills"] = [skill_id for skill_id in entry.get("skills", []) if skill_id not in remove]
+        _touch_tag(entry)
+        return {"tag": tag, "skills": entry["skills"]}
+
+    return mutate_tags(project_dir, mutation)
 
 
 def delete_tag(project_dir: Path, tag: str) -> dict[str, Any]:
     tag = normalize_tag(tag)
-    data = load_tags(project_dir)
-    removed = data.setdefault("tags", {}).pop(tag, None)
-    save_tags(project_dir, data)
-    return {"tag": tag, "removed": removed is not None, "tags": sorted(data.get("tags", {}))}
+
+    def mutation(data: dict[str, Any]) -> dict[str, Any]:
+        removed = data.setdefault("tags", {}).pop(tag, None)
+        return {"tag": tag, "removed": removed is not None, "tags": sorted(data.get("tags", {}))}
+
+    return mutate_tags(project_dir, mutation)
 
 
 def clear_tags(project_dir: Path) -> int:
-    path = tags_path(project_dir)
+    project_root = project_dir.expanduser().resolve()
+    path = _validated_tags_path(project_root)
     if not path.exists():
         return 0
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"refusing to clear unsafe project tags path: {path}")
-    count = len(load_tags(project_dir).get("tags") or {})
-    path.unlink()
-    return count
+    with resource_lock(path):
+        path = _validated_tags_path(project_root)
+        if not path.exists():
+            return 0
+        count = len(normalize_tags(read_user_json(path, _empty_tags())).get("tags") or {})
+        path.unlink()
+        return count
 
 
 def tag_names(project_dir: Path) -> list[str]:
@@ -168,3 +204,26 @@ def _touch_tag(entry: dict[str, Any]) -> None:
 def _remember_catalog_state(data: dict[str, Any], catalog_state_dir: Path | None) -> None:
     if catalog_state_dir is not None:
         data["catalog_state_dir"] = str(catalog_state_dir.expanduser().resolve())
+
+
+def _empty_tags() -> dict[str, Any]:
+    return {"schema": PROJECT_TAGS_SCHEMA, "tags": {}}
+
+
+def _validated_tags_path(project_dir: Path, *, create_parent: bool = False) -> Path:
+    project_root = project_dir.expanduser().resolve()
+    parent = project_root / ".skillager"
+    if parent.is_symlink():
+        raise ValueError(f"refusing symlinked project tag state directory: {parent}")
+    if parent.exists() and not parent.is_dir():
+        raise ValueError(f"project tag state parent is not a directory: {parent}")
+    if create_parent and not parent.exists():
+        parent.mkdir(mode=0o700)
+        if parent.is_symlink() or not parent.is_dir():
+            raise ValueError(f"refusing unsafe project tag state directory: {parent}")
+    path = parent / "tags.json"
+    if path.is_symlink():
+        raise ValueError(f"refusing symlinked project tags file: {path}")
+    if path.exists() and not path.is_file():
+        raise ValueError(f"refusing non-file project tags path: {path}")
+    return path

@@ -453,10 +453,10 @@ class SkillagerMaterializeTests(unittest.TestCase):
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use ordinary guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
-                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root):
+                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     build_index(state, include_packages=False)
-                self.assertEqual(main(["activate", "project/demo"]), 2)
-                self.assertEqual(main(["activate", "project/demo", "--force", "--no-session-record"]), 0)
+                    self.assertEqual(main(["activate", "project/demo"]), 2)
+                    self.assertEqual(main(["activate", "project/demo", "--force", "--no-session-record"]), 0)
 
     def test_materialize_copies_reviewed_skill_to_project_agent_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -574,7 +574,9 @@ class SkillagerMaterializeTests(unittest.TestCase):
                             self.assertEqual(main(["expose", "--remove", "project-demo", "--agent", "codex", "--json"]), 0)
                         command = json.loads(preview.getvalue())["results"][0]["next_command_argv"]
                         self.assertEqual(main(command[1:]), 0)
-            self.assertIn("project-demo: removed", removed.getvalue())
+            removal_result = json.loads(removed.getvalue())
+            self.assertEqual(removal_result["results"][0]["exposure_id"], "project-demo")
+            self.assertEqual(removal_result["results"][0]["status"], "removed")
             self.assertFalse((root / ".agents" / "skills" / "project-demo").exists())
             self.assertTrue((root / ".agents" / "skills" / "unmanaged" / "SKILL.md").exists())
             self.assertTrue((root / ".agents" / "skills" / "malformed" / "SKILL.md").exists())
@@ -609,7 +611,9 @@ class SkillagerMaterializeTests(unittest.TestCase):
                             self.assertEqual(main(["expose", "--remove", "project-demo", "--agent", "codex", "--json"]), 0)
                         command = json.loads(preview.getvalue())["results"][0]["next_command_argv"]
                         self.assertEqual(main(command[1:]), 0)
-                    self.assertIn("project-demo: removed", removed.getvalue())
+                    removal_result = json.loads(removed.getvalue())
+                    self.assertEqual(removal_result["results"][0]["exposure_id"], "project-demo")
+                    self.assertEqual(removal_result["results"][0]["status"], "removed")
                     self.assertFalse(codex_target.exists())
                     self.assertTrue(claude_target.exists())
 

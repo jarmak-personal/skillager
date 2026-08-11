@@ -39,7 +39,9 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertEqual(data["pending_owned_change_count"], 1)
             self.assertEqual(data["pending_owned_changes"][0]["id"], "lib/pending-draft")
             self.assertIn("library accept", data["pending_owned_changes"][0]["command"])
-            self.assertNotEqual((data.get("next") or {}).get("command"), "skillager setup --agent codex")
+            self.assertTrue(data["can_proceed"])
+            self.assertIsNone(data["next"]["command"])
+            self.assertEqual(data["next"]["next_commands"], [])
 
             shown = cli.run("show", "lib/pending-draft", "--content")
             self.assert_code(shown, 2)
@@ -166,9 +168,11 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertNotIn("approval_key", preview.stdout)
             self.assertNotIn('"next_command"', preview.stdout)
             next_command = preview.json()["next_command_argv"]
-            self.assertEqual(next_command[:5], ["skillager", "library", "accept", "lib/orbital-review", "--yes"])
-            self.assertEqual(next_command[5], "--confirmation-token")
-            self.assertRegex(next_command[6], r"^[0-9a-f]{64}$")
+            self.assertEqual(next_command[:4], ["skillager", "library", "accept", "lib/orbital-review"])
+            self.assertIn("--json", next_command)
+            self.assertIn("--yes", next_command)
+            self.assertEqual(next_command[-2], "--confirmation-token")
+            self.assertRegex(next_command[-1], r"^[0-9a-f]{64}$")
             self.assertFalse((catalog / "trust.json").exists())
             self.assert_body_not_exposed(preview)
 
@@ -413,6 +417,8 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
                 item for item in managed.json()["exposures"]
                 if item["skill_id"] == "lib/native-fresh"
             )
+            self.assertEqual(native_exposure["status"], "source_update")
+            self.assertIn("next_command_argv", native_exposure)
             removal = cli.run(
                 "expose",
                 "--remove",
@@ -426,6 +432,8 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assert_code(removal, 0)
             self.assertEqual(removal.json()["results"][0]["current_status"], "current")
             self.assertFalse(removal.json()["results"][0]["requires_force"])
+            self.assertIn("--json", removal.json()["results"][0]["next_command_argv"])
+            self.assertEqual(removal.json()["results"][0]["next_command_argv"][-2], "--confirmation-token")
 
             listing = cli.run("list", "--full-json")
             self.assert_code(listing, 0)

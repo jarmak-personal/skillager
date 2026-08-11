@@ -74,6 +74,7 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             self.assertNotIn("artifact_kind", preview.stdout)
             self.assertNotIn('"next_command"', preview.stdout)
             self.assertIn("--yes", preview_data["next_command_argv"])
+            self.assertIn("--json", preview_data["next_command_argv"])
             self.assertEqual(preview_data["next_command_argv"][-2], "--confirmation-token")
             self.assertRegex(preview_data["next_command_argv"][-1], r"^[0-9a-f]{64}$")
             self.assertFalse((library / "skills" / "orbital-review").exists())

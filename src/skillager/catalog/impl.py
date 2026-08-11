@@ -754,8 +754,62 @@ def _load_or_refresh_collection_index(state_root: Path, name: str, *, refresh_li
         }
     path = _collection_index_path(state_root, name)
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        collection_root = Path(collection["path"]).expanduser().resolve()
+        if _collection_index_hashes_current(data, collection_root=collection_root):
+            return data
+        return _live_collection_index(state_root, name, collection)
     return refresh_collection(state_root, name)
+
+
+def _collection_index_hashes_current(
+    data: dict[str, Any],
+    *,
+    collection_root: Path,
+) -> bool:
+    """Require exact current hashes before cached collection trust is reused."""
+
+    indexed_roots = {
+        str(Path(skill["root"]).expanduser().resolve())
+        for skill in data.get("skills", [])
+        if isinstance(skill, dict) and isinstance(skill.get("root"), str)
+    }
+    live_roots = {str(path.expanduser().resolve()) for path in _skill_dirs(collection_root)}
+    if indexed_roots != live_roots:
+        return False
+    for skill in data.get("skills", []):
+        root = skill.get("root") if isinstance(skill, dict) else None
+        expected = skill.get("content_hash") if isinstance(skill, dict) else None
+        if not isinstance(root, str) or not isinstance(expected, str):
+            return False
+        try:
+            if content_hash(Path(root)) != expected:
+                return False
+        except (OSError, ValueError):
+            return False
+    return True
+
+
+def _live_collection_index(
+    state_root: Path,
+    name: str,
+    collection: dict[str, Any],
+) -> dict[str, Any]:
+    """Reindex changed collection content in memory without mutating catalog state."""
+
+    root = Path(collection["path"]).expanduser().resolve()
+    skills, errors = _index_collection_skills(state_root, name, root, collection=collection)
+    data: dict[str, Any] = {
+        "schema": "skillager.collection-index.v1",
+        "name": name,
+        "path": str(root),
+        "skills": skills,
+        "errors": errors,
+    }
+    if collection.get("kind") == LIBRARY_COLLECTION_KIND:
+        data["kind"] = LIBRARY_COLLECTION_KIND
+        data["library_id"] = collection.get("library_id")
+    return data
 
 
 def _load_collection_index(state_root: Path, name: str) -> dict[str, Any] | None:

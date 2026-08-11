@@ -168,7 +168,7 @@ def build_parser() -> argparse.ArgumentParser:
               - Library ownership never bypasses exact-hash acceptance.
               - External skills remain at their source unless explicitly imported.
               - Do not activate or expose unavailable skills unless the user explicitly asks.
-              - Agents should run `skillager working` after context resets; it is silent on normal success.
+              - Agents should run `skillager working --json` after context resets and continue quietly when it reports ready.
               - Agents should ask the user to run `skillager setup` when external skills need owner review.
               - Prefer project scope inside repos so users can inspect managed copies; edit owned skills in the library.
               - Use --json when another program or agent needs stable machine-readable output.
@@ -265,7 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", choices=["markdown", "codex", "claude", "json"], default="markdown")
     p.add_argument("--force", action="store_true", help="Allow activation despite review state. Use only with explicit user approval.")
     p.add_argument("--allow-incompatible", action="store_true", help="Allow activation even when skill metadata explicitly excludes this agent.")
-    p.add_argument("--from-router", help="Router skill slug, e.g. skillager-gis or skillager-router-<hash>. Refuses skills outside the attached router.")
+    p.add_argument("--from-router", help="Exposed router skill slug, e.g. skillager-gis or skillager-router-<hash>. Refuses skills not listed by that managed router.")
     p.add_argument("--from-stub", help="Stub skill slug, e.g. fastapi-fastapi. Refuses activation unless that stub is exposed in this project.")
     p.add_argument("--agent", help="Agent name for compatibility checks, e.g. codex or claude.")
     p.add_argument("--external-session-id", help=argparse.SUPPRESS)
@@ -760,19 +760,22 @@ def _migrate_project_tags_for_collection_refresh(project_dir: Path, catalog_root
     id_map = {old_id: new_ids[0] for old_id, new_ids in migrations_by_old.items() if len(set(new_ids)) == 1}
     if not id_map:
         return None
-    data = project_tags.load_tags(project_dir)
-    changed = []
-    for tag, entry in (data.get("tags") or {}).items():
-        current = list(entry.get("skills") or [])
-        next_ids = [id_map.get(skill_id, skill_id) for skill_id in current]
-        deduped = sorted(dict.fromkeys(next_ids))
-        if deduped == current:
-            continue
-        entry["skills"] = deduped
-        changed.append({"tag": tag, "from": current, "to": deduped})
+
+    def mutation(data: dict[str, Any]) -> list[dict[str, Any]]:
+        changed = []
+        for tag, entry in (data.get("tags") or {}).items():
+            current = list(entry.get("skills") or [])
+            next_ids = [id_map.get(skill_id, skill_id) for skill_id in current]
+            deduped = sorted(dict.fromkeys(next_ids))
+            if deduped == current:
+                continue
+            entry["skills"] = deduped
+            changed.append({"tag": tag, "from": current, "to": deduped})
+        return changed
+
+    changed = project_tags.mutate_tags(project_dir, mutation)
     if not changed:
         return None
-    project_tags.save_tags(project_dir, data)
     return {"updated_tags": changed}
 
 
@@ -1237,7 +1240,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
     report["no_manifest_skills"] = _no_manifest_skill_summary(report["selected"])
     report["approval_provenance"] = _setup_approval_provenance(report)
     _remember_setup_paths(root(args), args.paths or None)
-    _mark_setup_complete(root(args), project_dir=project_dir)
     _record_project_registry(args, project_dir)
     if args.summary_json or args.json:
         bootstrap = _setup_bootstrap_after_review(
@@ -1251,6 +1253,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
             report["bootstrap"] = bootstrap
             if _setup_bootstrap_saves_scope(bootstrap):
                 _save_status_scope(root(args), report["selected"], audience=audience, include_global=args.include_global, agents=list(bootstrap.get("agents") or setup_agents), paths=args.paths or None)
+        _mark_setup_complete(root(args), project_dir=project_dir)
     if args.summary_json:
         print(json.dumps(_compact_setup_report(report), indent=2, sort_keys=True))
     elif args.json:
@@ -1286,7 +1289,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if not report["selected"]:
             _print_empty_setup_guidance(args)
         if not action_requested and not args.non_interactive:
-            _interactive_setup(
+            completed = _interactive_setup(
                 root(args),
                 report["selected"],
                 audience=audience,
@@ -1298,10 +1301,16 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 no_bootstrap=args.no_bootstrap,
                 project_dir=project_dir,
             )
+            if completed:
+                _mark_setup_complete(root(args), project_dir=project_dir)
+            else:
+                _mark_setup_incomplete(root(args))
         elif not action_requested and not _setup_bootstrap_relevant(args, report):
+            _mark_setup_complete(root(args), project_dir=project_dir)
             print()
             _print_setup_next_steps(report["selected"])
         else:
+            _mark_setup_complete(root(args), project_dir=project_dir)
             print()
             bootstrap = _setup_bootstrap_after_review(
                 args,
@@ -2083,6 +2092,7 @@ def _build_working_result(
         agent=agent,
         project_exposure=view["project_exposure"],
     )
+    readiness_required = diagnosis["exit_code"] != DOCTOR_EXIT_READY
     return {
         "schema": WORKING_RESULT_SCHEMA,
         "status": diagnosis["status"],
@@ -2090,9 +2100,13 @@ def _build_working_result(
         "agent": agent,
         "setup_complete": setup_complete,
         "can_proceed": diagnosis["exit_code"] == DOCTOR_EXIT_READY,
+        "auto_approved_project_count": 0,
+        "auto_approved_project_skills": [],
         "pending_owner_review_count": pending_owner_review_count,
         "pending_external_review_count": len(pending_external),
         "pending_external_review": [_working_sync_item(skill) for skill in pending_external],
+        "new_external_review_count": 0,
+        "new_external_review": [],
         "pending_owned_change_count": len(owned_changes),
         "pending_owned_changes": owned_changes,
         "library": _working_library_summary(library),
@@ -2101,8 +2115,8 @@ def _build_working_result(
         "curation": _working_curation(inventory, agent=agent, exposed_router_tags=view["exposed_router_tags"]),
         "readiness": view["readiness"],
         "next": {
-            "command": diagnosis.get("command"),
-            "next_commands": diagnosis.get("next_commands", []),
+            "command": diagnosis.get("command") if readiness_required else None,
+            "next_commands": diagnosis.get("next_commands", []) if readiness_required else [],
         },
     }
 
@@ -2246,8 +2260,13 @@ def _working_setup_path(state_root: Path) -> Path:
     return state_root / "setup.json"
 
 
+def _working_setup_incomplete_path(state_root: Path) -> Path:
+    return state_root / "setup-incomplete.json"
+
+
 def _mark_setup_complete(state_root: Path, *, project_dir: Path) -> None:
     state_root.mkdir(parents=True, exist_ok=True)
+    _working_setup_incomplete_path(state_root).unlink(missing_ok=True)
     _working_setup_path(state_root).write_text(
         json.dumps(
             {
@@ -2263,7 +2282,27 @@ def _mark_setup_complete(state_root: Path, *, project_dir: Path) -> None:
     )
 
 
+def _mark_setup_incomplete(state_root: Path) -> None:
+    state_root.mkdir(parents=True, exist_ok=True)
+    _working_setup_path(state_root).unlink(missing_ok=True)
+    _working_setup_incomplete_path(state_root).write_text(
+        json.dumps(
+            {
+                "schema": "skillager.setup-state.v1",
+                "status": "incomplete",
+                "updated_at": _now_iso(),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _working_setup_complete(state_root: Path) -> bool:
+    if _working_setup_incomplete_path(state_root).exists():
+        return False
     if _working_setup_path(state_root).exists():
         return True
     if _load_status_scope(state_root):
@@ -4573,10 +4612,13 @@ def _effective_project_skills(
 def _base_project_skill_map(state_root: Path, *, catalog_root: Path, project_dir: Path) -> dict[str, dict[str, Any]]:
     exposure = _project_exposure(project_dir)
     extra_paths = _active_setup_paths(state_root)
-    if extra_paths:
-        data = build_index(state_root, include_packages=True, approval_root=catalog_root, extra_paths=extra_paths, persist=False)
-    else:
-        data = load_index(state_root, approval_root=catalog_root, persist_missing=False)
+    data = build_index(
+        state_root,
+        include_packages=True,
+        approval_root=catalog_root,
+        extra_paths=extra_paths,
+        persist=False,
+    )
     by_id: dict[str, dict[str, Any]] = {}
     for skill in data.get("skills", []):
         item = _with_project_inventory_fields(skill, exposure)
@@ -5055,8 +5097,7 @@ def _validate_router_activation(state_root: Path, catalog_root: Path, router: st
     if sidecars:
         _validate_router_sidecars(state_root, catalog_root, router, skill, sidecars)
         return
-    tag = _tag_from_router(router)
-    _validate_router_tag_activation(state_root, catalog_root, router, tag, skill)
+    raise ValueError(f"managed router exposure not found: {router}")
 
 
 def _validate_router_sidecars(
@@ -5176,17 +5217,6 @@ def _activation_agent(args: argparse.Namespace, skill: dict[str, Any]) -> str | 
     return None
 
 
-def _tag_from_router(router: str) -> str:
-    value = router.strip().lower()
-    if value.startswith("skillager-"):
-        value = value.removeprefix("skillager-")
-    elif value.startswith("skillager/"):
-        value = value.removeprefix("skillager/")
-    if not value:
-        raise ValueError("router must name a skillager router, e.g. skillager-gis")
-    return value
-
-
 def _slug(value: str) -> str:
     return "".join(char if char.isalnum() else "-" for char in value.lower()).strip("-")
 
@@ -5212,7 +5242,13 @@ def cmd_review(args: argparse.Namespace) -> int:
         raise ValueError("--bulk-approve/--yolo must be used with `skillager review approve`")
     if not review_action and args.override_lint:
         raise ValueError("--override-lint must be used with `skillager review approve`")
-    data = load_index(root(args), approval_root=catalog_root(args))
+    data = build_index(
+        root(args),
+        include_packages=not getattr(args, "no_packages", False),
+        approval_root=catalog_root(args),
+        extra_paths=_active_setup_paths(root(args)),
+        persist=False,
+    )
     extra_skills = _review_extra_skills(args)
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
@@ -5514,6 +5550,33 @@ def _require_expose_management_only(args: argparse.Namespace, flag: str) -> None
 def _cmd_expose_list(args: argparse.Namespace) -> int:
     agents = _resolve_expose_agents(args, root(args), mutating=False)
     records = _exposure_records(_current_project_dir(), agents=agents, scope=args.scope)
+    if args.scope == "project":
+        inventory = _effective_project_skills(
+            root(args),
+            catalog_root=catalog_root(args),
+            include_lint_blocked=True,
+        )
+        current_source_hashes = _approved_source_hashes(inventory)
+        for item in records:
+            classification = classify_exposure_target(
+                Path(item["target"]),
+                fallback_agent=str(item["agent"]),
+                authoritative=True,
+                current_source_hashes=current_source_hashes,
+            )
+            if classification is None:
+                continue
+            for key in (
+                "status",
+                "reason",
+                "current_hash",
+                "expected_source_hash",
+                "command",
+                "next_command_argv",
+                "unavailable_skill_ids",
+            ):
+                if key in classification:
+                    item[key] = classification[key]
     if args.json:
         print(json.dumps({"schema": "skillager.exposures.v1", "exposures": records}, indent=2, sort_keys=True))
     else:
@@ -5521,7 +5584,10 @@ def _cmd_expose_list(args: argparse.Namespace) -> int:
             print("No Skillager-managed exposures found.")
             return 0
         for item in records:
-            print(f"{item['exposure_id']}\t{item['mode']}\t{item['skill_id']}\t{item['agent']}\t{item['scope']}\t{item['target']}")
+            print(
+                f"{item['exposure_id']}\t{item['status']}\t{item['mode']}\t"
+                f"{item['skill_id']}\t{item['agent']}\t{item['scope']}\t{item['target']}"
+            )
     return 0
 
 
@@ -5536,10 +5602,10 @@ def _cmd_expose_remove(args: argparse.Namespace) -> int:
         raise ValueError(f"ambiguous exposure id: {args.remove} ({details})")
     item = matches[0]
     target = Path(item["target"])
-    preview = _exposure_removal_preview(item, target=target, force=args.force)
+    preview = _exposure_removal_preview(item, target=target, force=args.force, json_output=args.json)
     if args.yes and not args.dry_run:
         with resource_lock(target):
-            current = _exposure_removal_preview(item, target=target, force=args.force)
+            current = _exposure_removal_preview(item, target=target, force=args.force, json_output=args.json)
             expected_token = str(current["_confirmation_token"])
             require_confirmation_token(args.confirmation_token, expected_token, operation="exposure removal")
             if current["requires_force"]:
@@ -5565,7 +5631,13 @@ def _cmd_expose_remove(args: argparse.Namespace) -> int:
     return 0
 
 
-def _exposure_removal_preview(item: dict[str, Any], *, target: Path, force: bool) -> dict[str, Any]:
+def _exposure_removal_preview(
+    item: dict[str, Any],
+    *,
+    target: Path,
+    force: bool,
+    json_output: bool,
+) -> dict[str, Any]:
     sidecar = target / "skillager.materialized.yaml"
     classification = classify_exposure_target(
         target,
@@ -5612,12 +5684,12 @@ def _exposure_removal_preview(item: dict[str, Any], *, target: Path, force: bool
             str(item["agent"]),
             "--scope",
             str(item["scope"]),
-            "--yes",
-            "--confirmation-token",
-            token,
         ]
         if force:
             command.append("--force")
+        if json_output:
+            command.append("--json")
+        command.extend(["--yes", "--confirmation-token", token])
         result["next_command_argv"] = command
     return result
 
@@ -6374,22 +6446,30 @@ def _interactive_setup(
     agents: list[str] | None = None,
     no_bootstrap: bool = False,
     project_dir: Path | None = None,
-) -> None:
+) -> bool:
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print()
         _print_setup_next_steps(skills)
-        return
+        return not any(skill.get("trust") in {"discovered", "lint_blocked"} for skill in skills)
     selected_ids = [skill["id"] for skill in skills]
     if not selected_ids:
         print()
         print("No skills selected.")
-        return
+        return True
     decided_ids: set[str] = set()
     while True:
         selected = _current_selected_skills(state_root, selected_ids, catalog_root=catalog_root)
         candidates = [skill for skill in _unreviewed_skills(selected) if skill["id"] not in decided_ids]
         lint_candidates = [skill for skill in _lint_blocked_skills(selected) if skill["id"] not in decided_ids]
         if not candidates and not lint_candidates:
+            unresolved = [
+                skill
+                for skill in selected
+                if skill.get("trust") in {"discovered", "lint_blocked"}
+            ]
+            if unresolved:
+                _print_partial_setup_outcome(unresolved, agents=agents)
+                return False
             approved = _approved_skills(selected)
             if not approved:
                 print()
@@ -6398,7 +6478,7 @@ def _interactive_setup(
                     _print_lint_blocked(unresolved_lint)
                 else:
                     print("No approved skills in this setup selection.")
-                return
+                return True
             print()
             results = _materialize_reviewed_for_project(
                 approved,
@@ -6416,16 +6496,15 @@ def _interactive_setup(
                 _print_agent_next_steps(results)
             else:
                 print("Setup complete; no skills exposed.")
-            return
+            return True
         print()
         print(_style("Choose an action", "bold"))
         print(f"  {_style('1', 'cyan')}. Review unapproved skills one by one")
         print(f"  {_style('2', 'green')}. Approve all low-risk selected skills")
         print(f"  {_style('3', 'red')}. Block all high-risk selected skills")
-        print(f"  {_style('4', 'cyan')}. Install Skillager working skill for project scope (requires approved skills)")
-        print(f"  {_style('5', 'dim')}. Exit")
+        print(f"  {_style('4', 'dim')}. Pause setup and finish later")
         if lint_candidates:
-            print(f"  {_style('6', 'yellow')}. Review {_counted(len(lint_candidates), 'lint-blocked skill')} (audited override)")
+            print(f"  {_style('5', 'yellow')}. Review {_counted(len(lint_candidates), 'lint-blocked skill')} (audited override)")
         choice = _interactive_input("> ").strip()
         if choice == "1":
             if not candidates:
@@ -6455,24 +6534,24 @@ def _interactive_setup(
             elif _confirm(f"Block {_counted(len(high), 'high-risk skill')}?"):
                 _print_action_result(apply_review_action(state_root, high, block_high=True))
         elif choice == "4":
-            reviewed = _approved_skills(selected)
-            results = _materialize_reviewed_for_project(
-                reviewed,
-                state_root=state_root,
-                catalog_root=catalog_root,
-                agents=agents,
-                no_bootstrap=no_bootstrap,
-                project_dir=project_dir,
-            )
-            if results is not None:
-                result_agents = _setup_result_agents(results)
-                _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=result_agents, paths=paths)
-                _print_setup_completion_summary(selected, results, agents=result_agents)
-                _print_agent_next_steps(results)
-                return
-        elif choice == "5" or choice.lower() in {"q", "quit", "exit"}:
-            return
-        elif choice == "6" and lint_candidates:
+            unresolved = [
+                skill
+                for skill in selected
+                if skill.get("trust") in {"discovered", "lint_blocked"}
+            ]
+            if unresolved:
+                _print_partial_setup_outcome(unresolved, agents=agents)
+            return False
+        elif (choice == "5" and not lint_candidates) or choice.lower() in {"q", "quit", "exit"}:
+            unresolved = [
+                skill
+                for skill in selected
+                if skill.get("trust") in {"discovered", "lint_blocked"}
+            ]
+            if unresolved:
+                _print_partial_setup_outcome(unresolved, agents=agents)
+            return False
+        elif choice in {"5", "6"} and lint_candidates:
             decided_ids.update(
                 _interactive_review_lint_blocked(
                     state_root,
@@ -6482,7 +6561,34 @@ def _interactive_setup(
                 )
             )
         else:
-            print("Enter 1, 2, 3, 4, 5, or 6." if lint_candidates else "Enter 1, 2, 3, 4, or 5.")
+            print("Enter 1, 2, 3, 4, or 5." if lint_candidates else "Enter 1, 2, 3, or 4.")
+
+
+def _print_partial_setup_outcome(
+    unresolved: list[dict[str, Any]],
+    *,
+    agents: list[str] | None,
+) -> None:
+    discovered = sum(skill.get("trust") == "discovered" for skill in unresolved)
+    lint_blocked = sum(skill.get("trust") == "lint_blocked" for skill in unresolved)
+    details = []
+    if discovered:
+        details.append(_counted(discovered, "unreviewed skill"))
+    if lint_blocked:
+        details.append(_counted(lint_blocked, "lint-blocked skill"))
+    detail = f" ({', '.join(details)})" if details else ""
+    print()
+    print(_style("Skillager setup paused", "bold"))
+    print(f"Owner review still needed: {_counted(len(unresolved), 'skill')}{detail}.")
+    print("No setup-complete or restart handoff was issued.")
+    selected_agents = list(agents or [])
+    if selected_agents == ["codex", "claude"]:
+        command = "skillager setup --all-agents"
+    elif len(selected_agents) == 1:
+        command = f"skillager setup --agent {selected_agents[0]}"
+    else:
+        command = "skillager setup"
+    print(f"Next: {command}")
 
 
 def _current_selected_skills(state_root: Path, selected_ids: list[str], *, catalog_root: Path | None = None) -> list[dict[str, Any]]:

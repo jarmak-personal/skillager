@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -79,6 +80,34 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assert_code(activate, 2)
             self.assert_body_not_exposed(activate)
             self.assertIn("not available", activate.stderr)
+
+    def test_metadata_readiness_rehashes_same_size_source_edits_with_restored_mtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            project, cli = self.make_workspace(Path(tmp_name))
+            skill = self.write_skill(project)
+            setup = cli.run("setup", "--source", "project", "--accept-low", "--no-packages", "--summary-json")
+            self.assert_code(setup, 0)
+
+            skill_file = skill / "SKILL.md"
+            original = skill_file.read_text(encoding="utf-8")
+            stat = skill_file.stat()
+            changed = original.replace("spatial", "malware")
+            self.assertEqual(len(changed.encode("utf-8")), len(original.encode("utf-8")))
+            skill_file.write_text(changed, encoding="utf-8")
+            os.utime(skill_file, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+            working = cli.run("working", "--agent", "codex", "--json")
+            self.assert_code(working, 0)
+            self.assertFalse(working.json()["can_proceed"])
+            self.assertEqual(working.json()["status"], "review-needed")
+
+            search = cli.run("search", "malware", "--no-session-record", "--json")
+            self.assert_code(search, 0)
+            self.assertEqual(search.json(), [])
+
+            show = cli.run("show", "project/gis-domain", "--json")
+            self.assert_code(show, 2)
+            self.assertIn("not available", show.stderr)
 
     def test_reviewed_project_skill_can_be_stubbed_and_guarded_activation_emits_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:

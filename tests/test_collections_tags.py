@@ -728,6 +728,46 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 outcome = migrations["collections"]["personal"]
             self.assertEqual(outcome["needs_review"][0]["reason"], "content changed since last collection refresh")
 
+    def test_collection_inventory_rehashes_cached_sources_and_detects_new_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            collection = root / "skills"
+            skill_dir = collection / "foo"
+            skill_dir.mkdir(parents=True)
+            skill_file = skill_dir / "SKILL.md"
+            skill_file.write_text("# Foo\n\nUse good guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
+                indexed = json.loads((state / "collections" / "personal.json").read_text(encoding="utf-8"))
+                old_hash = indexed["skills"][0]["content_hash"]
+                set_trust(state, "personal/foo", "reviewed", old_hash, {"type": "collection", "collection": "personal"})
+
+                original_stat = skill_file.stat()
+                skill_file.write_text("# Foo\n\nUse evil guidance.\n", encoding="utf-8")
+                os.utime(skill_file, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+                new_skill = collection / "bar"
+                new_skill.mkdir()
+                (new_skill / "SKILL.md").write_text("# Bar\n\nUse bar guidance.\n", encoding="utf-8")
+
+                working_output = StringIO()
+                with redirect_stdout(working_output):
+                    self.assertEqual(main(["working", "--json"]), 0)
+                working = json.loads(working_output.getvalue())
+                self.assertFalse(working["can_proceed"])
+                self.assertEqual(working["pending_external_review_count"], 2)
+
+                search_output = StringIO()
+                with redirect_stdout(search_output):
+                    self.assertEqual(main(["search", "evil", "--json"]), 0)
+                self.assertEqual(json.loads(search_output.getvalue()), [])
+
     def test_collection_refresh_reports_ambiguous_flattened_trust_with_same_content(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -954,6 +994,11 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low"]), 0)
                     self.assertEqual(main(["tag", "create", "gis"]), 0)
                     self.assertEqual(main(["tag", "add", "gis", "community/gis-domain"]), 0)
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(
+                        main(["activate", "community/gis-domain", "--from-router", "skillager-gis"]),
+                        2,
+                    )
                 (state / "status_scope.json").write_text(
                     json.dumps({"schema": "skillager.status-scope.v1", "selected_count": 49, "baseline": {}}),
                     encoding="utf-8",

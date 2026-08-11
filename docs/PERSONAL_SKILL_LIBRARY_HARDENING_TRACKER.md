@@ -1,9 +1,9 @@
 # Personal Library Hardening Tracker
 
-Status: active closure; second corrective cycle and integrated checks complete,
-awaiting fresh setup and persona verification
+Status: active closure; third corrective cycle implemented, awaiting final integrated
+checks, fresh setup, and closure verification
 Source: three review passes by agentic-power-user, senior-engineer/maintainer, and
-skeptical security-reader personas, followed by two corrective worktrees through the
+skeptical security-reader personas, followed by three corrective worktrees through the
 current branch
 Created: 2026-08-10
 
@@ -58,6 +58,16 @@ home in normal product documentation.
   missing identity/provenance.
 - [x] Bind imported-skill acceptance to relevant shared provenance state and refuse
   unrelated staged or working provenance edits.
+- [x] Recompute exact current source hashes before readiness/search availability for
+  project and collection inventory. Preserved size/mtime cannot reuse old approval,
+  and added/removed collection skill roots invalidate the cached collection view.
+- [x] Give direct, router, and first-party Working projections one kind-aware host
+  namespace. Cross-kind collisions preserve both artifacts, while Working's reserved
+  target refuses replacement even with force.
+- [x] Refuse repository-controlled symlink/non-file project tag state and make tag
+  mutations locked and atomic.
+- [x] Treat skipped or paused interactive setup as incomplete: no Working install,
+  restart handoff, or completion claim while selected review remains unresolved.
 
 ## P1 — Readiness And Exposure Correctness
 
@@ -81,6 +91,16 @@ home in normal product documentation.
   current/exposed inventory, and provide exact re-expose guidance without auto-sync.
 - [x] Keep doctor ready for unrelated work while surfacing structured resolving actions
   for pending owned changes; never publish an executable placeholder override reason.
+- [x] Keep `working.next` exclusive to required readiness work and retain established
+  zero-value fields in the version-1 JSON contract.
+- [x] Make `expose --list` classify current-project source freshness rather than calling
+  a clean but stale projection exposed/current.
+- [x] Preserve the caller's JSON output mode in generated accept/import/restore/removal
+  confirmation commands and keep the confirmation token last.
+- [x] Return the newly created restore commit as the accepted/current/head receipt,
+  rather than relabeling the selected historical commit.
+- [x] Require an actual managed router exposure for `--from-router`; a similarly named
+  attached tag alone does not authorize activation.
 
 ## P2 — CLI And Documentation Consistency
 
@@ -154,6 +174,17 @@ home in normal product documentation.
   occupied fallback refuses even with force.
 - [x] Git-ignored required metadata fails before writes, initialization commit failure
   rolls back cleanly, and unrelated staged provenance never enters an acceptance commit.
+- [x] Same-size/restored-mtime edits revoke project and collection searchable
+  availability; new collection skill roots enter owner review without manual refresh.
+- [x] Working/router, direct/router, and tag/explicit-router host collisions preserve
+  both artifacts in either creation order; occupied fallbacks and reserved Working
+  replacement fail closed even with force.
+- [x] Project tag symlinks/non-files cannot redirect writes, failed replacements retain
+  the prior file, and concurrent additions are not lost.
+- [x] Skipping or pausing interactive setup immediately leaves Working review-needed
+  and produces only the resolving setup command.
+- [x] Router activation before exposure refuses, while activation through an allocated
+  alternate router slug succeeds.
 
 ## Fresh User Workflow Result
 

@@ -192,6 +192,8 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             self.assertEqual(working.json()["library"]["recovery"]["action"], "relocate")
             self.assertEqual(working.json()["library"]["recovery"]["required_arguments"], ["--path"])
             self.assertNotIn("next_command_argv", working.json()["library"])
+            self.assertIsNone(working.json()["next"]["command"])
+            self.assertEqual(working.json()["next"]["next_commands"], [])
             owned = working.json()["pending_owned_changes"]
             self.assertEqual(owned[0]["status"], "missing")
             self.assertEqual(owned[0]["command"], "skillager library status")

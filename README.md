@@ -39,11 +39,14 @@ Once setup has approved inventory, it installs one first-party `skillager-workin
 skill. It covers quiet agent-owned selection/exposure and explicit user-directed
 personal-library work; Skillager does not inject instructions into `AGENTS.md`,
 `agents.md`, or `CLAUDE.md`. A genuinely empty project can be ready without that
-artifact because there is no managed inventory for the agent to curate yet.
+artifact because there is no managed inventory for the agent to curate yet. If you
+pause or skip while selected skills remain unresolved, setup reports that partial
+outcome and does not install Working or claim completion; rerun the printed setup
+command when you are ready to finish review.
 
 `setup` discovers local/project skills, package-provided skills, collections, and native agent skills. Skillager makes discovered bodies available through its own activation and exposure commands only after review. Agent hosts can independently load directly installed native skills, so Skillager is a cooperative workflow layer rather than a sandbox. Register an external personal/team repository with `skillager collection add ~/skills/workflows --name workflows` when you want it in reusable inventory. Skillager is installed once as a user tool; it does not need to live inside every project environment.
 
-`working --json` keeps the `skillager.working.v1` contract. Its additive advisory `exposure_changes` block reports live current-project managed copies that are locally edited, behind newly approved source content, partially missing, blocked, malformed, or unmanaged. A stale projection is excluded from current exposure counts and receives an explicit re-expose command; it is never refreshed automatically. `inventory` and `curation` distinguish source entries from agent-collapsed choices and suggest goal search without turning it into a required readiness action. Drift does not change readiness or the command's exit code, and Skillager never overwrites a locally edited exposure implicitly.
+`working --json` keeps the `skillager.working.v1` contract. Its additive advisory `exposure_changes` block reports live current-project managed copies that are locally edited, behind newly approved source content, partially missing, blocked, malformed, or unmanaged. A stale projection is excluded from current exposure counts and receives an explicit re-expose command; it is never refreshed automatically. `inventory` and `curation` distinguish source entries from agent-collapsed choices and suggest goal search without turning it into a required readiness action. `next` is empty when readiness is satisfied. Drift does not change readiness or the command's exit code, and Skillager never overwrites a locally edited exposure implicitly.
 
 ## Core Model
 
@@ -72,6 +75,11 @@ Routers do not load full skill bodies. They list reviewed members and activate o
 skillager expose --tag workflows --mode router --agent codex --scope project
 skillager activate workflows/pr-review --from-router workflows
 ```
+
+Router activation requires the named managed router to exist in the current project;
+a similarly named tag is not enough. Native, stub, router, and first-party Working
+artifacts share one collision-safe host namespace. Different managed identities are
+preserved at deterministic alternate slugs rather than silently replacing each other.
 
 Metadata commands stay metadata-only: `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, `doctor`, `library status`, `library history`, `library diff --stat`, and summary or full metadata JSON do not print full skill bodies. Scanner summaries on those surfaces contain rule codes and locations, never matched instruction excerpts.
 

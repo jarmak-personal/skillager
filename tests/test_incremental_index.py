@@ -20,7 +20,7 @@ def write_skill(root: Path, body: str = "# Demo\n\nUse demo guidance A.\n") -> N
 
 class IncrementalIndexTests(unittest.TestCase):
 
-    def test_fingerprint_hit_skips_hash_scan_and_lint_with_identical_output(self) -> None:
+    def test_unchanged_tree_rehashes_exact_identity_but_reuses_scan_and_lint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             skills = root / "skills"
@@ -28,18 +28,20 @@ class IncrementalIndexTests(unittest.TestCase):
             write_skill(skills / "demo")
 
             cold = build_index(state, [skills], include_packages=False)
+            original_hash = index_impl.content_hash
             with (
-                patch.object(index_impl, "content_hash", side_effect=AssertionError("full hash should be skipped")),
+                patch.object(index_impl, "content_hash", wraps=original_hash) as hash_mock,
                 patch.object(index_impl, "scan_path", side_effect=AssertionError("scan should be skipped")),
                 patch.object(index_impl, "lint_skill", side_effect=AssertionError("lint should be skipped")),
             ):
                 warm = build_index(state, [skills], include_packages=False, persist=False)
 
             self.assertEqual(warm, cold)
+            self.assertEqual(hash_mock.call_count, 1)
             self.assertEqual(warm["version"], 2)
             self.assertRegex(warm["skills"][0]["tree_fingerprint"], r"^[0-9a-f]{64}$")
 
-    def test_mtime_only_change_invalidates_fingerprint_and_recomputes_expensive_fields(self) -> None:
+    def test_mtime_only_change_rehashes_but_reuses_expensive_fields_when_content_matches(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             skills = root / "skills"
@@ -65,8 +67,27 @@ class IncrementalIndexTests(unittest.TestCase):
             self.assertNotEqual(warm["skills"][0]["tree_fingerprint"], old_fingerprint)
             self.assertEqual(warm["skills"][0]["content_hash"], cold["skills"][0]["content_hash"])
             self.assertEqual(hash_mock.call_count, 1)
-            self.assertEqual(scan_mock.call_count, 1)
-            self.assertEqual(lint_mock.call_count, 1)
+            self.assertEqual(scan_mock.call_count, 0)
+            self.assertEqual(lint_mock.call_count, 0)
+
+    def test_same_size_edit_with_restored_mtime_cannot_reuse_approved_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skills = root / "skills"
+            state = root / "state"
+            skill_root = skills / "demo"
+            write_skill(skill_root, "# Demo\n\nUse trusted guidance A.\n")
+            cold = build_index(state, [skills], include_packages=False)
+            skill_file = skill_root / "SKILL.md"
+            stat = skill_file.stat()
+            skill_file.write_text("# Demo\n\nUse changed guidance B.\n", encoding="utf-8")
+            os.utime(skill_file, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+
+            warm = build_index(state, [skills], include_packages=False, persist=False)
+
+            self.assertEqual(skill_file.stat().st_size, stat.st_size)
+            self.assertEqual(skill_file.stat().st_mtime_ns, stat.st_mtime_ns)
+            self.assertNotEqual(warm["skills"][0]["content_hash"], cold["skills"][0]["content_hash"])
 
     def test_executable_mode_change_invalidates_fingerprint_and_recomputes_hash(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

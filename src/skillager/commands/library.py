@@ -237,7 +237,8 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
             token,
             override_lint=args.override_lint,
             reason=args.reason,
-    )
+            json_output=args.json,
+        )
     if not args.yes:
         if args.json:
             print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
@@ -376,7 +377,8 @@ def cmd_library_restore(args: argparse.Namespace) -> int:
             token,
             override_lint=args.override_lint,
             reason=args.reason,
-    )
+            json_output=args.json,
+        )
     if not args.yes:
         if args.json:
             print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
@@ -464,17 +466,19 @@ def _accept_argv(
     *,
     override_lint: bool,
     reason: str | None,
+    json_output: bool,
 ) -> list[str]:
     command = [
         "skillager",
         "library",
         "accept",
         skill_id,
-        "--yes",
-        "--confirmation-token",
-        token,
     ]
-    return _with_override(command, override_lint=override_lint, reason=reason)
+    _with_override(command, override_lint=override_lint, reason=reason)
+    if json_output:
+        command.append("--json")
+    command.extend(["--yes", "--confirmation-token", token])
+    return command
 
 
 def _restore_argv(
@@ -484,6 +488,7 @@ def _restore_argv(
     *,
     override_lint: bool,
     reason: str | None,
+    json_output: bool,
 ) -> list[str]:
     command = [
         "skillager",
@@ -492,11 +497,12 @@ def _restore_argv(
         skill_id,
         "--to",
         selected_hash,
-        "--yes",
-        "--confirmation-token",
-        token,
     ]
-    return _with_override(command, override_lint=override_lint, reason=reason)
+    _with_override(command, override_lint=override_lint, reason=reason)
+    if json_output:
+        command.append("--json")
+    command.extend(["--yes", "--confirmation-token", token])
+    return command
 
 
 def _with_override(command: list[str], *, override_lint: bool, reason: str | None) -> list[str]:

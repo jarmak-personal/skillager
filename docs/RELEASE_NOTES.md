@@ -23,8 +23,15 @@ Highlights:
 - Fail closed on display-ID and projection-slug collisions, source/exposure races,
   same-size timestamp spoofing, mode-only cache changes, invalid native host format,
   ignored initialization metadata, and noncanonical acceptance trees.
+- Revalidate exact project and collection source hashes before readiness or searchable
+  availability, including cached collections whose skill roots were added or removed.
+- Keep every managed projection kind in one collision-safe host namespace, require an
+  actual exposed router for guarded activation, and refuse repository tag-state
+  symlinks/non-files with locked atomic writes.
 - Bind non-interactive accept/import/restore commands to their exact previewed state
-  and never emit executable placeholder reasons.
+  and output mode, and never emit executable placeholder reasons.
+- Report paused or skipped interactive setup as incomplete; do not install Working,
+  issue restart guidance, or publish a false completion while review remains.
 - Keep summary inventory bounded, retain curated-tag search matches, and make
   successful non-mutating previews exit zero.
 
@@ -41,7 +48,8 @@ Compatibility and migration:
 - Git-less libraries remain usable, with history-dependent operations reported as
   unavailable.
 - `working` retains `skillager.working.v1`; exposure drift/source freshness is additive
-  and advisory rather than a readiness change.
+  and advisory rather than a readiness change, established zero-value compatibility
+  fields remain present, and `next` is empty whenever readiness is satisfied.
 
 The library performs no automatic Git network operation, no history rewrite, no
 cross-project rollout, automatic merge, exposure synchronization, or upstream import refresh.

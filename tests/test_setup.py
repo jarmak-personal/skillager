@@ -670,13 +670,15 @@ class SkillagerSetupTests(unittest.TestCase):
 
             output = StringIO()
             with redirect_stdout(output), patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
-                self.assertEqual(main(["review", "--json"]), 0)
+                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=home):
+                    self.assertEqual(main(["review", "--json"]), 0)
             report = json.loads(output.getvalue())
             self.assertEqual([skill["id"] for skill in report["selected"]], ["project/local"])
 
             output = StringIO()
             with redirect_stdout(output), patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
-                self.assertEqual(main(["review", "--include-global", "--json"]), 0)
+                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=home):
+                    self.assertEqual(main(["review", "--include-global", "--json"]), 0)
             report = json.loads(output.getvalue())
             self.assertEqual(sorted(skill["id"] for skill in report["selected"]), ["global/global-only", "project/local"])
 
@@ -723,14 +725,14 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertNotIn("second sentence", text)
             self.assertIn("file:", text)
 
-    def test_interactive_setup_explains_working_skill_requires_approval(self) -> None:
+    def test_interactive_setup_can_pause_without_claiming_completion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
             skill_dir = root / ".skills" / "gis-domain"
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
-            stdin = TtyStringIO("4\n5\n")
+            stdin = TtyStringIO("4\n")
             stdout = TtyStringIO()
             with (
                 patch("sys.stdin", stdin),
@@ -741,9 +743,14 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["setup", "--no-packages"]), 0)
             text = stdout.getvalue()
-            self.assertIn("Install Skillager working skill for project scope (requires approved skills)", text)
-            self.assertIn("No approved or pinned skills are ready for project setup.", text)
-            self.assertIn("Approve low-risk skills first with setup option 2", text)
+            self.assertNotIn("Install Skillager working skill for project scope", text)
+            self.assertIn("Pause setup and finish later", text)
+            self.assertIn("Skillager setup paused", text)
+            self.assertIn("Owner review still needed: 1 skill", text)
+            self.assertIn("No setup-complete or restart handoff was issued.", text)
+            self.assertIn("Next: skillager setup", text)
+            self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+            self.assertFalse((state / "setup.json").exists())
 
     def test_setup_needs_review_hides_reviewed_risky_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -811,7 +818,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertFalse((root / ".agents" / "skills" / "project-low" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-high" / "SKILL.md").exists())
 
-    def test_interactive_setup_offers_exposure_after_manual_yes_no_review(self) -> None:
+    def test_interactive_setup_skip_is_partial_and_working_requires_setup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -827,7 +834,9 @@ class SkillagerSetupTests(unittest.TestCase):
                 native_skill_text("api-example", "API Example", "Use API examples."),
                 encoding="utf-8",
             )
-            stdin = TtyStringIO("1\nn\ny\n1\ny\nn\n")
+            state.mkdir(parents=True)
+            (state / "setup.json").write_text('{"schema": "skillager.setup-state.v1"}\n', encoding="utf-8")
+            stdin = TtyStringIO("1\nn\ny\n")
             stdout = TtyStringIO()
             with (
                 patch("sys.stdin", stdin),
@@ -837,20 +846,35 @@ class SkillagerSetupTests(unittest.TestCase):
                 patch("pathlib.Path.home", return_value=root),
                 chdir(root),
             ):
-                self.assertEqual(main(["setup", "--audience", "other", "--no-packages"]), 0)
+                self.assertEqual(main(["setup", "--audience", "other", "--no-packages", "--agent", "codex"]), 0)
             text = stdout.getvalue()
             self.assertIn("project/api-example: skipped; remains unreviewed", text)
-            self.assertIn("Review requirements satisfied. Install Skillager working skill", text)
-            self.assertIn("skillager/working: written", text)
-            self.assertIn("Skillager setup complete", text)
-            self.assertIn("What you have", text)
-            self.assertIn("Stub candidates", text)
-            self.assertIn("please stub 1, 5, 8", text)
-            self.assertNotIn("project/gis-domain: exposed", text)
-            self.assertNotIn("project/api-example: exposed", text)
-            self.assertTrue((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
+            self.assertIn("Skillager setup paused", text)
+            self.assertIn("Owner review still needed: 1 skill", text)
+            self.assertIn("Next: skillager setup --agent codex", text)
+            self.assertNotIn("Review requirements satisfied", text)
+            self.assertNotIn("Skillager setup complete", text)
+            self.assertNotIn("Restart Codex", text)
+            self.assertFalse((root / ".agents" / "skills" / "skillager-working" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-gis-domain" / "SKILL.md").exists())
             self.assertFalse((root / ".agents" / "skills" / "project-api-example" / "SKILL.md").exists())
+            self.assertFalse((state / "setup.json").exists())
+
+            working_output = StringIO()
+            with (
+                redirect_stdout(working_output),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                self.assertEqual(main(["working", "--agent", "codex", "--json"]), 0)
+            working = json.loads(working_output.getvalue())
+            self.assertFalse(working["setup_complete"])
+            self.assertFalse(working["can_proceed"])
+            self.assertEqual(working["status"], "review-needed")
+            self.assertEqual(working["pending_owner_review_count"], 1)
+            self.assertEqual(working["next"]["command"], "skillager setup --agent codex")
 
     def test_setup_completion_stub_candidates_use_agent_collapsed_inventory(self) -> None:
         skills = [

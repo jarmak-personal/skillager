@@ -7,7 +7,7 @@ unless the user explicitly imports one.
 
 Projects may expose a first-party `skillager-working` skill. Treat `skillager working --agent <agent> --json` as the readiness contract for Skillager-managed projects: run it after context resets, keep no-action readiness out of the user conversation, then curate available skills only when the user's task calls for a narrow router, stub, or native skill.
 
-The working contract remains `skillager.working.v1`. Additive `exposure_changes` is advisory current-project state and does not change readiness or exit status. Actionable items identify accepted-source updates, temporarily unavailable sources, local edits, partial missing targets, exposure-scoped blocks, malformed sidecars, and unmanaged native skills. Source updates are excluded from current exposure inventory and carry explicit re-expose commands; they are not synchronized automatically. A `source_unavailable` projection stays non-current and has no re-expose command until its exact source is approved and available again. `inventory` distinguishes source entries from agent-collapsed choices. `curation` is optional goal-search guidance and lists `existing_router_tags` when they should be considered first; only `next` contains readiness-required actions.
+The working contract remains `skillager.working.v1`. Additive `exposure_changes` is advisory current-project state and does not change readiness or exit status. Actionable items identify accepted-source updates, temporarily unavailable sources, local edits, partial missing targets, exposure-scoped blocks, malformed sidecars, and unmanaged native skills. Source updates are excluded from current exposure inventory and carry explicit re-expose commands; they are not synchronized automatically. A `source_unavailable` projection stays non-current and has no re-expose command until its exact source is approved and available again. `inventory` distinguishes source entries from agent-collapsed choices. `curation` is optional goal-search guidance and lists `existing_router_tags` when they should be considered first; only `next` contains readiness-required actions, and it is empty when readiness is satisfied.
 
 Availability is the eligibility gate. Agent-facing Skillager commands only surface skills the owner has made available. Choose among them by task relevance; do not ask for or reason about scanner, review, or trust diagnostics unless the user is explicitly doing Skillager administration.
 
@@ -204,7 +204,11 @@ The expose output and JSON include the router exposure id/slug. When a router te
 skillager activate <skill-id> --from-router <router-slug>
 ```
 
-This command refuses skills outside the router and skills that are not available.
+This command refuses skills outside the router and skills that are not available. The
+named managed router must actually be exposed in the current project; a project tag
+with a matching name is not an activation credential. Use the actual slug returned by
+`expose`, which may have a deterministic suffix when another managed projection owns
+the natural host slug.
 
 ## If Working Reports New Skills
 

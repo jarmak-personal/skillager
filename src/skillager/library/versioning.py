@@ -284,12 +284,13 @@ def restore_library_skill(
             ) from exc
         refresh_collection(catalog_root, LIBRARY_NAMESPACE)
         where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
-        restored_version = {
-            **version,
-            "head": True,
-            "current": True,
-            "accepted": True,
-        }
+        restored_versions = _verified_history_versions(registration.layout.root, target, where)
+        restored_version = next(
+            (item for item in restored_versions if item.get("commit") == commit.get("commit")),
+            None,
+        )
+        if restored_version is None:
+            raise ValueError("restored content was committed but its new HEAD version could not be verified")
         return {
             "schema": LIBRARY_RESTORE_SCHEMA,
             "status": "restored",
@@ -300,7 +301,7 @@ def restore_library_skill(
                 "state": record["state"],
                 "scope": record["scope"],
                 "content_hash": record["content_hash"],
-            "lint_override": record.get("lint_override"),
+                "lint_override": record.get("lint_override"),
                 "risk_override": record.get("risk_override"),
             },
         }

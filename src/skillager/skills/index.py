@@ -40,21 +40,22 @@ def build_index(
     entries = []
     for skill in skills:
         fingerprint = content_tree_fingerprint(skill.root)
+        # Trust is exact-hash authority, so a metadata fingerprint may never stand in
+        # for reading the current canonical tree. The persisted digest can still let
+        # us reuse scanner/linter results after the exact current digest agrees.
+        digest = content_hash(skill.root)
         prior = cached.get(_cache_key(skill.root))
         cache_hit = bool(
             prior
-            and prior.get("tree_fingerprint") == fingerprint
-            and isinstance(prior.get("content_hash"), str)
+            and prior.get("content_hash") == digest
             and isinstance(prior.get("scan"), dict)
             and isinstance(prior.get("lint"), dict)
         )
         if cache_hit:
             assert prior is not None
-            digest = str(prior["content_hash"])
             scan = dict(prior["scan"])
             lint = dict(prior["lint"])
         else:
-            digest = content_hash(skill.root)
             scan = scan_path(skill.root, allow_tools=False)
             lint = skill.lint if isinstance(skill, QuarantinedSkill) else lint_skill(skill)
         approval_key = approval_key_for(skill.id, skill.root, skill.source, entrypoint=skill.entrypoint)

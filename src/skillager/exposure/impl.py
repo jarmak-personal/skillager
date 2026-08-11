@@ -147,7 +147,7 @@ def materialize_router(
                     router_kind=router_kind,
                 )
             )
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             results.append(_result(router_skill, target, "skipped", str(exc), agent=agent, scope=scope))
         results.extend(agent_skipped)
     results.extend(skipped)
@@ -246,7 +246,7 @@ def materialize_working_skill(
         target = target_dir(agent=agent, scope=scope, skill=skill, project_dir=project_dir)
         try:
             results.append(materialize_working_skill_one(target=target, agent=agent, scope=scope, dry_run=dry_run, force=force))
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             results.append(_result(skill, target, "skipped", str(exc), agent=agent, scope=scope))
     return results
 
@@ -260,7 +260,13 @@ def materialize_working_skill_one(
     force: bool = False,
 ) -> dict[str, Any]:
     skill = _working_skill(agent)
-    with _target_lock_context(target, dry_run=dry_run):
+    projection_identity = _working_projection_identity(agent)
+    with _projection_target_context(
+        target,
+        projection_identity,
+        dry_run=dry_run,
+        require_exact=True,
+    ):
         sidecar = target / "skillager.materialized.yaml"
         if target.exists():
             if _is_customized(sidecar, target) and not force:
@@ -282,6 +288,7 @@ def materialize_working_skill_one(
                 _working_sidecar(
                     agent=agent,
                     scope=scope,
+                    projection_identity=projection_identity,
                     materialized_hash=materialized_hash,
                     materialized_fingerprint=content_tree_fingerprint(target),
                     materialized_target_hash=materialized_target_hash,
@@ -327,6 +334,12 @@ acceptance, overrides, or version-changing decisions.
    owner decision, curation change, exposure, activation, drift, or repair matters.
 4. Treat `exposure_changes` as advisory. A local edit is a no-overwrite warning, not
    permission to replace either the exposure or its canonical source.
+   - `source_update` means the managed projection is behind newly approved source
+     content and is not current. Do not use it as an exposed choice; re-expose only
+     when the user authorizes that exact refresh command.
+   - `source_unavailable` means the projection's exact approved source cannot currently
+     be resolved. Do not use or refresh it until approval or library availability is
+     restored; no re-expose command is valid while the source remains unavailable.
 5. If review is needed, ask the user to run the exact setup/review command. If the
    first-party working skill is stale or missing, ask for
    `skillager doctor --agent {agent} --fix`, then rerun `working`.
@@ -411,9 +424,18 @@ def materialize_router_one(
     router_kind: str = "tag",
 ) -> dict[str, Any]:
     router_skill = _router_skill(tag, skills, router_slug=router_slug, router_kind=router_kind)
-    with _target_lock_context(target, dry_run=dry_run):
+    projection_identity = _router_projection_identity(
+        tag=tag,
+        router_slug=router_slug,
+        router_kind=router_kind,
+    )
+    with _projection_target_context(
+        target,
+        projection_identity,
+        dry_run=dry_run,
+    ) as target:
         sidecar = target / "skillager.materialized.yaml"
-        actual_router_slug = router_slug or target.name
+        actual_router_slug = target.name
         rendered = render_router_skill(tag, skills, agent=agent, router_slug=actual_router_slug, router_kind=router_kind)
         prospective_hash = _single_file_content_hash(rendered)
         decisions = _exposure_decisions(sidecar)
@@ -441,7 +463,9 @@ def materialize_router_one(
             materialized_fingerprint=content_tree_fingerprint(target),
             materialized_target_hash=materialized_target_hash,
             router_slug=actual_router_slug,
+            selection_router_slug=router_slug,
             router_kind=router_kind,
+            projection_identity=projection_identity,
         )
         sidecar_data.update(decisions)
         sidecar.write_text(
@@ -528,7 +552,13 @@ def materialize_stub_one(
     dry_run: bool = False,
     force: bool = False,
 ) -> dict[str, Any]:
-    with _projection_target_context(target, str(skill["id"]), dry_run=dry_run) as target:
+    projection_identity = _direct_projection_identity(skill)
+    with _projection_target_context(
+        target,
+        projection_identity,
+        dry_run=dry_run,
+        fallback_key=str(skill["id"]),
+    ) as target:
         sidecar = target / "skillager.materialized.yaml"
         rendered = render_stub_skill(skill, stub_slug=target.name)
         prospective_hash = _single_file_content_hash(rendered)
@@ -627,7 +657,13 @@ def materialize_one(
 ) -> dict[str, Any]:
     source_root = Path(skill["root"]).resolve()
     _require_native_skill_frontmatter(source_root / "SKILL.md")
-    with _projection_target_context(target, str(skill["id"]), dry_run=dry_run) as target:
+    projection_identity = _direct_projection_identity(skill)
+    with _projection_target_context(
+        target,
+        projection_identity,
+        dry_run=dry_run,
+        fallback_key=str(skill["id"]),
+    ) as target:
         if scope == "project" and target.resolve() == source_root and (target / "SKILL.md").exists() and not (target / "skillager.materialized.yaml").exists():
             return _result(skill, target, "already_native", "existing unmanaged native skill", agent=agent, scope=scope)
         sidecar = target / "skillager.materialized.yaml"
@@ -785,29 +821,33 @@ def _slug_hash(skill_id: str) -> str:
 
 
 @contextlib.contextmanager
-def _target_lock(target: Path):
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with resource_lock(target):
-        yield
-
-
-def _target_lock_context(target: Path, *, dry_run: bool):
-    if dry_run:
-        return contextlib.nullcontext()
-    return _target_lock(target)
-
-
-@contextlib.contextmanager
-def _projection_target_context(target: Path, skill_id: str, *, dry_run: bool):
-    """Choose a collision-safe direct projection target under one namespace lock."""
+def _projection_target_context(
+    target: Path,
+    projection_identity: str,
+    *,
+    dry_run: bool,
+    fallback_key: str | None = None,
+    require_exact: bool = False,
+):
+    """Choose a collision-safe projection target under the shared namespace lock."""
 
     if dry_run:
-        yield _collision_safe_target(target, skill_id)
+        yield _collision_safe_target(
+            target,
+            projection_identity,
+            fallback_key=fallback_key,
+            require_exact=require_exact,
+        )
         return
     target.parent.mkdir(parents=True, exist_ok=True)
     allocation_resource = target.parent / ".skillager-target-allocation"
     with resource_lock(allocation_resource):
-        selected = _collision_safe_target(target, skill_id)
+        selected = _collision_safe_target(
+            target,
+            projection_identity,
+            fallback_key=fallback_key,
+            require_exact=require_exact,
+        )
         with resource_lock(selected):
             yield selected
 
@@ -823,6 +863,8 @@ def _sidecar(
 ) -> dict[str, Any]:
     data = {
         "schema": MATERIALIZED_SCHEMA,
+        "projection_kind": "direct",
+        "projection_identity": _direct_projection_identity(skill),
         "id": skill["id"],
         "source_id": skill["id"],
         "source_type": skill.get("source", {}).get("type"),
@@ -865,12 +907,15 @@ def _working_sidecar(
     *,
     agent: str,
     scope: str,
+    projection_identity: str,
     materialized_hash: str,
     materialized_fingerprint: str,
     materialized_target_hash: str,
 ) -> dict[str, Any]:
     return {
         "schema": MATERIALIZED_SCHEMA,
+        "projection_kind": "working",
+        "projection_identity": projection_identity,
         "id": WORKING_SKILL_ID,
         "source_id": WORKING_SKILL_ID,
         "source_type": "skillager-working",
@@ -897,11 +942,20 @@ def _router_sidecar(
     materialized_fingerprint: str,
     materialized_target_hash: str,
     router_slug: str,
+    selection_router_slug: str | None,
     router_kind: str,
+    projection_identity: str,
 ) -> dict[str, Any]:
-    router_skill = _router_skill(tag, skills, router_slug=router_slug, router_kind=router_kind)
+    router_skill = _router_skill(
+        tag,
+        skills,
+        router_slug=selection_router_slug,
+        router_kind=router_kind,
+    )
     data = {
         "schema": ROUTER_SCHEMA,
+        "projection_kind": f"router-{router_kind}",
+        "projection_identity": projection_identity,
         "id": router_skill["id"],
         "source_id": router_skill["id"],
         "source_type": "skillager-router",
@@ -934,6 +988,8 @@ def _stub_sidecar(
 ) -> dict[str, Any]:
     data = {
         "schema": MATERIALIZED_SCHEMA,
+        "projection_kind": "direct",
+        "projection_identity": _direct_projection_identity(skill),
         "id": skill["id"],
         "source_id": skill["id"],
         "source_type": "skillager-stub",
@@ -971,21 +1027,47 @@ def _copy_skill_tree(source: Path, target: Path) -> None:
         shutil.copy2(path, destination)
 
 
-def _collision_safe_target(target: Path, skill_id: str) -> Path:
-    current_source = _managed_target_source_id(target)
-    if current_source in {None, skill_id}:
+def _collision_safe_target(
+    target: Path,
+    projection_identity: str,
+    *,
+    fallback_key: str | None,
+    require_exact: bool,
+) -> Path:
+    occupied = target.exists() or target.is_symlink()
+    if not occupied:
         return target
-    alternate = target.with_name(f"{target.name}-{_slug_hash(skill_id)}")
+    current = _managed_target_projection(target)
+    if current is not None and current["identity"] == projection_identity:
+        return target
+    if require_exact:
+        occupant = (
+            _projection_occupant(current)
+            if current is not None
+            else "an unmanaged or unreadable target"
+        )
+        raise ValueError(
+            f"reserved projection target is occupied by {occupant}: {target}"
+        )
+    if current is None:
+        return target
+    alternate = target.with_name(
+        f"{target.name}-{_slug_hash(fallback_key or projection_identity)}"
+    )
     if not alternate.exists() and not alternate.is_symlink():
         return alternate
-    alternate_source = _managed_target_source_id(alternate)
-    if alternate_source == skill_id:
+    alternate_projection = _managed_target_projection(alternate)
+    if alternate_projection is not None and alternate_projection["identity"] == projection_identity:
         return alternate
-    occupant = f"managed source {alternate_source}" if alternate_source else "an unmanaged or unreadable target"
+    occupant = (
+        _projection_occupant(alternate_projection)
+        if alternate_projection is not None
+        else "an unmanaged or unreadable target"
+    )
     raise ValueError(f"collision fallback target is occupied by {occupant}: {alternate}")
 
 
-def _managed_target_source_id(target: Path) -> str | None:
+def _managed_target_projection(target: Path) -> dict[str, str] | None:
     if not target.exists() and not target.is_symlink():
         return None
     sidecar = target / "skillager.materialized.yaml"
@@ -998,7 +1080,110 @@ def _managed_target_source_id(target: Path) -> str | None:
     except Exception:
         return None
     source_id = data.get("source_id") or data.get("id")
-    return str(source_id) if isinstance(source_id, str) and source_id else None
+    if not isinstance(source_id, str) or not source_id:
+        return None
+    projection_identity = data.get("projection_identity")
+    projection_kind = data.get("projection_kind")
+    if isinstance(projection_identity, str) and projection_identity:
+        return {
+            "identity": projection_identity,
+            "kind": str(projection_kind or "managed projection"),
+            "source_id": source_id,
+        }
+    source_type = data.get("source_type")
+    if source_type == "skillager-working":
+        agent = str(data.get("agent") or "codex")
+        identity = _working_projection_identity(agent)
+        kind = "working"
+    elif source_type == "skillager-router":
+        router_kind = str(data.get("router_kind") or data.get("selection_kind") or ("tag" if data.get("tag") else "explicit"))
+        identity = _router_projection_identity(
+            tag=str(data.get("tag")) if data.get("tag") is not None else None,
+            router_slug=str(data.get("router_slug")) if data.get("router_slug") is not None else None,
+            router_kind=router_kind,
+            skill_ids=[str(value) for value in data.get("skill_ids") or []],
+        )
+        kind = f"router-{router_kind}"
+    else:
+        identity = _direct_projection_identity_from_values(
+            source_id=source_id,
+            source_library_id=data.get("source_library_id"),
+            source_entrypoint=data.get("source_entrypoint"),
+            source_root=None,
+            source_type=source_type,
+            source_package=data.get("source_package"),
+        )
+        kind = "direct"
+    return {"identity": identity, "kind": kind, "source_id": source_id}
+
+
+def _projection_occupant(projection: dict[str, str]) -> str:
+    return f"managed {projection['kind']} projection {projection['source_id']}"
+
+
+def _working_projection_identity(agent: str) -> str:
+    return f"working:{agent}"
+
+
+def _router_projection_identity(
+    *,
+    tag: str | None,
+    router_slug: str | None,
+    router_kind: str,
+    skill_ids: list[str] | None = None,
+) -> str:
+    if router_kind == "tag":
+        stable_tag = slugify(tag or "")
+        if not stable_tag:
+            raise ValueError("tag router is missing its stable selection identity")
+        return f"router:tag:{stable_tag}"
+    if router_kind != "explicit":
+        raise ValueError(f"unsupported router projection kind: {router_kind}")
+    stable_slug = router_slug
+    if not stable_slug and skill_ids:
+        stable_slug = explicit_router_slug(skill_ids)
+    if not stable_slug:
+        raise ValueError("explicit router is missing its stable selection identity")
+    return f"router:explicit:{stable_slug.removeprefix('skillager-router-')}"
+
+
+def _direct_projection_identity(skill: dict[str, Any]) -> str:
+    source = skill.get("source") or {}
+    return _direct_projection_identity_from_values(
+        source_id=str(skill["id"]),
+        source_library_id=source.get("library_id"),
+        source_entrypoint=skill.get("entrypoint"),
+        source_root=skill.get("root"),
+        source_type=source.get("type"),
+        source_package=skill.get("package") or source.get("package") or source.get("collection"),
+    )
+
+
+def _direct_projection_identity_from_values(
+    *,
+    source_id: str,
+    source_library_id: object,
+    source_entrypoint: object,
+    source_root: object,
+    source_type: object,
+    source_package: object,
+) -> str:
+    if isinstance(source_library_id, str) and source_library_id:
+        stable_source = f"library\0{source_library_id}\0{source_id}"
+    else:
+        source_path = source_entrypoint or source_root
+        if isinstance(source_path, str) and source_path:
+            try:
+                normalized_path = str(Path(source_path).expanduser().resolve())
+            except (OSError, RuntimeError):
+                normalized_path = source_path
+            stable_source = f"path\0{normalized_path}\0{source_id}"
+        else:
+            stable_source = (
+                f"source\0{source_type or ''}\0{source_package or ''}\0{source_id}"
+            )
+    digest = hashlib.sha256(stable_source.encode("utf-8", errors="surrogateescape")).hexdigest()
+    return f"direct:{digest}"
 
 
 def _is_customized(sidecar: Path, target: Path) -> bool:

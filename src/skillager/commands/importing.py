@@ -86,6 +86,7 @@ def cmd_import(args: argparse.Namespace) -> int:
             token,
             override_lint=args.override_lint,
             reason=args.reason,
+            json_output=args.json,
         )
     if not args.yes:
         if args.json:
@@ -157,6 +158,7 @@ def _import_argv(
     *,
     override_lint: bool,
     reason: str | None,
+    json_output: bool,
 ) -> list[str]:
     command = [
         "skillager",
@@ -164,12 +166,12 @@ def _import_argv(
         source_skill_id,
         "--as",
         name,
-        "--yes",
-        "--confirmation-token",
-        token,
     ]
     if override_lint:
         command.extend(["--override-lint", "--reason", (reason or "").strip()])
+    if json_output:
+        command.append("--json")
+    command.extend(["--yes", "--confirmation-token", token])
     return command
 
 
