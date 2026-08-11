@@ -1226,6 +1226,76 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertIn("community/compatible", router_text)
                 self.assertNotIn("community/claude-only", router_text)
 
+                claude_output = StringIO()
+                with redirect_stdout(claude_output):
+                    self.assertEqual(
+                        main(
+                            [
+                                "expose",
+                                "community/compatible",
+                                "community/claude-only",
+                                "--mode",
+                                "router",
+                                "--agent",
+                                "claude",
+                                "--json",
+                            ]
+                        ),
+                        0,
+                    )
+                claude_data = json.loads(claude_output.getvalue())
+                claude_router = next(item for item in claude_data if item["skill_id"].startswith("skillager/router-"))
+                self.assertEqual(claude_router["exposure_id"], router_result["exposure_id"])
+
+                wrong_agent_error = StringIO()
+                with redirect_stderr(wrong_agent_error):
+                    self.assertEqual(
+                        main(
+                            [
+                                "activate",
+                                "community/claude-only",
+                                "--from-router",
+                                router_result["exposure_id"],
+                                "--agent",
+                                "codex",
+                            ]
+                        ),
+                        2,
+                    )
+                self.assertIn("not listed by router", wrong_agent_error.getvalue())
+
+                claude_activation = StringIO()
+                with redirect_stdout(claude_activation):
+                    self.assertEqual(
+                        main(
+                            [
+                                "activate",
+                                "community/claude-only",
+                                "--from-router",
+                                router_result["exposure_id"],
+                                "--agent",
+                                "claude",
+                            ]
+                        ),
+                        0,
+                    )
+                self.assertIn("# Claude Only", claude_activation.getvalue())
+
+                ambiguous_error = StringIO()
+                with redirect_stderr(ambiguous_error):
+                    self.assertEqual(
+                        main(
+                            [
+                                "activate",
+                                "community/compatible",
+                                "--from-router",
+                                router_result["exposure_id"],
+                            ]
+                        ),
+                        2,
+                    )
+                self.assertIn("exposed for multiple agents", ambiguous_error.getvalue())
+
     def test_explicit_router_reexpose_skips_stale_members_and_preserves_remaining(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

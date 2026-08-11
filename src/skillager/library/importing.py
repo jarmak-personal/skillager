@@ -22,6 +22,7 @@ from .service import (
     _compact_scan,
     _require_library_identity,
     _require_safe_git_mutation,
+    _safe_metadata_summary,
     library_where,
 )
 
@@ -280,7 +281,7 @@ def _compact_source(skill: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": skill.get("id"),
         "name": skill.get("name"),
-        "summary": skill.get("summary"),
+        "summary": _safe_metadata_summary(skill.get("summary")),
         "path": str(Path(skill["root"]).resolve()),
         "type": source.get("type"),
         "collection": source.get("collection"),

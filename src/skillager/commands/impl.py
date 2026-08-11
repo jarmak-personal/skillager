@@ -4470,8 +4470,15 @@ def cmd_activate(args: argparse.Namespace) -> int:
         )
     if (skill.get("source") or {}).get("ownership") == "library" and skill.get("trust") not in TRUSTED_STATES:
         raise ValueError(f"library skill has a pending hash: {args.skill_id}; run `skillager library accept {args.skill_id}` first")
+    activation_agent = _activation_agent(args, skill)
     if args.from_router:
-        _validate_router_activation(root(args), catalog_root(args), args.from_router, skill)
+        _validate_router_activation(
+            root(args),
+            catalog_root(args),
+            args.from_router,
+            skill,
+            agent=activation_agent,
+        )
     if args.from_stub:
         _validate_stub_activation(skill, args.from_stub)
     if skill.get("trust") == "blocked" and not args.force:
@@ -4479,7 +4486,6 @@ def cmd_activate(args: argparse.Namespace) -> int:
     if skill.get("trust") == "discovered" and not args.force:
         raise ValueError(f"skill is not available: {args.skill_id}; {_approval_hint(skill)}")
     _require_authoritative_skill_body(skill)
-    activation_agent = _activation_agent(args, skill)
     problem = compatibility_problem(skill, activation_agent)
     if problem and not args.allow_incompatible:
         raise ValueError(f"skill is {problem}; use --allow-incompatible only with explicit user approval")
@@ -5096,8 +5102,15 @@ def _require_attached_tag(state_root: Path, tag: str) -> None:
         raise ValueError(f"tag is not attached to this project: {tag}")
 
 
-def _validate_router_activation(state_root: Path, catalog_root: Path, router: str, skill: dict[str, Any]) -> None:
-    sidecars = _router_sidecar_records(_current_project_dir(), router)
+def _validate_router_activation(
+    state_root: Path,
+    catalog_root: Path,
+    router: str,
+    skill: dict[str, Any],
+    *,
+    agent: str | None,
+) -> None:
+    sidecars = _router_sidecar_records(_current_project_dir(), router, agent=agent)
     if sidecars:
         _validate_router_sidecars(state_root, catalog_root, router, skill, sidecars)
         return
@@ -5114,30 +5127,31 @@ def _validate_router_sidecars(
     unreadable = next((item for item in sidecars if item.get("error")), None)
     if unreadable:
         raise ValueError(f"router sidecar is unreadable: {unreadable['path']}")
-    allowed: set[str] = set()
-    legacy_tags: set[str] = set()
-    explicit_without_skill_ids = False
+    authorizations: set[tuple[str, ...]] = set()
     for item in sidecars:
         data = item.get("data") or {}
         skill_ids = data.get("skill_ids")
         if isinstance(skill_ids, list) and skill_ids:
-            allowed.update(str(skill_id) for skill_id in skill_ids)
-            continue
-        if data.get("tag"):
-            legacy_tags.add(str(data["tag"]))
+            authorizations.add(("ids", *sorted(str(skill_id) for skill_id in skill_ids)))
+        elif data.get("tag"):
+            authorizations.add(("tag", str(data["tag"])))
         elif data.get("router_kind") == "explicit" or data.get("selection_kind") == "explicit":
-            explicit_without_skill_ids = True
-    if allowed:
+            authorizations.add(("empty-explicit",))
+    if len(authorizations) > 1:
+        raise ValueError(
+            f"multiple managed router exposures disagree for {router}; "
+            "remove or rename the stale duplicate before activation"
+        )
+    authorization = next(iter(authorizations), None)
+    if authorization and authorization[0] == "ids":
+        allowed = set(authorization[1:])
         if skill["id"] in allowed:
             return
         raise ValueError(f"skill {skill['id']} is not listed by router {router}")
-    for tag in sorted(legacy_tags):
-        try:
-            _validate_router_tag_activation(state_root, catalog_root, router, tag, skill)
-            return
-        except ValueError:
-            continue
-    if explicit_without_skill_ids:
+    if authorization and authorization[0] == "tag":
+        _validate_router_tag_activation(state_root, catalog_root, router, authorization[1], skill)
+        return
+    if authorization and authorization[0] == "empty-explicit":
         raise ValueError(f"router {router} does not list activatable skills")
     raise ValueError(f"skill {skill['id']} is not listed by router {router}")
 
@@ -5153,7 +5167,12 @@ def _validate_router_tag_activation(state_root: Path, catalog_root: Path, router
         raise ValueError(f"skill {skill['id']} is not listed by router {router}")
 
 
-def _router_sidecar_records(project_dir: Path, router: str) -> list[dict[str, Any]]:
+def _router_sidecar_records(
+    project_dir: Path,
+    router: str,
+    *,
+    agent: str | None,
+) -> list[dict[str, Any]]:
     requested_slug = _slug(router)
     records: list[dict[str, Any]] = []
     for root_path in _router_sidecar_roots(project_dir):
@@ -5167,8 +5186,20 @@ def _router_sidecar_records(project_dir: Path, router: str) -> list[dict[str, An
         except (OSError, UnicodeError, YamlError):
             records.append({"path": str(sidecar), "error": "unreadable"})
             continue
-        if data.get("source_type") == "skillager-router":
+        if (
+            data.get("source_type") == "skillager-router"
+            and (agent is None or str(data.get("agent") or "").lower() == agent.lower())
+        ):
             records.append({"path": str(sidecar), "data": data})
+    agents = {
+        str((item.get("data") or {}).get("agent") or "unknown").lower()
+        for item in records
+        if not item.get("error")
+    }
+    if agent is None and len(agents) > 1:
+        raise ValueError(
+            f"router slug {router} is exposed for multiple agents; pass --agent to select one"
+        )
     return records
 
 
@@ -5213,11 +5244,15 @@ def _activation_agent(args: argparse.Namespace, skill: dict[str, Any]) -> str | 
         return str(args.agent).lower()
     if args.format in {"codex", "claude"}:
         return str(args.format)
-    for target in skill.get("materialized_targets", []):
-        if args.from_stub and target.get("kind") == "stub":
-            return target.get("agent")
-        if args.from_router and target.get("kind") == "router":
-            return target.get("agent")
+    target_kind = "stub" if args.from_stub else "router" if args.from_router else None
+    if target_kind:
+        target_agents = {
+            str(target["agent"]).lower()
+            for target in skill.get("materialized_targets", [])
+            if target.get("kind") == target_kind and target.get("agent")
+        }
+        if len(target_agents) == 1:
+            return next(iter(target_agents))
     return None
 
 
@@ -5616,7 +5651,10 @@ def _cmd_expose_remove(args: argparse.Namespace) -> int:
                 raise ValueError(
                     "managed exposure has local edits; preview again with --force only if those edits may be discarded"
                 )
-            shutil.rmtree(target)
+            _remove_confirmed_exposure(
+                target,
+                expected_target_hash=str(current["_target_state_hash"]),
+            )
         result = {key: value for key, value in current.items() if not key.startswith("_")}
         result["status"] = "removed"
         result.pop("next_command_argv", None)
@@ -5655,6 +5693,7 @@ def _exposure_removal_preview(
     local_changes = current_status != "current"
     requires_force = local_changes and not force
     sidecar_state = load_mapping(sidecar)
+    live_target_hash = target_state_hash(target, include_sidecar=True)
     token = confirmation_token(
         "exposure-remove",
         exposure_id=item["exposure_id"],
@@ -5663,7 +5702,7 @@ def _exposure_removal_preview(
         scope=item["scope"],
         current_status=current_status,
         current_hash=classification.get("current_hash"),
-        target_state_hash=target_state_hash(target, include_sidecar=True),
+        target_state_hash=live_target_hash,
         sidecar=sidecar_state,
         force=force,
     )
@@ -5675,6 +5714,7 @@ def _exposure_removal_preview(
         "local_changes": local_changes,
         "requires_force": requires_force,
         "_confirmation_token": token,
+        "_target_state_hash": live_target_hash,
     }
     if requires_force:
         result["required_arguments"] = ["--force"]
@@ -5696,6 +5736,47 @@ def _exposure_removal_preview(
         command.extend(["--yes", "--confirmation-token", token])
         result["next_command_argv"] = command
     return result
+
+
+def _remove_confirmed_exposure(target: Path, *, expected_target_hash: str) -> None:
+    """Atomically detach and re-hash a removal target before deleting it."""
+
+    quarantine_root = Path(
+        tempfile.mkdtemp(prefix=f".{target.name}.skillager-remove-", dir=target.parent)
+    )
+    detached = quarantine_root / "target"
+    try:
+        os.replace(target, detached)
+    except Exception:
+        quarantine_root.rmdir()
+        raise
+
+    try:
+        detached_hash = target_state_hash(detached, include_sidecar=True)
+    except Exception:
+        _restore_detached_exposure(detached, target, quarantine_root)
+        raise
+    if detached_hash != expected_target_hash:
+        _restore_detached_exposure(detached, target, quarantine_root)
+        raise ValueError("managed exposure changed during removal; preview the current target again")
+
+    try:
+        shutil.rmtree(detached)
+        quarantine_root.rmdir()
+    except OSError as exc:
+        raise OSError(
+            f"managed exposure removal was incomplete; inspect the recovery path: {detached}"
+        ) from exc
+
+
+def _restore_detached_exposure(detached: Path, target: Path, quarantine_root: Path) -> None:
+    if target.exists() or target.is_symlink():
+        raise ValueError(
+            "managed exposure changed during removal and its detached recovery copy "
+            f"was preserved at {detached}"
+        )
+    os.replace(detached, target)
+    quarantine_root.rmdir()
 
 
 def _exposure_record_matches(item: dict[str, Any], value: str) -> bool:

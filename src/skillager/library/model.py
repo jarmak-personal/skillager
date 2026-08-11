@@ -63,9 +63,20 @@ class LibraryLayout:
         return self.metadata / "provenance.json"
 
     def skill_root(self, name: str) -> Path:
-        target = (self.skills / normalize_skill_name(name)).resolve()
+        target = self.skills / normalize_skill_name(name)
+        if self.skills.is_symlink() or (self.skills.exists() and not self.skills.is_dir()):
+            raise ValueError(f"library skills path must be a non-symlinked directory: {self.skills}")
+        if target.is_symlink():
+            resolved = target.resolve()
+            try:
+                resolved.relative_to(self.skills.resolve())
+            except ValueError as exc:
+                raise ValueError(f"library skill path escapes the library: {target}") from exc
+            raise ValueError(f"library skill path must not be a symlink alias: {target}")
+        if target.exists() and not target.is_dir():
+            raise ValueError(f"library skill path must be a directory: {target}")
         try:
-            target.relative_to(self.skills.resolve())
+            target.resolve().relative_to(self.skills.resolve())
         except ValueError as exc:  # Defensive guard if name validation changes.
             raise ValueError(f"library skill path escapes the library: {target}") from exc
         return target

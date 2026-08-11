@@ -183,8 +183,9 @@ def cmd_library_status(args: argparse.Namespace) -> int:
     if result["skill"] is not None:
         skill = result["skill"]
         print(f"Skill: {skill['id']}")
+        print(f"Skill status: {skill['status']}")
         print(f"Skill path: {skill['path']}")
-        print(f"Working hash: {skill['working_hash']}")
+        print(f"Working hash: {skill['working_hash'] or '-'}")
         print(f"Accepted hash: {skill['accepted_hash'] or '-'}")
         print(f"HEAD hash: {skill['head_hash'] or '-'}")
         print(f"Acceptance: {skill['acceptance']}")
@@ -392,7 +393,7 @@ def cmd_library_restore(args: argparse.Namespace) -> int:
         if preview["requires_override"] and not args.override_lint:
             print("Rerun the preview with --override-lint and a real --reason to continue.")
             return 0
-        response = input("Restore this exact historical tree as a new commit? [y/N] ").strip().lower()
+        response = input("Restore this exact historical tree? [y/N] ").strip().lower()
         if response not in {"y", "yes"}:
             print("Library restore cancelled; no files were changed.")
             return 1
@@ -406,7 +407,7 @@ def cmd_library_restore(args: argparse.Namespace) -> int:
         args.skill,
         expected_hash=str(version["content_hash"]),
         expected_commit=str(version["commit"]),
-        expected_current_hash=str(preview["current_hash"]),
+        expected_current_hash=preview["current_hash"],
         expected_current_fingerprint=str(preview["_current_tree_fingerprint"]),
         override_lint=args.override_lint,
         reason=args.reason,
@@ -440,7 +441,7 @@ def _print_acceptance_preview(preview: dict[str, Any]) -> None:
 def _print_restore_preview(preview: dict[str, Any]) -> None:
     version = preview["selected_version"]
     print(f"Library skill: {preview['skill']['id']}")
-    print(f"Current hash: {preview['current_hash']}")
+    print(f"Current hash: {preview['current_hash'] or 'missing'}")
     print(f"Restore hash: {version['content_hash']}")
     print(f"Historical commit: {version['commit']}")
     print(f"Scanner risk: {preview['scan']['risk']}")

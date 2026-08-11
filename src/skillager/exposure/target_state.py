@@ -6,12 +6,15 @@ import stat
 from pathlib import Path
 from typing import Any, Iterator
 
+from ..simple_yaml import dumps
 from ..skills.tree import iter_content_files
 from ..trust import content_hash
 
 
 MATERIALIZED_SIDECAR = "skillager.materialized.yaml"
+MATERIALIZED_SIDECAR_HASH = "materialized_sidecar_hash"
 TARGET_STATE_SCHEMA = "skillager.exposure-target-state.v1"
+SIDECAR_STATE_SCHEMA = "skillager.exposure-sidecar-state.v1"
 
 
 def target_state_hash(root: Path, *, include_sidecar: bool = True) -> str:
@@ -59,6 +62,22 @@ def matches_materialized_target(root: Path, sidecar: dict[str, Any]) -> bool:
     """Return whether all locally materialized target entries remain unchanged."""
 
     expected_target_hash = sidecar.get("materialized_target_hash")
+    expected_sidecar_hash = sidecar.get(MATERIALIZED_SIDECAR_HASH)
+    if expected_sidecar_hash is not None:
+        if not isinstance(expected_sidecar_hash, str):
+            return False
+        if expected_sidecar_hash != materialized_sidecar_hash(sidecar):
+            return False
+        try:
+            if (root / MATERIALIZED_SIDECAR).read_text(encoding="utf-8") != dumps(sidecar):
+                return False
+        except (OSError, UnicodeError):
+            return False
+    elif expected_target_hash is not None:
+        # Sidecars with the full target-state field were created by the hardened
+        # materializer and must authenticate their own metadata as well. Treat an
+        # intermediate pre-integrity sidecar conservatively as local customization.
+        return False
     if isinstance(expected_target_hash, str):
         try:
             return target_state_hash(root, include_sidecar=False) == expected_target_hash
@@ -79,6 +98,28 @@ def matches_materialized_target(root: Path, sidecar: dict[str, Any]) -> bool:
         return not _legacy_target_has_untracked_entries(root)
     except OSError:
         return False
+
+
+def materialized_sidecar_hash(sidecar: dict[str, Any]) -> str:
+    """Hash a deterministic sidecar payload, excluding its self-authentication field."""
+
+    payload = dict(sidecar)
+    payload.pop(MATERIALIZED_SIDECAR_HASH, None)
+    encoded = dumps(payload).encode("utf-8")
+    digest = hashlib.sha256()
+    digest.update(SIDECAR_STATE_SCHEMA.encode("ascii"))
+    digest.update(b"\0")
+    digest.update(len(encoded).to_bytes(8, "big"))
+    digest.update(encoded)
+    return digest.hexdigest()
+
+
+def write_materialized_sidecar(path: Path, sidecar: dict[str, Any]) -> None:
+    """Write canonical managed metadata with a self-authenticating payload hash."""
+
+    payload = dict(sidecar)
+    payload[MATERIALIZED_SIDECAR_HASH] = materialized_sidecar_hash(payload)
+    path.write_text(dumps(payload), encoding="utf-8")
 
 
 def target_has_entries(target: Path) -> bool:
@@ -136,8 +177,12 @@ def _walk_entries(root: Path) -> Iterator[tuple[str, Path, os.stat_result]]:
 
 __all__ = [
     "MATERIALIZED_SIDECAR",
+    "MATERIALIZED_SIDECAR_HASH",
+    "SIDECAR_STATE_SCHEMA",
     "TARGET_STATE_SCHEMA",
+    "materialized_sidecar_hash",
     "matches_materialized_target",
     "target_has_entries",
     "target_state_hash",
+    "write_materialized_sidecar",
 ]

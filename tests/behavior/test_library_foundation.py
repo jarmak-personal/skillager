@@ -60,6 +60,39 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             self.assertEqual(repeated.json()["library"]["library_id"], identity["library_id"])
             self.assertEqual(status.json()["status"], "ready")
 
+    @unittest.skipUnless(hasattr(Path, "symlink_to"), "symlinks unavailable")
+    def test_new_refuses_internal_and_escaping_skill_symlink_aliases_without_writing_drafts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "owned-skills"
+            self.assertEqual(
+                cli.run("library", "init", "--path", str(library), "--no-git").code,
+                0,
+            )
+
+            internal_target = library / "skills" / "internal-target"
+            internal_alias = library / "skills" / "internal-alias"
+            internal_alias.symlink_to(internal_target, target_is_directory=True)
+            refused_internal = cli.run("library", "new", "internal-alias")
+
+            self.assertEqual(refused_internal.code, 2)
+            self.assertIn("must not be a symlink alias", refused_internal.stderr)
+            self.assertFalse(internal_target.exists())
+
+            outside_target = root / "outside-draft"
+            outside_alias = library / "skills" / "outside-alias"
+            outside_alias.symlink_to(outside_target, target_is_directory=True)
+            refused_outside = cli.run("library", "new", "outside-alias")
+
+            self.assertEqual(refused_outside.code, 2)
+            self.assertIn("escapes the library", refused_outside.stderr)
+            self.assertFalse(outside_target.exists())
+            self.assertEqual(
+                sorted(path.name for path in (library / "skills").iterdir()),
+                [".gitkeep", "internal-alias", "outside-alias"],
+            )
+
     @unittest.skipUnless(shutil.which("git"), "system Git is required")
     def test_default_init_creates_clean_commit_with_command_scoped_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

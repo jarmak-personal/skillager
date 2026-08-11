@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,6 +44,144 @@ class ExposureHardeningBehaviorTests(unittest.TestCase):
             self.assert_code(stub, 0)
             self.assertEqual(stub.json()[0]["status"], "exposed")
             self.assertTrue((project / ".agents" / "skills" / "project-plain-external" / "SKILL.md").is_file())
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks unavailable")
+    def test_all_project_projection_kinds_refuse_symlinked_agent_skill_base(self) -> None:
+        operations = {
+            "native": ("expose", "project/member", "--mode", "native", "--agent", "codex", "--json"),
+            "stub": ("expose", "project/member", "--mode", "stub", "--agent", "codex", "--json"),
+            "router": ("expose", "--tag", "unsafe", "--mode", "router", "--agent", "codex", "--json"),
+            "working": (
+                "setup",
+                "--source",
+                "project",
+                "--accept-low",
+                "--no-packages",
+                "--non-interactive",
+                "--agent",
+                "codex",
+                "--json",
+            ),
+        }
+        for projection_kind, args in operations.items():
+            with self.subTest(projection_kind=projection_kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project, cli = make_basic_workspace(root)
+                self._write_skill(project / ".skills" / "member", "Unsafe projection member")
+                self.assert_code(
+                    cli.run(
+                        "setup",
+                        "--source",
+                        "project",
+                        "--accept-low",
+                        "--no-packages",
+                        "--non-interactive",
+                        "--json",
+                    ),
+                    0,
+                )
+                self.assert_code(cli.run("tag", "create", "unsafe"), 0)
+                self.assert_code(cli.run("tag", "add", "unsafe", "project/member"), 0)
+                outside = root / "outside-agent-skills"
+                outside.mkdir()
+                (project / ".agents").mkdir()
+                (project / ".agents" / "skills").symlink_to(outside, target_is_directory=True)
+
+                refused = cli.run(*args)
+
+                self.assert_code(refused, 2)
+                self.assertIn("project agent skill base must be a non-symlinked directory", refused.stderr)
+                self.assertEqual(list(outside.iterdir()), [])
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symlinks unavailable")
+    def test_project_projection_refuses_external_symlinked_ancestor_and_non_directory_base(self) -> None:
+        for unsafe_layout in ("external-ancestor", "non-directory-base"):
+            with self.subTest(unsafe_layout=unsafe_layout), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project, cli = make_basic_workspace(root)
+                self._write_skill(project / ".skills" / "member", "Unsafe projection member")
+                self.assert_code(
+                    cli.run(
+                        "setup",
+                        "--source",
+                        "project",
+                        "--accept-low",
+                        "--no-packages",
+                        "--non-interactive",
+                        "--json",
+                    ),
+                    0,
+                )
+                if unsafe_layout == "external-ancestor":
+                    outside = root / "outside-agent-root"
+                    outside.mkdir()
+                    (project / ".agents").symlink_to(outside, target_is_directory=True)
+                else:
+                    outside = None
+                    (project / ".agents").mkdir()
+                    (project / ".agents" / "skills").write_text("not a directory\n", encoding="utf-8")
+
+                refused = cli.run(
+                    "expose",
+                    "project/member",
+                    "--mode",
+                    "stub",
+                    "--agent",
+                    "codex",
+                    "--json",
+                )
+
+                self.assert_code(refused, 2)
+                if unsafe_layout == "external-ancestor":
+                    self.assertIn("outside the project through a symlinked ancestor", refused.stderr)
+                    assert outside is not None
+                    self.assertEqual(list(outside.iterdir()), [])
+                else:
+                    self.assertIn("project agent skill base must be a directory", refused.stderr)
+                    self.assertEqual(
+                        (project / ".agents" / "skills").read_text(encoding="utf-8"),
+                        "not a directory\n",
+                    )
+
+    def test_project_native_exposure_preserves_valid_legacy_agent_roots(self) -> None:
+        cases = (
+            ("codex", Path(".agents/codex/skills")),
+            ("codex", Path(".codex/skills")),
+            ("claude", Path(".agents/claude/skills")),
+        )
+        for agent, relative_base in cases:
+            with self.subTest(agent=agent, relative_base=relative_base), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                project, cli = make_basic_workspace(root)
+                native = project / relative_base / "legacy-native"
+                self._write_skill(native, "Legacy native member")
+                self.assert_code(
+                    cli.run(
+                        "setup",
+                        "--source",
+                        "project",
+                        "--accept-low",
+                        "--no-packages",
+                        "--non-interactive",
+                        "--json",
+                    ),
+                    0,
+                )
+
+                exposed = cli.run(
+                    "expose",
+                    "project/legacy-native",
+                    "--mode",
+                    "native",
+                    "--agent",
+                    agent,
+                    "--json",
+                )
+
+                self.assert_code(exposed, 0)
+                self.assertEqual(exposed.json()[0]["status"], "already_native")
+                self.assertEqual(Path(exposed.json()[0]["target"]).resolve(), native.resolve())
+                self.assertFalse((project / ".agents" / "skills" / "project-legacy-native").exists())
 
     def test_native_and_stub_slug_collisions_allocate_distinct_targets(self) -> None:
         for mode in ("native", "stub"):

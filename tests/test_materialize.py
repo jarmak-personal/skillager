@@ -12,6 +12,7 @@ from unittest.mock import patch
 from support import chdir
 from skillager.cli import _print_expose_results, build_parser, main
 from skillager.index import build_index, load_index
+from skillager.library.confirmation import require_confirmation_token
 from skillager.materialize import materialize_skills, target_dir
 from skillager.exposure.impl import materialize_one
 from skillager.simple_yaml import load_mapping
@@ -647,6 +648,117 @@ class SkillagerMaterializeTests(unittest.TestCase):
                     self.assertFalse(forced["requires_force"])
                     self.assertEqual(main(forced["next_command_argv"][1:]), 0)
                     self.assertFalse(target.exists())
+
+    def test_managed_sidecar_edit_requires_force_for_refresh_or_removal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                native_skill_text("demo", "Demo Skill", "Use project guidance."),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                    self.assertEqual(main(["expose", "project/demo", "--agent", "codex"]), 0)
+                target = root / ".agents" / "skills" / "project-demo"
+                sidecar = target / "skillager.materialized.yaml"
+                sidecar.write_text(
+                    sidecar.read_text(encoding="utf-8") + "user_note: preserve this local decision\n",
+                    encoding="utf-8",
+                )
+
+                listed_output = StringIO()
+                with redirect_stdout(listed_output):
+                    self.assertEqual(main(["expose", "--list", "--agent", "codex", "--json"]), 0)
+                listed = json.loads(listed_output.getvalue())["exposures"][0]
+                self.assertEqual(listed["status"], "local_edit")
+
+                refresh_output = StringIO()
+                with redirect_stdout(refresh_output):
+                    self.assertEqual(main(["expose", "project/demo", "--agent", "codex", "--json"]), 0)
+                refreshed = json.loads(refresh_output.getvalue())[0]
+                self.assertEqual(refreshed["status"], "skipped")
+                self.assertIn("local edits", refreshed["reason"])
+                self.assertIn("user_note", sidecar.read_text(encoding="utf-8"))
+
+                removal_output = StringIO()
+                with redirect_stdout(removal_output):
+                    self.assertEqual(main(["expose", "--remove", "project-demo", "--agent", "codex", "--json"]), 0)
+                removal = json.loads(removal_output.getvalue())["results"][0]
+                self.assertTrue(removal["local_changes"])
+                self.assertTrue(removal["requires_force"])
+                self.assertNotIn("next_command_argv", removal)
+                self.assertTrue(target.exists())
+
+    def test_expose_remove_restores_target_changed_after_confirmation_before_detach(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                native_skill_text("demo", "Demo Skill", "Use project guidance."),
+                encoding="utf-8",
+            )
+            with (
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                    self.assertEqual(main(["expose", "project/demo", "--agent", "codex"]), 0)
+                target = root / ".agents" / "skills" / "project-demo"
+                local = target / "late-local.txt"
+                local.write_text("previewed state\n", encoding="utf-8")
+
+                preview_output = StringIO()
+                with redirect_stdout(preview_output):
+                    self.assertEqual(
+                        main(["expose", "--remove", "project-demo", "--agent", "codex", "--force", "--json"]),
+                        0,
+                    )
+                command = json.loads(preview_output.getvalue())["results"][0]["next_command_argv"]
+
+                raced = False
+
+                def race_after_confirmation(
+                    supplied_token: str | None,
+                    expected_token: str,
+                    *,
+                    operation: str,
+                ) -> None:
+                    nonlocal raced
+                    require_confirmation_token(
+                        supplied_token,
+                        expected_token,
+                        operation=operation,
+                    )
+                    raced = True
+                    local.write_text("changed during confirmation\n", encoding="utf-8")
+
+                error = StringIO()
+                with (
+                    redirect_stderr(error),
+                    patch(
+                        "skillager.commands.impl.require_confirmation_token",
+                        side_effect=race_after_confirmation,
+                    ),
+                ):
+                    self.assertEqual(main(command[1:]), 2)
+                self.assertTrue(raced)
+                self.assertIn("changed during removal", error.getvalue())
+                self.assertEqual(local.read_text(encoding="utf-8"), "changed during confirmation\n")
+                self.assertFalse(any(target.parent.glob(f".{target.name}.skillager-remove-*")))
 
     def test_materialize_stub_writes_tiny_activation_handle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

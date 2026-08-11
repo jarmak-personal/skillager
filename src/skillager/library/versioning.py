@@ -20,6 +20,7 @@ from .git import (
     commit_paths,
     git_path_history,
     git_tree_files,
+    head_content_hash,
     repository_status,
 )
 from .model import LIBRARY_NAMESPACE, normalize_skill_name
@@ -152,7 +153,7 @@ def library_restore_preview(
     version = resolve_history_version(history["versions"], to_hash)
     name = normalize_skill_name(skill_name)
     target = registration.layout.skill_root(name)
-    require_canonical_content_tree(target, action="library restore")
+    _require_restore_target(target)
     endpoint = _historical_endpoint(registration.layout.root, target, version)
     with tempfile.TemporaryDirectory(prefix="skillager-restore-preview-", dir=registration.layout.root.parent) as tmp:
         candidate = Path(tmp) / name
@@ -162,7 +163,7 @@ def library_restore_preview(
             raise ValueError("historical candidate does not reproduce its verified Skillager content hash")
         lint = _compact_lint(entry.get("lint"))
         scan = _compact_scan(entry.get("scan"))
-    current = _working_endpoint(target, str(history["skill"]["working_hash"]))
+    current = _working_endpoint(target, history["skill"]["working_hash"])
     already_current = current.content_hash == version["content_hash"]
     return {
         "schema": LIBRARY_RESTORE_SCHEMA,
@@ -184,7 +185,7 @@ def restore_library_skill(
     *,
     expected_hash: str,
     expected_commit: str,
-    expected_current_hash: str,
+    expected_current_hash: str | None,
     expected_current_fingerprint: str,
     override_lint: bool = False,
     reason: str | None = None,
@@ -205,7 +206,7 @@ def restore_library_skill(
         if current["working_hash"] == expected_hash:
             raise ValueError("library skill already matches the selected historical version")
         target = registration.layout.skill_root(name)
-        require_canonical_content_tree(target, action="library restore")
+        _require_restore_target(target)
         current_endpoint = _working_endpoint(target, expected_current_hash)
         if _tree_fingerprint(current_endpoint.files) != expected_current_fingerprint:
             raise ValueError("library skill tree changed since restore preview; review it again")
@@ -232,28 +233,36 @@ def restore_library_skill(
                 override_lint=override_lint,
                 reason=reason,
             )
-            require_canonical_content_tree(target, action="library restore")
+            target = registration.layout.skill_root(name)
+            _require_restore_target(target)
             final_current = _working_endpoint(target, expected_current_hash)
             if _tree_fingerprint(final_current.files) != expected_current_fingerprint:
                 raise ValueError("library skill changed while restore was being prepared; no files were written")
-            os.replace(target, backup)
-            try:
+            if final_current.kind == "missing":
+                if target.exists() or target.is_symlink():
+                    raise ValueError("library restore target is no longer missing; review the restore again")
                 os.replace(candidate, target)
-            except Exception:
-                os.replace(backup, target)
-                raise
+            else:
+                os.replace(target, backup)
+                try:
+                    os.replace(candidate, target)
+                except Exception:
+                    os.replace(backup, target)
+                    raise
 
-        try:
-            commit = commit_paths(
-                registration.layout.root,
-                [target],
-                f"Restore library skill {name} to {expected_hash[:12]}",
-            )
-        except LibraryGitError as exc:
-            raise ValueError(
-                f"{exc}; restored content remains pending. Fix Git, then run "
-                f"`skillager library accept lib/{name} --json` and execute its returned command"
-            ) from exc
+        commit = None
+        if head_content_hash(registration.layout.root, target) != expected_hash:
+            try:
+                commit = commit_paths(
+                    registration.layout.root,
+                    [target],
+                    f"Restore library skill {name} to {expected_hash[:12]}",
+                )
+            except LibraryGitError as exc:
+                raise ValueError(
+                    f"{exc}; restored content remains pending. Fix Git, then run "
+                    f"`skillager library accept lib/{name} --json` and execute its returned command"
+                ) from exc
         approval_key = approval_key_for(
             f"{LIBRARY_NAMESPACE}/{name}",
             target,
@@ -278,19 +287,25 @@ def restore_library_skill(
                 global_scope=True,
             )
         except Exception as exc:
+            restored_state = "committed" if commit is not None else "restored at existing Git HEAD"
             raise ValueError(
-                f"restored content is committed but pending acceptance: {exc}; repair with "
+                f"restored content is {restored_state} but pending acceptance: {exc}; repair with "
                 f"`skillager library accept lib/{name} --json` and execute its returned command"
             ) from exc
         refresh_collection(catalog_root, LIBRARY_NAMESPACE)
         where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
         restored_versions = _verified_history_versions(registration.layout.root, target, where)
+        restored_commit = (
+            commit.get("commit")
+            if isinstance(commit, dict)
+            else repository_status(registration.layout.root, mode=identity.git_mode).get("head")
+        )
         restored_version = next(
-            (item for item in restored_versions if item.get("commit") == commit.get("commit")),
+            (item for item in restored_versions if item.get("commit") == restored_commit),
             None,
         )
         if restored_version is None:
-            raise ValueError("restored content was committed but its new HEAD version could not be verified")
+            raise ValueError("restored content's Git HEAD version could not be verified")
         return {
             "schema": LIBRARY_RESTORE_SCHEMA,
             "status": "restored",
@@ -400,7 +415,13 @@ def _historical_endpoint(root: Path, target: Path, version: dict[str, Any]) -> _
     )
 
 
-def _working_endpoint(target: Path, expected_hash: str) -> _TreeEndpoint:
+def _working_endpoint(target: Path, expected_hash: str | None) -> _TreeEndpoint:
+    if target.is_symlink() or (target.exists() and not target.is_dir()):
+        raise ValueError(f"library skill path must be a non-symlinked directory: {target}")
+    if not target.exists():
+        if expected_hash is not None:
+            raise ValueError("library working tree changed during version inspection; retry the command")
+        return _TreeEndpoint(kind="missing", label="missing", content_hash=None, files=())
     files = tuple(
         GitTreeFile(
             path=path.relative_to(target.resolve()).as_posix(),
@@ -413,6 +434,13 @@ def _working_endpoint(target: Path, expected_hash: str) -> _TreeEndpoint:
     if digest != expected_hash:
         raise ValueError("library working tree changed during version inspection; retry the command")
     return _TreeEndpoint(kind="working", label="working", content_hash=digest, files=files)
+
+
+def _require_restore_target(target: Path) -> None:
+    if target.is_symlink() or (target.exists() and not target.is_dir()):
+        raise ValueError(f"library restore target must be a non-symlinked directory or missing: {target}")
+    if target.exists():
+        require_canonical_content_tree(target, action="library restore")
 
 
 def _files_content_hash(files: tuple[GitTreeFile, ...] | list[GitTreeFile]) -> str:

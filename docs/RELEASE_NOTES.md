@@ -12,7 +12,8 @@ Highlights:
   `lib/<name>` namespace, diagnose a missing registered path, and explicitly
   re-register the same UUID after the directory moves.
 - Create or explicitly import one skill, then accept only its exact scanned and linted
-  content hash, including normalized executable bits.
+  content hash. The version-2 hash is domain-separated and length-framed over canonical
+  paths, bytes, and normalized executable bits.
 - Inspect content-addressed history and diffs, and restore an old version as a new
   descendant commit.
 - Detect current-project exposure drift and accepted-source updates without writes,
@@ -26,8 +27,8 @@ Highlights:
 - Revalidate exact project and collection source hashes before readiness or searchable
   availability, including cached collections whose skill roots were added or removed.
 - Keep every managed projection kind in one collision-safe host namespace, require an
-  actual exposed router for guarded activation, and refuse repository tag-state
-  symlinks/non-files with locked atomic writes.
+  actual agent-bound exposed router for guarded activation, and refuse repository
+  tag-state or project exposure-base symlinks/non-files with locked atomic writes.
 - Bind non-interactive accept/import/restore commands to their exact previewed state
   and output mode, and never emit executable placeholder reasons.
 - Report paused or skipped interactive setup as incomplete; do not install Working,
@@ -43,8 +44,13 @@ Compatibility and migration:
 
 - Existing project, package, environment, native-agent, and collection discovery
   remains available; no source is automatically moved into the personal library.
-- Existing exposures and older sidecars remain readable; new sidecars keep exact
-  hashes and stable library identity without redundant ownership labels.
+- Version-2 content hashes intentionally do not reuse older ambiguous hash approvals.
+  On upgrade, review the newly computed hashes before activation or exposure. Saved
+  history hash prefixes must be refreshed from `library history`; no source is moved.
+- Older exposure sidecars remain discoverable but may be reported non-current after
+  the hash migration. New sidecars authenticate their own canonical metadata as well
+  as the complete projected target, so inspect and explicitly refresh an old clean
+  projection rather than silently trusting it.
 - New Codex user-scope exposures use `~/.agents/skills`; legacy `~/.codex/skills`
   remains discoverable and manageable without automatic migration.
 - A legacy ordinary collection named `lib` must be renamed or removed explicitly

@@ -18,6 +18,7 @@ from ..catalog.impl import (
     select_collection_skills,
 )
 from ..lint import blocking_findings
+from ..scan import scan_text
 from ..simple_yaml import load_mapping
 from ..skills.tree import require_canonical_content_tree
 from ..state.locking import resource_lock, resource_locks
@@ -656,6 +657,18 @@ def _skill_status(
     *,
     project_dir: Path | None,
 ) -> dict[str, Any]:
+    normalized = normalize_skill_name(value)
+    root = registration.layout.skill_root(normalized)
+    if not root.exists():
+        return _missing_skill_status(
+            catalog_root,
+            registration,
+            identity,
+            normalized,
+            root,
+            git,
+            project_dir=project_dir,
+        )
     skill = _library_skill_entry(catalog_root, value)
     root = Path(skill["root"])
     approval_key = _library_approval_key(skill)
@@ -678,7 +691,7 @@ def _skill_status(
     result = {
         "id": skill["id"],
         "name": skill.get("name") or skill["id"],
-        "summary": skill.get("summary"),
+        "summary": _safe_metadata_summary(skill.get("summary")),
         "path": str(root),
         "entrypoint": skill.get("entrypoint"),
         "status": state,
@@ -703,6 +716,60 @@ def _skill_status(
     if skill.get("imported_from"):
         result["imported_from"] = skill["imported_from"]
     return result
+
+
+def _missing_skill_status(
+    catalog_root: Path,
+    registration: LibraryRegistration,
+    identity: LibraryIdentity,
+    name: str,
+    root: Path,
+    git: dict[str, Any],
+    *,
+    project_dir: Path | None,
+) -> dict[str, Any]:
+    skill_id = f"{LIBRARY_NAMESPACE}/{name}"
+    approval_key = approval_key_for(
+        skill_id,
+        root,
+        {
+            "ownership": "library",
+            "library_id": registration.library_id,
+            "library_skill": name,
+        },
+        entrypoint=root / "SKILL.md",
+    )
+    approval = load_trust(catalog_root).get("global_approvals", {}).get(approval_key)
+    accepted_hash = approval.get("content_hash") if isinstance(approval, dict) else None
+    head_hash = (
+        head_content_hash(registration.layout.root, root)
+        if identity.git_mode == "system" and git.get("repository")
+        else None
+    )
+    if not isinstance(accepted_hash, str) and head_hash is None:
+        raise ValueError(f"library skill not found: {skill_id}")
+    git_paths = (
+        path_changes(git, registration.layout.root, root)
+        if identity.git_mode == "system"
+        else _empty_path_changes()
+    )
+    return {
+        "id": skill_id,
+        "name": skill_id,
+        "summary": None,
+        "path": str(root),
+        "entrypoint": str(root / "SKILL.md"),
+        "status": "missing",
+        "acceptance": "missing",
+        "working_hash": None,
+        "accepted_hash": accepted_hash,
+        "head_hash": head_hash,
+        "lint": _compact_lint(None),
+        "scan": _compact_scan(None),
+        "git": git_paths,
+        "history": _history_availability(identity, git, registration.layout),
+        "exposures": _library_exposures(project_dir, skill_id, current_approved_hash=None),
+    }
 
 
 def _history_availability(
@@ -788,7 +855,7 @@ def _compact_library_skill(skill: dict[str, Any]) -> dict[str, Any]:
     result = {
         "id": skill.get("id"),
         "name": skill.get("name"),
-        "summary": skill.get("summary"),
+        "summary": _safe_metadata_summary(skill.get("summary")),
         "path": skill.get("root"),
         "skill_file": skill.get("entrypoint"),
         "working_hash": skill.get("content_hash"),
@@ -814,7 +881,7 @@ def _compact_lint(lint: dict[str, Any] | None) -> dict[str, Any]:
 
 def _compact_scan(scan: dict[str, Any] | None) -> dict[str, Any]:
     scan = scan or {"risk": "unknown", "findings": []}
-    return {
+    result = {
         "risk": scan.get("risk", "unknown"),
         "finding_count": len(scan.get("findings", [])),
         "findings": [
@@ -823,6 +890,18 @@ def _compact_scan(scan: dict[str, Any] | None) -> dict[str, Any]:
             if isinstance(item, dict)
         ],
     }
+    for key in ("scanned_files", "skipped_files"):
+        if isinstance(scan.get(key), int):
+            result[key] = scan[key]
+    return result
+
+
+def _safe_metadata_summary(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    if scan_text(value, path="summary", allow_tools=False).get("findings"):
+        return None
+    return value
 
 
 def _acceptance_overrides(

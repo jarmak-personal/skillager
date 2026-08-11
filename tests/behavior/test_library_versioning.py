@@ -262,6 +262,88 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             self.assertEqual(working.json()["exposure_changes"]["source_updates"], 1)
             self.assertEqual(working.json()["inventory"]["exposed_now"], 0)
 
+    def test_deleted_accepted_skill_can_be_inspected_and_restored_from_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli, library = self.workspace(root)
+            self.assert_code(cli.run("library", "new", "recoverable"), 0)
+            skill = library / "skills" / "recoverable"
+            skill_file = skill / "SKILL.md"
+            skill_file.write_text(self.body("Recoverable", FIRST_BODY), encoding="utf-8")
+            accepted = cli.run_confirmed("library", "accept", "recoverable", "--yes", "--json")
+            self.assert_code(accepted, 0)
+            accepted_hash = accepted.json()["skill"]["working_hash"]
+            shutil.rmtree(skill)
+
+            status = cli.run("library", "status", "lib/recoverable", "--json")
+            self.assert_code(status, 0)
+            self.assertNotIn(FIRST_BODY, status.stdout)
+            missing = status.json()["skill"]
+            self.assertEqual(missing["id"], "lib/recoverable")
+            self.assertEqual(missing["path"], str(skill.resolve()))
+            self.assertEqual(missing["status"], "missing")
+            self.assertEqual(missing["acceptance"], "missing")
+            self.assertIsNone(missing["working_hash"])
+            self.assertEqual(missing["accepted_hash"], accepted_hash)
+            self.assertEqual(missing["head_hash"], accepted_hash)
+            plain_status = cli.run("library", "status", "recoverable")
+            self.assert_code(plain_status, 0)
+            self.assertIn("Skill status: missing", plain_status.stdout)
+            self.assertIn("Working hash: -", plain_status.stdout)
+
+            history = cli.run("library", "history", "recoverable", "--json")
+            self.assert_code(history, 0)
+            self.assertNotIn(FIRST_BODY, history.stdout)
+            self.assertTrue(history.json()["available"])
+            version = history.json()["versions"][0]
+            self.assertEqual(version["content_hash"], accepted_hash)
+            self.assertTrue(version["head"])
+            self.assertTrue(version["accepted"])
+            self.assertFalse(version["current"])
+
+            preview = cli.run("library", "restore", "recoverable", "--to", accepted_hash[:12], "--json")
+            self.assert_code(preview, 0)
+            self.assertNotIn(FIRST_BODY, preview.stdout)
+            self.assertEqual(preview.json()["status"], "preview")
+            self.assertIsNone(preview.json()["current_hash"])
+            self.assertEqual(preview.json()["stat"]["files"][0]["status"], "added")
+            restore_command = preview.json()["next_command_argv"][1:]
+            plain_preview = cli.run("library", "restore", "recoverable", "--to", accepted_hash[:12])
+            self.assert_code(plain_preview, 0)
+            self.assertIn("Current hash: missing", plain_preview.stdout)
+
+            skill.write_text("must not be overwritten\n", encoding="utf-8")
+            stale = cli.run(*restore_command)
+            self.assert_code(stale, 2)
+            self.assertIn("must be a directory", stale.stderr)
+            self.assertEqual(skill.read_text(encoding="utf-8"), "must not be overwritten\n")
+            skill.unlink()
+
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "marker").write_text("preserve me\n", encoding="utf-8")
+            skill.symlink_to(outside, target_is_directory=True)
+            unsafe = cli.run("library", "restore", "recoverable", "--to", accepted_hash[:12], "--json")
+            self.assert_code(unsafe, 2)
+            self.assertIn("escapes the library", unsafe.stderr)
+            self.assertEqual((outside / "marker").read_text(encoding="utf-8"), "preserve me\n")
+            skill.unlink()
+
+            restored = cli.run(*restore_command)
+            self.assert_code(restored, 0)
+            self.assertNotIn(FIRST_BODY, restored.stdout)
+            result = restored.json()
+            self.assertEqual(result["status"], "restored")
+            self.assertIsNone(result["commit"])
+            self.assertEqual(result["skill"]["status"], "clean")
+            self.assertEqual(result["skill"]["acceptance"], "accepted")
+            self.assertEqual(result["skill"]["working_hash"], accepted_hash)
+            self.assertEqual(result["skill"]["accepted_hash"], accepted_hash)
+            self.assertTrue(result["restored_version"]["current"])
+            self.assertTrue(result["restored_version"]["accepted"])
+            self.assertEqual(skill_file.read_text(encoding="utf-8"), self.body("Recoverable", FIRST_BODY))
+            self.assertEqual(self.git(library, cli.env, "status", "--porcelain").stdout, "")
+
     def test_no_git_conflicts_and_historical_symlinks_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -274,6 +356,15 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             self.assert_code(history, 0)
             self.assertFalse(history.json()["available"])
             self.assertEqual(history.json()["reason"], "no-git")
+            shutil.rmtree(no_git / "skills" / "plain")
+            missing = cli.run("library", "status", "plain", "--json")
+            self.assert_code(missing, 0)
+            self.assertEqual(missing.json()["skill"]["status"], "missing")
+            self.assertIsNone(missing.json()["skill"]["working_hash"])
+            deleted_history = cli.run("library", "history", "plain", "--json")
+            self.assert_code(deleted_history, 0)
+            self.assertFalse(deleted_history.json()["available"])
+            self.assertEqual(deleted_history.json()["reason"], "no-git")
             for refused in (
                 cli.run("library", "diff", "plain", "--stat"),
                 cli.run("library", "restore", "plain", "--to", "deadbeef", "--yes"),

@@ -1,7 +1,7 @@
 # Personal Library Hardening Tracker
 
-Status: closure candidate; clean repeat setup completed, with its final redundant-router
-suggestion fixed and awaiting verification against the final committed candidate
+Status: active final closure; clean repeat setup and final persona reviews completed,
+late integrity findings fixed, awaiting release checks and one final committed workflow
 Source: three review passes by agentic-power-user, senior-engineer/maintainer, and
 skeptical security-reader personas, followed by three corrective worktrees through the
 current branch
@@ -71,6 +71,21 @@ home in normal product documentation.
 - [x] Do not classify supported `.skillager/tags.json` and its exact regular lock
   artifact as obsolete in-tree state. Preserve the readiness gate for true legacy or
   unexpected entries.
+- [x] Make canonical content identity unambiguous. Version-2 hashes domain-separate and
+  length-frame canonical paths, payloads, file boundaries, and executable state;
+  ambiguous legacy approvals fail closed to one-time review.
+- [x] Refuse project exposure through symlinked/non-directory agent skill bases or
+  outside-project ancestors before lock or target creation, for every projection kind.
+- [x] Refuse internal and escaping library skill symlink aliases before `library new`
+  writes a draft; a failed command must not mutate the alias destination.
+- [x] Suppress scanner-triggering derived descriptions on compact library metadata
+  surfaces, not only matched scanner finding messages.
+- [x] Authenticate canonical sidecar metadata and classify any raw sidecar field or
+  formatting edit as local customization requiring explicit force.
+- [x] Bind router activation to one agent's actual managed exposure and refuse
+  disagreeing same-slug sidecars rather than unioning their memberships.
+- [x] Close the removal confirmation race by atomically detaching and re-hashing the
+  confirmed target before deletion, restoring and refusing a changed snapshot.
 
 ## P1 — Readiness And Exposure Correctness
 
@@ -109,6 +124,12 @@ home in normal product documentation.
   installation prompt when the selected artifact is already current.
 - [x] Suppress setup router suggestions when that tag's exact approved membership is
   already exposed through a current, unmodified router for the selected agent.
+- [x] Build native, stub, router, and Working projection refreshes as verified
+  same-filesystem candidates with rollback on ordinary write/install/verification
+  failure.
+- [x] Keep accepted Git-backed skill history and restore available when its live
+  canonical directory is accidentally missing, without adding delete lifecycle or an
+  empty recovery commit.
 
 ## P2 — CLI And Documentation Consistency
 
@@ -129,6 +150,10 @@ home in normal product documentation.
 - [x] Keep import destination identity stable across preview/result (`id`, slug/name,
   and retained frontmatter display name are distinct) and make restore receipts report
   post-restore accepted/current/head truth.
+- [x] Use the actual `skillager-<tag>` router slug in the primary README activation
+  example and bind the example to its agent.
+- [x] Document the fail-closed version-2 hash/sidecar migration instead of promising
+  that older approvals or projections remain silently current.
 
 ## Product Decisions — Track, Do Not Smuggle Into Hardening
 
@@ -201,6 +226,24 @@ home in normal product documentation.
   for current Working.
 - [x] A current router is not offered again by repeated setup; source, membership, or
   local target drift keeps the explicit re-exposure path discoverable.
+- [x] Executable-marker bytes and shifted file boundaries cannot collide with canonical
+  hashes; directory and reconstructed Git-tree hashes still agree.
+- [x] Project projection roots that are symlinks/non-directories create no outside
+  files; valid legacy in-project native roots remain usable.
+- [x] Internal/escaping library draft aliases fail before either alias target receives
+  a `SKILL.md`.
+- [x] Scanner-triggering frontmatter descriptions remain absent from status, accept,
+  import, restore preview, and restore receipt metadata; scan coverage counts survive.
+- [x] Editing only a managed sidecar produces `local_edit`, blocks ordinary refresh,
+  and requires a force removal preview.
+- [x] Codex and Claude same-slug routers authorize only their own member sets; an
+  unspecified multi-agent slug fails as ambiguous.
+- [x] A target changed after removal confirmation is restored and refused after the
+  atomic detach/re-hash step.
+- [x] Stub, router, and Working refresh failure injection at candidate write, install,
+  and final verification preserves the prior clean target.
+- [x] Deleting an accepted Git-backed skill leaves body-safe status/history available;
+  restore recovers it as accepted/current and refuses a newly occupied or symlink target.
 
 ## Fresh User Workflow Result
 
@@ -232,8 +275,22 @@ Working remained ready with 4 routed choices and 30 on demand.
 That clean rerun revealed one smaller inconsistency: repeat setup printed an exposure
 suggestion for the already-current router. The final corrective change suppresses only
 an exact, target-current router; stale membership, source hashes, or local target drift
-remain actionable. Closure still requires the release checks and one isolated workflow
-pass against the final commit containing that correction.
+remain actionable.
+
+A third no-context worker ran committed checkout `7208f2b` after that correction. It
+again discovered all 49 live manifest-free skills without retry, resolved every review
+decision (47 approved, 2 blocked), stayed ready, curated an eight-member
+`vibespatial-gis-python` router, and completed repeated setup non-interactively. The
+supported project tag state remained in place; all collection/block/exposure counts
+were retained; Working was current; and the existing router was not suggested again.
+
+The final maintainer and skeptical-product reviews then found late integrity issues in
+hash framing, project/library symlink boundaries, compact frontmatter summaries,
+sidecar edits, concurrent removal, and cross-agent router authorization. Those are now
+regression-covered along with the two strongest recovery follow-ups (atomic projection
+refresh and missing accepted-skill restore). Because these fixes postdate `7208f2b`,
+closure still requires the release checks and one isolated workflow pass against their
+final commit.
 
 Search results still include some weak low-score matches. That remains a separate
 discovery-ranking opportunity, not evidence for adding lifecycle surface or weakening

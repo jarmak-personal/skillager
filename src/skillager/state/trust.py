@@ -16,34 +16,46 @@ from ..statefiles import mutate_user_json, read_user_json, write_user_json
 
 APPROVED_TRUST_STATES = {"reviewed", "trusted", "pinned"}
 PRESERVED_BLOCK_APPROVAL_KEY = "previous_approval"
+_CONTENT_FILE_HASH_DOMAIN = b"skillager-content-hash\0file\0v2\0"
+_CONTENT_TREE_HASH_DOMAIN = b"skillager-content-hash\0tree\0v2\0"
+_HASH_LENGTH_BYTES = 8
 
 
 def content_hash(path: Path) -> str:
-    digest = hashlib.sha256()
     path = path.resolve()
     if path.is_dir():
+        digest = hashlib.sha256()
+        digest.update(_CONTENT_TREE_HASH_DOMAIN)
         for file_path in _hashable_files(path):
             relative = file_path.relative_to(path).as_posix()
-            digest.update(relative.encode("utf-8"))
-            digest.update(b"\0")
-            if file_path.stat(follow_symlinks=False).st_mode & 0o111:
-                digest.update(b"executable\0")
+            executable = bool(file_path.stat(follow_symlinks=False).st_mode & 0o111)
             with file_path.open("rb") as handle:
-                for chunk in iter(lambda: handle.read(65536), b""):
-                    digest.update(chunk)
-            digest.update(b"\0")
+                payload_size = file_path.stat(follow_symlinks=False).st_size
+                _update_tree_entry_header(digest, relative, executable, payload_size)
+                bytes_read = _update_stream(digest, handle)
+            if bytes_read != payload_size:
+                raise OSError(f"content changed while hashing: {file_path}")
         return digest.hexdigest()
+
+    digest = hashlib.sha256()
+    digest.update(_CONTENT_FILE_HASH_DOMAIN)
+    executable = bool(path.stat(follow_symlinks=False).st_mode & 0o111)
+    digest.update(b"\x01" if executable else b"\x00")
     with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            digest.update(chunk)
+        payload_size = path.stat(follow_symlinks=False).st_size
+        _update_length(digest, payload_size)
+        bytes_read = _update_stream(digest, handle)
+    if bytes_read != payload_size:
+        raise OSError(f"content changed while hashing: {path}")
     return digest.hexdigest()
 
 
 def content_hash_entries(entries: Iterable[tuple[str, bytes] | tuple[str, bytes, bool | str]]) -> str:
     """Hash an in-memory tree with the same public identity as ``content_hash``."""
 
-    digest = hashlib.sha256()
-    for entry in sorted(entries, key=lambda item: item[0]):
+    canonical_entries: list[tuple[str, bytes, bool]] = []
+    seen: set[str] = set()
+    for entry in entries:
         relative, payload = entry[:2]
         mode = entry[2] if len(entry) == 3 else False
         executable = mode is True or mode == "100755"
@@ -53,13 +65,46 @@ def content_hash_entries(entries: Iterable[tuple[str, bytes] | tuple[str, bytes,
         if content_path_excluded(relative_path):
             continue
         canonical = relative_path.as_posix()
-        digest.update(canonical.encode("utf-8"))
-        digest.update(b"\0")
-        if executable:
-            digest.update(b"executable\0")
+        if canonical in seen:
+            raise ValueError(f"content hash entries contain a duplicate canonical path: {canonical}")
+        seen.add(canonical)
+        canonical_entries.append((canonical, payload, executable))
+
+    digest = hashlib.sha256()
+    digest.update(_CONTENT_TREE_HASH_DOMAIN)
+    for canonical, payload, executable in sorted(canonical_entries, key=lambda item: item[0]):
+        _update_tree_entry_header(digest, canonical, executable, len(payload))
         digest.update(payload)
-        digest.update(b"\0")
     return digest.hexdigest()
+
+
+def _update_tree_entry_header(
+    digest: Any,
+    relative: str,
+    executable: bool,
+    payload_size: int,
+) -> None:
+    digest.update(b"\x01")
+    _update_framed_bytes(digest, relative.encode("utf-8", errors="surrogateescape"))
+    digest.update(b"\x01" if executable else b"\x00")
+    _update_length(digest, payload_size)
+
+
+def _update_framed_bytes(digest: Any, value: bytes) -> None:
+    _update_length(digest, len(value))
+    digest.update(value)
+
+
+def _update_length(digest: Any, value: int) -> None:
+    digest.update(value.to_bytes(_HASH_LENGTH_BYTES, "big"))
+
+
+def _update_stream(digest: Any, handle: Any) -> int:
+    total = 0
+    for chunk in iter(lambda: handle.read(65536), b""):
+        digest.update(chunk)
+        total += len(chunk)
+    return total
 
 
 def _hashable_files(root: Path) -> list[Path]:

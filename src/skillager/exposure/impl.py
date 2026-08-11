@@ -10,11 +10,16 @@ from pathlib import Path
 from typing import Any
 
 from ..compatibility import compatibility_problem, compatibility_warnings
-from ..simple_yaml import dumps, load_mapping, loads
+from ..simple_yaml import load_mapping, loads
 from ..skills.tree import content_tree_fingerprint, iter_content_files
 from ..state.locking import resource_lock
 from ..trust import content_hash, content_hash_entries
-from .target_state import matches_materialized_target, target_has_entries, target_state_hash
+from .target_state import (
+    matches_materialized_target,
+    target_has_entries,
+    target_state_hash,
+    write_materialized_sidecar,
+)
 
 MATERIALIZED_SCHEMA = "skillager.materialized.v1"
 TRUSTED_STATES = {"reviewed", "trusted", "pinned"}
@@ -265,6 +270,7 @@ def materialize_working_skill_one(
         target,
         projection_identity,
         dry_run=dry_run,
+        scope=scope,
         require_exact=True,
     ):
         sidecar = target / "skillager.materialized.yaml"
@@ -277,25 +283,30 @@ def materialize_working_skill_one(
                 return _result(skill, target, "skipped", "already up to date", agent=agent, scope=scope)
         if dry_run:
             return _result(skill, target, "would_write", None, agent=agent, scope=scope)
-        if target.exists():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
-        (target / "SKILL.md").write_text(render_working_skill(agent), encoding="utf-8")
-        materialized_hash = content_hash(target)
-        materialized_target_hash = target_state_hash(target, include_sidecar=False)
-        sidecar.write_text(
-            dumps(
+        rendered = render_working_skill(agent)
+        with tempfile.TemporaryDirectory(prefix=".skillager-working-", dir=target.parent) as raw_temp:
+            temp_root = Path(raw_temp)
+            candidate = temp_root / "candidate"
+            candidate.mkdir()
+            (candidate / "SKILL.md").write_text(rendered, encoding="utf-8")
+            materialized_hash = content_hash(candidate)
+            write_materialized_sidecar(
+                candidate / "skillager.materialized.yaml",
                 _working_sidecar(
                     agent=agent,
                     scope=scope,
                     projection_identity=projection_identity,
                     materialized_hash=materialized_hash,
-                    materialized_fingerprint=content_tree_fingerprint(target),
-                    materialized_target_hash=materialized_target_hash,
-                )
-            ),
-            encoding="utf-8",
-        )
+                    materialized_fingerprint=content_tree_fingerprint(candidate),
+                    materialized_target_hash=target_state_hash(candidate, include_sidecar=False),
+                ),
+            )
+            _install_verified_candidate(
+                candidate,
+                target,
+                temp_root=temp_root,
+                expected_hash=materialized_hash,
+            )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
@@ -433,6 +444,7 @@ def materialize_router_one(
         target,
         projection_identity,
         dry_run=dry_run,
+        scope=scope,
     ) as target:
         sidecar = target / "skillager.materialized.yaml"
         actual_router_slug = target.name
@@ -448,30 +460,33 @@ def materialize_router_one(
                 return _result(router_skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
         if dry_run:
             return _result(router_skill, target, "would_write", None, agent=agent, scope=scope)
-        if target.exists():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
-        (target / "SKILL.md").write_text(rendered, encoding="utf-8")
-        materialized_hash = content_hash(target)
-        materialized_target_hash = target_state_hash(target, include_sidecar=False)
-        sidecar_data = _router_sidecar(
-            tag,
-            skills,
-            agent=agent,
-            scope=scope,
-            materialized_hash=materialized_hash,
-            materialized_fingerprint=content_tree_fingerprint(target),
-            materialized_target_hash=materialized_target_hash,
-            router_slug=actual_router_slug,
-            selection_router_slug=router_slug,
-            router_kind=router_kind,
-            projection_identity=projection_identity,
-        )
-        sidecar_data.update(decisions)
-        sidecar.write_text(
-            dumps(sidecar_data),
-            encoding="utf-8",
-        )
+        with tempfile.TemporaryDirectory(prefix=".skillager-router-", dir=target.parent) as raw_temp:
+            temp_root = Path(raw_temp)
+            candidate = temp_root / "candidate"
+            candidate.mkdir()
+            (candidate / "SKILL.md").write_text(rendered, encoding="utf-8")
+            materialized_hash = content_hash(candidate)
+            sidecar_data = _router_sidecar(
+                tag,
+                skills,
+                agent=agent,
+                scope=scope,
+                materialized_hash=materialized_hash,
+                materialized_fingerprint=content_tree_fingerprint(candidate),
+                materialized_target_hash=target_state_hash(candidate, include_sidecar=False),
+                router_slug=actual_router_slug,
+                selection_router_slug=router_slug,
+                router_kind=router_kind,
+                projection_identity=projection_identity,
+            )
+            sidecar_data.update(decisions)
+            write_materialized_sidecar(candidate / "skillager.materialized.yaml", sidecar_data)
+            _install_verified_candidate(
+                candidate,
+                target,
+                temp_root=temp_root,
+                expected_hash=materialized_hash,
+            )
         return _result(router_skill, target, "materialized", None, agent=agent, scope=scope)
 
 
@@ -557,6 +572,7 @@ def materialize_stub_one(
         target,
         projection_identity,
         dry_run=dry_run,
+        scope=scope,
         fallback_key=str(skill["id"]),
     ) as target:
         sidecar = target / "skillager.materialized.yaml"
@@ -572,25 +588,28 @@ def materialize_stub_one(
                 return _result(skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
         if dry_run:
             return _result(skill, target, "would_write", None, agent=agent, scope=scope)
-        if target.exists():
-            shutil.rmtree(target)
-        target.mkdir(parents=True, exist_ok=True)
-        (target / "SKILL.md").write_text(rendered, encoding="utf-8")
-        materialized_hash = content_hash(target)
-        materialized_target_hash = target_state_hash(target, include_sidecar=False)
-        sidecar_data = _stub_sidecar(
-            skill,
-            agent=agent,
-            scope=scope,
-            materialized_hash=materialized_hash,
-            materialized_fingerprint=content_tree_fingerprint(target),
-            materialized_target_hash=materialized_target_hash,
-        )
-        sidecar_data.update(decisions)
-        sidecar.write_text(
-            dumps(sidecar_data),
-            encoding="utf-8",
-        )
+        with tempfile.TemporaryDirectory(prefix=".skillager-stub-", dir=target.parent) as raw_temp:
+            temp_root = Path(raw_temp)
+            candidate = temp_root / "candidate"
+            candidate.mkdir()
+            (candidate / "SKILL.md").write_text(rendered, encoding="utf-8")
+            materialized_hash = content_hash(candidate)
+            sidecar_data = _stub_sidecar(
+                skill,
+                agent=agent,
+                scope=scope,
+                materialized_hash=materialized_hash,
+                materialized_fingerprint=content_tree_fingerprint(candidate),
+                materialized_target_hash=target_state_hash(candidate, include_sidecar=False),
+            )
+            sidecar_data.update(decisions)
+            write_materialized_sidecar(candidate / "skillager.materialized.yaml", sidecar_data)
+            _install_verified_candidate(
+                candidate,
+                target,
+                temp_root=temp_root,
+                expected_hash=materialized_hash,
+            )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
@@ -662,6 +681,7 @@ def materialize_one(
         target,
         projection_identity,
         dry_run=dry_run,
+        scope=scope,
         fallback_key=str(skill["id"]),
     ) as target:
         if scope == "project" and target.resolve() == source_root and (target / "SKILL.md").exists() and not (target / "skillager.materialized.yaml").exists():
@@ -698,20 +718,20 @@ def materialize_one(
                 materialized_target_hash=target_state_hash(candidate, include_sidecar=False),
             )
             sidecar_data.update(decisions)
-            candidate_sidecar.write_text(dumps(sidecar_data), encoding="utf-8")
+            write_materialized_sidecar(candidate_sidecar, sidecar_data)
             _install_verified_candidate(candidate, target, temp_root=temp_root, expected_hash=expected_hash)
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
 def _install_verified_candidate(candidate: Path, target: Path, *, temp_root: Path, expected_hash: str) -> None:
+    _verify_materialized_projection(candidate, expected_hash=expected_hash)
     backup = temp_root / "previous"
     had_target = target.exists()
     if had_target:
         os.replace(target, backup)
     try:
         os.replace(candidate, target)
-        if content_hash(target) != expected_hash:
-            raise ValueError("exposed content failed final hash verification")
+        _verify_installed_projection(target, expected_hash=expected_hash)
     except Exception:
         if target.exists():
             shutil.rmtree(target)
@@ -720,6 +740,24 @@ def _install_verified_candidate(candidate: Path, target: Path, *, temp_root: Pat
         raise
     if backup.exists():
         shutil.rmtree(backup)
+
+
+def _verify_installed_projection(target: Path, *, expected_hash: str) -> None:
+    _verify_materialized_projection(target, expected_hash=expected_hash)
+
+
+def _verify_materialized_projection(target: Path, *, expected_hash: str) -> None:
+    sidecar_path = target / "skillager.materialized.yaml"
+    try:
+        sidecar = load_mapping(sidecar_path)
+    except Exception as exc:
+        raise ValueError(f"exposed metadata failed final verification: {exc}") from exc
+    if content_hash(target) != expected_hash or sidecar.get("materialized_hash") != expected_hash:
+        raise ValueError("exposed content failed final hash verification")
+    if sidecar.get("materialized_fingerprint") != content_tree_fingerprint(target):
+        raise ValueError("exposed content failed final fingerprint verification")
+    if not matches_materialized_target(target, sidecar):
+        raise ValueError("exposed target state or metadata failed final verification")
 
 
 def _require_native_skill_frontmatter(skill_file: Path) -> None:
@@ -750,13 +788,18 @@ def target_dir(*, agent: str, scope: str, skill: dict[str, Any], project_dir: Pa
         project = (project_dir or Path.cwd()).resolve()
         native_source = _native_source_target(skill, agent=agent, project=project)
         if native_source is not None:
-            return native_source
+            target, base = native_source
+            _require_safe_project_projection_target(project, base=base, target=target)
+            return target
         if agent == "codex":
             base = project / ".agents" / "skills"
         elif agent == "claude":
             base = project / ".claude" / "skills"
         else:
             base = project / ".agents" / agent / "skills"
+        target = base / slug
+        _require_safe_project_projection_target(project, base=base, target=target)
+        return target
     elif scope == "global":
         if agent == "codex":
             base = Path.home() / ".agents" / "skills"
@@ -769,7 +812,7 @@ def target_dir(*, agent: str, scope: str, skill: dict[str, Any], project_dir: Pa
     return base / slug
 
 
-def _native_source_target(skill: dict[str, Any], *, agent: str, project: Path) -> Path | None:
+def _native_source_target(skill: dict[str, Any], *, agent: str, project: Path) -> tuple[Path, Path] | None:
     root_value = skill.get("root")
     if not root_value:
         return None
@@ -783,8 +826,59 @@ def _native_source_target(skill: dict[str, Any], *, agent: str, project: Path) -
             root.relative_to(base)
         except ValueError:
             continue
-        return root
+        return root, base
     return None
+
+
+def _require_safe_project_projection_target(project: Path, *, base: Path, target: Path) -> None:
+    """Reject project projections whose lexical target can write outside the project."""
+
+    try:
+        base.relative_to(project)
+        target.relative_to(base)
+    except ValueError as exc:
+        raise ValueError(f"project exposure target is outside the project: {target}") from exc
+
+    current = project
+    for part in base.relative_to(project).parts:
+        current = current / part
+        if current.is_symlink():
+            if current == base:
+                raise ValueError(
+                    f"project agent skill base must be a non-symlinked directory: {base}"
+                )
+            try:
+                current.resolve().relative_to(project)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise ValueError(
+                    f"project exposure target resolves outside the project through a symlinked ancestor: {current}"
+                ) from exc
+        elif current.exists() and not current.is_dir():
+            label = "project agent skill base" if current == base else "project exposure path component"
+            raise ValueError(f"{label} must be a directory: {current}")
+
+    try:
+        base.resolve().relative_to(project)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(
+            f"project exposure target resolves outside the project: {target}"
+        ) from exc
+
+    relative_target = target.relative_to(base)
+    current = base
+    for part in relative_target.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            try:
+                current.resolve().relative_to(project)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise ValueError(
+                    f"project exposure target resolves outside the project through a symlinked ancestor: {current}"
+                ) from exc
+        elif current.exists() and not current.is_dir():
+            raise ValueError(f"project exposure path component must be a directory: {current}")
+    if target.is_symlink():
+        raise ValueError(f"project exposure target must not be a symlink: {target}")
 
 
 def _project_agent_bases(project: Path, agent: str) -> list[Path]:
@@ -826,19 +920,23 @@ def _projection_target_context(
     projection_identity: str,
     *,
     dry_run: bool,
+    scope: str,
     fallback_key: str | None = None,
     require_exact: bool = False,
 ):
     """Choose a collision-safe projection target under the shared namespace lock."""
 
     if dry_run:
-        yield _collision_safe_target(
+        selected = _collision_safe_target(
             target,
             projection_identity,
             fallback_key=fallback_key,
             require_exact=require_exact,
         )
+        _require_safe_selected_projection_target(selected, scope=scope)
+        yield selected
         return
+    _require_safe_selected_projection_target(target, scope=scope)
     target.parent.mkdir(parents=True, exist_ok=True)
     allocation_resource = target.parent / ".skillager-target-allocation"
     with resource_lock(allocation_resource):
@@ -848,8 +946,20 @@ def _projection_target_context(
             fallback_key=fallback_key,
             require_exact=require_exact,
         )
+        _require_safe_selected_projection_target(selected, scope=scope)
         with resource_lock(selected):
             yield selected
+
+
+def _require_safe_selected_projection_target(target: Path, *, scope: str) -> None:
+    if scope != "project":
+        return
+    if target.parent.is_symlink() or (target.parent.exists() and not target.parent.is_dir()):
+        raise ValueError(
+            f"project agent skill base must be a non-symlinked directory: {target.parent}"
+        )
+    if target.is_symlink():
+        raise ValueError(f"project exposure target must not be a symlink: {target}")
 
 
 def _sidecar(
