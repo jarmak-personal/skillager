@@ -14,7 +14,16 @@ from support import chdir
 from skillager.cli import main
 
 
-def write_skill(root: Path, body: str = "# Demo\n\nUse demo guidance.\n") -> None:
+def write_skill(
+    root: Path,
+    body: str = (
+        "---\n"
+        "name: demo\n"
+        "description: Use demo guidance.\n"
+        "---\n\n"
+        "# Demo\n\nUse demo guidance.\n"
+    ),
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
     (root / "SKILL.md").write_text(body, encoding="utf-8")
 

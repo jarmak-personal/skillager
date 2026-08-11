@@ -49,6 +49,62 @@ def initialize_repository(root: Path) -> bool:
     return True
 
 
+def require_paths_trackable(root: Path, paths: list[Path]) -> None:
+    """Refuse required paths that Git ignore rules would prevent us from recording."""
+
+    root = root.resolve()
+    ignored: list[str] = []
+    for path in paths:
+        relative = _relative_path(root, path)
+        result = _run_git(root, "check-ignore", "--no-index", "--quiet", "--", relative)
+        if result.returncode == 0:
+            ignored.append(relative)
+        elif result.returncode != 1:
+            raise LibraryGitError(_git_error(f"could not check Git ignore rules for {relative}", result))
+    if ignored:
+        joined = ", ".join(ignored)
+        raise LibraryGitError(
+            f"required library paths are ignored by Git: {joined}; update the repository ignore rules and retry"
+        )
+
+
+def head_tracked_paths(root: Path, paths: list[Path]) -> dict[str, bool]:
+    """Return whether each selected path exists as a file at Git HEAD."""
+
+    root = root.resolve()
+    result: dict[str, bool] = {}
+    for path in paths:
+        relative = _relative_path(root, path)
+        listed = _run_git(root, "cat-file", "-e", f"HEAD:{relative}")
+        result[relative] = listed.returncode == 0
+    return result
+
+
+def git_file_content(root: Path, path: Path, *, revision: str) -> bytes | None:
+    """Read one file from Git HEAD or the index without exposing it through the CLI."""
+
+    if revision not in {"HEAD", "index"}:
+        raise ValueError("Git file revision must be 'HEAD' or 'index'")
+    root = root.resolve()
+    relative = _relative_path(root, path)
+    spec = f"HEAD:{relative}" if revision == "HEAD" else f":{relative}"
+    shown = _run_git_bytes(root, "show", spec)
+    return shown.stdout if shown.returncode == 0 else None
+
+
+def unstage_paths(root: Path, paths: list[Path]) -> None:
+    """Best-effort rollback for paths staged by a failed Skillager commit."""
+
+    root = root.resolve()
+    relative_paths = [_relative_path(root, path) for path in paths]
+    if _head_commit(root) is not None:
+        result = _run_git(root, "reset", "--quiet", "HEAD", "--", *relative_paths)
+    else:
+        result = _run_git(root, "rm", "--cached", "--quiet", "--ignore-unmatch", "--", *relative_paths)
+    if result.returncode != 0:
+        raise LibraryGitError(_git_error("could not roll back staged library metadata", result))
+
+
 def commit_paths(root: Path, paths: list[Path], message: str, *, allow_staged_paths: bool = False) -> dict[str, Any]:
     """Commit only the selected library-relative paths."""
 
@@ -400,7 +456,11 @@ __all__ = [
     "git_tree_files",
     "git_available",
     "head_content_hash",
+    "head_tracked_paths",
     "initialize_repository",
+    "git_file_content",
     "path_changes",
+    "require_paths_trackable",
     "repository_status",
+    "unstage_paths",
 ]

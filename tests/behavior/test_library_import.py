@@ -65,6 +65,9 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             preview_data = preview.json()
             self.assertEqual(preview_data["schema"], "skillager.import.v1")
             self.assertEqual(preview_data["status"], "preview")
+            self.assertEqual(preview_data["destination"]["slug"], "orbital-review")
+            self.assertEqual(preview_data["destination"]["name"], "orbital-review")
+            self.assertEqual(preview_data["destination"]["display_name"], "Orbital Review")
             self.assertTrue(preview_data["owner_review_required"])
             self.assertNotIn("will_import", preview_data)
             self.assertNotIn("source_key", preview.stdout)
@@ -94,6 +97,9 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             data = imported.json()
             self.assertEqual(data["status"], "imported")
             self.assertEqual(data["destination"]["id"], "lib/orbital-review")
+            self.assertEqual(data["destination"]["slug"], "orbital-review")
+            self.assertEqual(data["destination"]["name"], "orbital-review")
+            self.assertEqual(data["destination"]["display_name"], "Orbital Review")
             self.assertEqual(data["destination"]["acceptance"], "accepted")
             self.assertEqual(data["source"]["content_hash"], data["destination"]["working_hash"])
             self.assertNotIn("approval_key", imported.stdout)
@@ -136,6 +142,9 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             renamed = cli.run_confirmed("import", "project/orbital-review", "--as", "orbital-copy", "--yes", "--json")
             self.assert_code(renamed, 0)
             self.assertEqual(renamed.json()["destination"]["id"], "lib/orbital-copy")
+            self.assertEqual(renamed.json()["destination"]["slug"], "orbital-copy")
+            self.assertEqual(renamed.json()["destination"]["name"], "orbital-copy")
+            self.assertEqual(renamed.json()["destination"]["display_name"], "Orbital Review")
 
     def test_lint_and_high_risk_source_never_enters_library_before_audited_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -214,6 +223,33 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             self.assertIn(str((cli.project / ".skills" / "duplicate").resolve()), refused.stderr)
             self.assertIn(str((cli.project / ".agents" / "skills" / "duplicate").resolve()), refused.stderr)
             self.assertFalse((library / "skills" / "duplicate").exists())
+
+    def test_mode_only_source_change_refreshes_import_preview(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "library"
+            source = cli.project / ".skills" / "mode-refresh"
+            self.write_skill(source, "Mode Refresh", "Use the current executable-mode identity.")
+            skill_file = source / "SKILL.md"
+            skill_file.chmod(0o644)
+            self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
+            self.assert_code(cli.run("setup", "--agent", "codex", "--json"), 0)
+
+            before = cli.run("import", "project/mode-refresh", "--json")
+            self.assert_code(before, 0)
+            skill_file.chmod(0o755)
+            after = cli.run("import", "project/mode-refresh", "--json")
+            self.assert_code(after, 0)
+
+            self.assertNotEqual(after.json()["source_hash"], before.json()["source_hash"])
+            self.assertNotEqual(
+                after.json()["next_command_argv"][-1],
+                before.json()["next_command_argv"][-1],
+            )
+            imported = cli.run(*after.json()["next_command_argv"][1:], "--json")
+            self.assert_code(imported, 0)
+            self.assertEqual(imported.json()["destination"]["working_hash"], after.json()["source_hash"])
 
     def test_import_discovers_collection_environment_packages_editable_and_native_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -356,6 +392,69 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
                 check=True,
             ).stdout
             self.assertEqual(git_status, "")
+
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_accept_refuses_unrelated_staged_edits_inside_shared_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "library"
+            source = cli.project / ".skills" / "provenance-guard"
+            self.write_skill(source, "Provenance Guard", "Use the reviewed provenance guidance.")
+            self.assert_code(cli.run("library", "init", "--path", str(library)), 0)
+            imported = cli.run_confirmed("import", "project/provenance-guard", "--yes", "--json")
+            self.assert_code(imported, 0)
+            skill_file = library / "skills" / "provenance-guard" / "SKILL.md"
+            skill_file.write_text("# Provenance Guard\n\nUse updated reviewed guidance.\n", encoding="utf-8")
+            provenance_path = library / ".skillager" / "provenance.json"
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+            provenance["skills"]["unrelated"] = {
+                "imported_at": "2026-01-01T00:00:00+00:00",
+                "imported_from": {
+                    "skill_id": "project/unrelated",
+                    "content_hash": "f" * 64,
+                    "source_type": "project",
+                },
+            }
+            provenance_path.write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", ".skillager/provenance.json"],
+                cwd=library,
+                env=cli.env,
+                check=True,
+            )
+
+            plain_preview = cli.run("library", "accept", "lib/provenance-guard")
+            self.assert_code(plain_preview, 0)
+            self.assertIn("Git staged: .skillager/provenance.json", plain_preview.stdout)
+            preview = cli.run("library", "accept", "lib/provenance-guard", "--json")
+            self.assert_code(preview, 0)
+            self.assertIn(".skillager/provenance.json", preview.json()["git"]["staged"])
+            self.assertIn("skills/provenance-guard/SKILL.md", preview.json()["git"]["unstaged"])
+            refused = cli.run(*preview.json()["next_command_argv"][1:], "--json")
+
+            self.assert_code(refused, 2)
+            self.assertIn("provenance has unrelated staged changes", refused.stderr)
+            staged = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
+                cwd=library,
+                env=cli.env,
+                text=True,
+                stdout=subprocess.PIPE,
+                check=True,
+            ).stdout.splitlines()
+            self.assertEqual(staged, [".skillager/provenance.json"])
+            head_provenance = json.loads(
+                subprocess.run(
+                    ["git", "show", "HEAD:.skillager/provenance.json"],
+                    cwd=library,
+                    env=cli.env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    check=True,
+                ).stdout
+            )
+            self.assertNotIn("unrelated", head_provenance["skills"])
 
     @staticmethod
     def write_skill(path: Path, title: str, summary: str) -> None:

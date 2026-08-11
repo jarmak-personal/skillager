@@ -168,6 +168,9 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             reference.unlink()
             second = cli.run_confirmed("library", "accept", "restorable", "--yes", "--json")
             self.assert_code(second, 0)
+            exposed = cli.run("expose", "lib/restorable", "--mode", "stub", "--agent", "codex", "--json")
+            self.assert_code(exposed, 0)
+            self.assertEqual(exposed.json()[0]["status"], "exposed")
             old_head = self.git(library, cli.env, "rev-parse", "HEAD").stdout.strip()
             self.git(library, cli.env, "remote", "add", "origin", "https://example.invalid/library.git")
 
@@ -223,6 +226,17 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             self.assertEqual(data["skill"]["accepted_hash"], first_hash)
             self.assertEqual(data["skill"]["head_hash"], first_hash)
             self.assertEqual(data["skill"]["status"], "clean")
+            self.assertEqual(data["skill"]["exposures"][0]["status"], "update_available")
+            self.assertEqual(data["skill"]["exposures"][0]["next_command_argv"][:5], [
+                "skillager",
+                "expose",
+                "lib/restorable",
+                "--mode",
+                "stub",
+            ])
+            self.assertTrue(data["restored_version"]["head"])
+            self.assertTrue(data["restored_version"]["current"])
+            self.assertTrue(data["restored_version"]["accepted"])
             self.assertEqual(skill_file.read_text(encoding="utf-8"), self.body("Restorable", FIRST_BODY))
             self.assertEqual(reference.read_text(encoding="utf-8"), "Historical reference.\n")
             self.assertTrue(os.access(reference, os.X_OK))
@@ -241,6 +255,10 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             self.assertEqual(history.json()["versions"][0]["content_hash"], first_hash)
             self.assertEqual(history.json()["versions"][0]["operation"], "restored")
             self.assertTrue(history.json()["versions"][0]["head"])
+            working = cli.run("working", "--agent", "codex", "--json")
+            self.assert_code(working, 0)
+            self.assertEqual(working.json()["exposure_changes"]["source_updates"], 1)
+            self.assertEqual(working.json()["inventory"]["exposed_now"], 0)
 
     def test_no_git_conflicts_and_historical_symlinks_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

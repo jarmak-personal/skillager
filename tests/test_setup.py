@@ -28,6 +28,17 @@ def write_manifest(skill_dir: Path, audience: str) -> None:
     )
 
 
+def native_skill_text(name: str, heading: str, guidance: str) -> str:
+    return (
+        "---\n"
+        f"name: {name}\n"
+        f"description: {guidance}\n"
+        "---\n\n"
+        f"# {heading}\n\n"
+        f"{guidance}\n"
+    )
+
+
 class SkillagerSetupTests(unittest.TestCase):
 
     def test_setup_rejects_incompatible_json_flags_before_trust_changes(self) -> None:
@@ -808,8 +819,14 @@ class SkillagerSetupTests(unittest.TestCase):
             second = root / ".skills" / "api-example"
             first.mkdir(parents=True)
             second.mkdir(parents=True)
-            (first / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
-            (second / "SKILL.md").write_text("# API Example\n\nUse API examples.\n", encoding="utf-8")
+            (first / "SKILL.md").write_text(
+                native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."),
+                encoding="utf-8",
+            )
+            (second / "SKILL.md").write_text(
+                native_skill_text("api-example", "API Example", "Use API examples."),
+                encoding="utf-8",
+            )
             stdin = TtyStringIO("1\nn\ny\n1\ny\nn\n")
             stdout = TtyStringIO()
             with (
@@ -968,8 +985,14 @@ class SkillagerSetupTests(unittest.TestCase):
             second = root / ".skills" / "api-example"
             first.mkdir(parents=True)
             second.mkdir(parents=True)
-            (first / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
-            (second / "SKILL.md").write_text("# API Example\n\nUse API examples.\n", encoding="utf-8")
+            (first / "SKILL.md").write_text(
+                native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."),
+                encoding="utf-8",
+            )
+            (second / "SKILL.md").write_text(
+                native_skill_text("api-example", "API Example", "Use API examples."),
+                encoding="utf-8",
+            )
             stdin = TtyStringIO("2\ny\n1\ny\ny\nn\ny\n")
             stdout = TtyStringIO()
             with (
@@ -995,7 +1018,10 @@ class SkillagerSetupTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "gis-domain"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(
+                native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."),
+                encoding="utf-8",
+            )
             stdin = TtyStringIO("2\ny\ny\ny\n")
             stdout = TtyStringIO()
             with (
@@ -1051,8 +1077,14 @@ class SkillagerSetupTests(unittest.TestCase):
             claude_skill = root / ".claude" / "skills" / "gis-domain-vibespatial-claude"
             codex_skill.mkdir(parents=True)
             claude_skill.mkdir(parents=True)
-            (codex_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
-            (claude_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (codex_skill / "SKILL.md").write_text(
+                native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."),
+                encoding="utf-8",
+            )
+            (claude_skill / "SKILL.md").write_text(
+                native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."),
+                encoding="utf-8",
+            )
             stdin = TtyStringIO("2\ny\n1\ny\ny\ny\n")
             stdout = TtyStringIO()
             with (
@@ -1079,7 +1111,10 @@ class SkillagerSetupTests(unittest.TestCase):
             codex_skill.mkdir(parents=True)
             claude_skill.mkdir(parents=True)
             (codex_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
-            (claude_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (claude_skill / "SKILL.md").write_text(
+                native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."),
+                encoding="utf-8",
+            )
             stdin = TtyStringIO("1\ny\n4\n")
             stdout = TtyStringIO()
             with (
@@ -1140,7 +1175,10 @@ class SkillagerSetupTests(unittest.TestCase):
             state = root / ".skillager"
             claude_skill = root / ".claude" / "skills" / "gis-domain"
             claude_skill.mkdir(parents=True)
-            (claude_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (claude_skill / "SKILL.md").write_text(
+                native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."),
+                encoding="utf-8",
+            )
             stdin = TtyStringIO("1\ny\n4\n")
             stdout = TtyStringIO()
             with (
@@ -1191,7 +1229,10 @@ class SkillagerSetupTests(unittest.TestCase):
             state = root / ".skillager"
             claude_skill = root / ".claude" / "skills" / "gis-domain"
             claude_skill.mkdir(parents=True)
-            (claude_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (claude_skill / "SKILL.md").write_text(
+                native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."),
+                encoding="utf-8",
+            )
             stdin = TtyStringIO("2\ny\n1\ny\ny\ny\n")
             stdout = TtyStringIO()
             with (

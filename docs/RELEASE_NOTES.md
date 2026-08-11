@@ -15,12 +15,14 @@ Highlights:
   content hash, including normalized executable bits.
 - Inspect content-addressed history and diffs, and restore an old version as a new
   descendant commit.
-- Detect current-project exposure drift without writes and refuse to overwrite local
+- Detect current-project exposure drift and accepted-source updates without writes,
+  exclude stale projections from current inventory, and refuse to overwrite local
   edits or remove them unless the user explicitly confirms a bound force preview.
 - Keep metadata commands body-safe and keep ownership separate from approval and
   exposure.
-- Fail closed on display-ID collisions, source/exposure races, same-size timestamp
-  spoofing, and noncanonical acceptance trees.
+- Fail closed on display-ID and projection-slug collisions, source/exposure races,
+  same-size timestamp spoofing, mode-only cache changes, invalid native host format,
+  ignored initialization metadata, and noncanonical acceptance trees.
 - Bind non-interactive accept/import/restore commands to their exact previewed state
   and never emit executable placeholder reasons.
 - Keep summary inventory bounded, retain curated-tag search matches, and make
@@ -38,8 +40,8 @@ Compatibility and migration:
   before initializing the reserved library; Skillager never claims it silently.
 - Git-less libraries remain usable, with history-dependent operations reported as
   unavailable.
-- `working` retains `skillager.working.v1`; exposure drift is additive and advisory
-  rather than a readiness change.
+- `working` retains `skillager.working.v1`; exposure drift/source freshness is additive
+  and advisory rather than a readiness change.
 
 The library performs no automatic Git network operation, no history rewrite, no
 cross-project rollout, automatic merge, exposure synchronization, or upstream import refresh.

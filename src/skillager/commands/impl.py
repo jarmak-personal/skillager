@@ -49,6 +49,7 @@ from ..materialize import (
     WORKING_REASON_LOCAL_CUSTOMIZATION,
     WORKING_REASON_UNMANAGED,
     WORKING_SKILL_ID,
+    content_hashes,
     explicit_router_slug,
     materialize_skills,
     materialize_working_skill,
@@ -1333,7 +1334,14 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
     selected = list(report.get("selected") or [])
     action = report.get("action") or {}
     inventory_agent = agents[0] if len(agents) == 1 else None
-    inventory = _available_inventory_summary(selected, agent=inventory_agent, project_exposure=_project_exposure(project_dir))
+    inventory = _available_inventory_summary(
+        selected,
+        agent=inventory_agent,
+        project_exposure=_project_exposure(
+            project_dir,
+            current_source_hashes=_approved_source_hashes(selected),
+        ),
+    )
     review_needed = [skill for skill in selected if skill.get("trust") == "discovered"]
     lint_blocked = [skill for skill in selected if skill.get("trust") == "lint_blocked"]
     blocked = [skill for skill in selected if skill.get("trust") == "blocked"]
@@ -1756,7 +1764,8 @@ def _build_visible_skill_view(
     approved = [skill for skill in skills if skill.get("trust") in TRUSTED_STATES]
     authored_unreviewed = _authored_unreviewed(review_candidates)
     blocked = [skill for skill in data.get("skills", []) if skill.get("trust") == "blocked"]
-    project_exposure = _project_exposure(project_dir)
+    current_source_hashes = _approved_source_hashes(approved)
+    project_exposure = _project_exposure(project_dir, current_source_hashes=current_source_hashes)
     _add_native_source_exposures(project_exposure, skills, project_dir=project_dir)
     attached_tags = _project_tag_names(project_dir)
     materialized_router_tags = sorted(_materialized_router_tags(project_dir, agent=agent)) if agent else []
@@ -2067,6 +2076,7 @@ def _build_working_result(
         agent=agent,
         catalog_root=catalog_root,
         known_native_roots=_known_native_source_roots(view["skills"], project_dir),
+        current_source_hashes=_approved_source_hashes(view["approved"]),
     )
     inventory = _available_inventory_summary(
         view["approved"],
@@ -2105,6 +2115,7 @@ def _working_curation(
 ) -> dict[str, Any]:
     suffix = f" --agent {agent}" if agent else ""
     choices = int(inventory.get("agent_visible_on_demand") or 0)
+    source_entries = int(inventory.get("available_source_entries") or 0)
     existing = sorted(exposed_router_tags)
     return {
         "recommended": bool(choices) and not existing,
@@ -2116,7 +2127,11 @@ def _working_curation(
             else (
                 "Search available metadata using the user's goal, then curate a focused tag/router only when useful."
                 if choices
-                else "No available on-demand skill choices need curation."
+                else (
+                    "No available skills were discovered. Run setup from a project containing skill sources or register a collection."
+                    if source_entries == 0
+                    else "All available skill choices are already exposed; no additional curation is needed."
+                )
             )
         ),
         "inventory_command": f"skillager list --summary-json{suffix}",
@@ -2158,6 +2173,8 @@ def _print_working_result(result: dict[str, Any]) -> None:
         f"  {count_text}; {exposed_text}"
         f"{detail_suffix}, {on_demand} on demand."
     )
+    if source_entries == 0:
+        print("  No available skills were discovered; run setup from a project with skill sources or register a collection.")
     pending = int(result.get("pending_owner_review_count") or 0)
     if pending:
         print(f"  Owner review needed: {_counted(pending, 'skill')}.")
@@ -2176,9 +2193,24 @@ def _print_working_result(result: dict[str, Any]) -> None:
     if library_unavailable:
         print("  Personal library unavailable (does not block other work).")
         print("    skillager library status")
-    changed = len(changes.get("items") or [])
-    if changed:
-        print(f"  {_counted(changed, 'managed exposure')} changed locally; Skillager will not overwrite it.")
+    source_updates = [item for item in changes.get("items") or [] if item.get("status") == "source_update"]
+    if source_updates:
+        print(f"  {_counted(len(source_updates), 'managed exposure')} can be refreshed from newly approved content.")
+        for item in source_updates:
+            if item.get("command"):
+                print(f"    {item['command']}")
+    source_unavailable = [item for item in changes.get("items") or [] if item.get("status") == "source_unavailable"]
+    if source_unavailable:
+        print(
+            f"  {_counted(len(source_unavailable), 'managed exposure')} cannot be refreshed until its source is approved and available."
+        )
+    local_changes = [
+        item
+        for item in changes.get("items") or []
+        if item.get("status") not in {"source_update", "source_unavailable"}
+    ]
+    if local_changes:
+        print(f"  {_counted(len(local_changes), 'managed exposure')} needs local attention; Skillager will not overwrite it.")
     next_commands = list((result.get("next") or {}).get("next_commands") or [])
     if next_commands:
         print("Next:")
@@ -2367,6 +2399,7 @@ def _doctor_state(view: dict[str, Any]) -> dict[str, Any]:
         "owned_changes": {
             "count": len(view.get("owned_changes", [])),
             "ids": [skill["id"] for skill in view.get("owned_changes", [])],
+            "items": [_working_owned_item(skill) for skill in view.get("owned_changes", [])],
         },
         "migration": view["migration"],
         "artifacts": view["artifacts"],
@@ -2387,16 +2420,12 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
         )
     if view["lint_blocked"]:
         count = len(view["lint_blocked"])
-        first_id = str(view["lint_blocked"][0]["id"])
         return _doctor_issue(
             "lint-blocked",
             DOCTOR_EXIT_LINT_BLOCKED,
             f"{_counted(count, 'skill')} {'is' if count == 1 else 'are'} lint-blocked. Fix the source or approve with an audited override.",
             "skillager review --include-lint-blocked --summary",
-            next_commands=[
-                "skillager review --include-lint-blocked --summary",
-                f"skillager review approve {first_id} --override-lint --reason \"<why>\"",
-            ],
+            next_commands=["skillager review --include-lint-blocked --summary"],
         )
     if view["authored_unreviewed"]:
         count = len(view["authored_unreviewed"])
@@ -2460,6 +2489,18 @@ def _doctor_diagnosis(view: dict[str, Any], *, agent: str | None) -> dict[str, A
             DOCTOR_EXIT_BOOTSTRAP_REPAIR,
             artifact_action.get("message") or "Refresh Skillager's first-party working skill.",
             str(command) if command else None,
+        )
+    if view.get("owned_changes"):
+        items = [_working_owned_item(skill) for skill in view["owned_changes"]]
+        commands = list(dict.fromkeys(str(item["command"]) for item in items if item.get("command")))
+        count = len(items)
+        return _doctor_issue(
+            "ready",
+            DOCTOR_EXIT_READY,
+            f"Skillager is ready. {_counted(count, 'owned library change')} "
+            f"{'is' if count == 1 else 'are'} pending owner acceptance.",
+            commands[0] if commands else None,
+            next_commands=commands,
         )
     return _doctor_issue("ready", DOCTOR_EXIT_READY, "Skillager is ready.", None)
 
@@ -4028,6 +4069,9 @@ def _public_full_skill_metadata(skill: dict[str, Any]) -> dict[str, Any]:
     for key in list(payload):
         if key.startswith("_"):
             payload.pop(key, None)
+    payload.pop("approval_key", None)
+    if isinstance(payload.get("scan"), dict):
+        payload["scan"] = _public_scan_metadata(payload["scan"])
     targets = payload.pop("materialized_targets", None)
     if isinstance(targets, list):
         payload["exposure_targets"] = [
@@ -4038,8 +4082,29 @@ def _public_full_skill_metadata(skill: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _public_scan_metadata(scan: dict[str, Any]) -> dict[str, Any]:
+    """Return scanner diagnostics without matched skill-body excerpts."""
+
+    payload = {
+        key: scan[key]
+        for key in ("risk", "ok", "scanned_files", "skipped_files")
+        if key in scan
+    }
+    findings = scan.get("findings") or []
+    payload["findings"] = [
+        {
+            key: finding[key]
+            for key in ("code", "severity", "path", "line")
+            if key in finding
+        }
+        for finding in findings
+        if isinstance(finding, dict)
+    ]
+    return payload
+
+
 def _public_exposure_target(target: dict[str, Any]) -> dict[str, Any]:
-    public = dict(target)
+    public = {key: value for key, value in target.items() if not key.startswith("_")}
     status = public.pop("status", None)
     if status:
         public["exposure_status"] = _public_exposure_status(status)
@@ -4502,7 +4567,7 @@ def _effective_project_skills(
             continue
         existing["tags"] = sorted(set(existing.get("tags", [])) | tags)
         existing["availability"] = sorted(set(existing.get("availability", [])) | {"attached-tag"})
-    return [by_id[skill_id] for skill_id in sorted(by_id)]
+    return _filter_current_inventory_exposures([by_id[skill_id] for skill_id in sorted(by_id)])
 
 
 def _base_project_skill_map(state_root: Path, *, catalog_root: Path, project_dir: Path) -> dict[str, dict[str, Any]]:
@@ -4574,7 +4639,8 @@ def _all_taggable_skill_map(state_root: Path, catalog_root: Path, project_dir: P
     ):
         item = _with_project_inventory_fields(skill, exposure)
         _merge_skill_inventory(by_id, item)
-    return by_id
+    filtered = _filter_current_inventory_exposures([by_id[skill_id] for skill_id in sorted(by_id)])
+    return {str(skill["id"]): skill for skill in filtered}
 
 
 def _validate_taggable_skill_ids(state_root: Path, catalog_root: Path, project_dir: Path, skill_ids: list[str]) -> list[str]:
@@ -4765,6 +4831,11 @@ def _with_project_inventory_fields(skill: dict[str, Any], exposure: dict[str, li
     unmanaged = _unmanaged_native_target(item, Path.cwd())
     if unmanaged and not any(target.get("path") == unmanaged["path"] for target in targets):
         targets.append(unmanaged)
+    return _with_materialized_targets(item, targets)
+
+
+def _with_materialized_targets(item: dict[str, Any], targets: list[dict[str, Any]]) -> dict[str, Any]:
+    item = dict(item)
     item["materialized_targets"] = targets
     target_types = {target.get("kind") for target in targets}
     if len(target_types & {"native", "router", "stub"}) > 1:
@@ -4780,6 +4851,43 @@ def _with_project_inventory_fields(skill: dict[str, Any], exposure: dict[str, li
     return item
 
 
+def _approved_source_hashes(skills: list[dict[str, Any]]) -> dict[str, str]:
+    return {
+        str(skill["id"]): str(skill["content_hash"])
+        for skill in skills
+        if skill.get("id")
+        and isinstance(skill.get("content_hash"), str)
+        and skill.get("trust") in TRUSTED_STATES
+        and not skill.get("identity_collision")
+    }
+
+
+def _filter_current_inventory_exposures(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    current_source_hashes = _approved_source_hashes(skills)
+    result: list[dict[str, Any]] = []
+    for skill in skills:
+        targets = [
+            target
+            for target in skill.get("materialized_targets") or []
+            if not target.get("managed") or _exposure_source_is_current(target, current_source_hashes)
+        ]
+        result.append(_with_materialized_targets(skill, targets))
+    return result
+
+
+def _exposure_source_is_current(target: dict[str, Any], current_source_hashes: dict[str, str]) -> bool:
+    if target.get("kind") == "router":
+        skill_ids = [str(value) for value in target.get("_skill_ids") or []]
+        if not skill_ids or any(skill_id not in current_source_hashes for skill_id in skill_ids):
+            return False
+        expected = content_hashes(
+            [{"id": skill_id, "content_hash": current_source_hashes[skill_id]} for skill_id in skill_ids]
+        )
+        return target.get("_source_hash") == expected
+    skill_id = target.get("_source_id")
+    return bool(skill_id) and target.get("_source_hash") == current_source_hashes.get(str(skill_id))
+
+
 def _skill_availability(skill: dict[str, Any]) -> list[str]:
     source_type = skill.get("source", {}).get("type") or "unknown"
     if source_type in {"python-package", "npm-package", "cargo-package"}:
@@ -4789,7 +4897,11 @@ def _skill_availability(skill: dict[str, Any]) -> list[str]:
     return [source_type]
 
 
-def _project_exposure(project: Path) -> dict[str, list[dict[str, Any]]]:
+def _project_exposure(
+    project: Path,
+    *,
+    current_source_hashes: dict[str, str] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
     exposure: dict[str, list[dict[str, Any]]] = {}
     roots = _project_skill_roots(project)
     for agent, root_paths in roots.items():
@@ -4807,6 +4919,7 @@ def _project_exposure(project: Path) -> dict[str, list[dict[str, Any]]]:
                     "path": str(sidecar.parent),
                     "status": "materialized",
                     "managed": True,
+                    "_source_hash": data.get("source_hash"),
                 }
                 if data.get("source_type") == "skillager-router":
                     target["kind"] = "router"
@@ -4815,16 +4928,25 @@ def _project_exposure(project: Path) -> dict[str, list[dict[str, Any]]]:
                     target["router_kind"] = data.get("router_kind")
                     target["selection_kind"] = data.get("selection_kind")
                     target["router_slug"] = data.get("router_slug")
+                    target["_skill_ids"] = [str(value) for value in data.get("skill_ids") or []]
+                    if current_source_hashes is not None and not _exposure_source_is_current(target, current_source_hashes):
+                        continue
                     for skill_id in data.get("skill_ids") or []:
                         exposure.setdefault(str(skill_id), []).append(dict(target))
                 elif data.get("source_type") == "skillager-stub":
                     target["kind"] = "stub"
                     skill_id = data.get("source_id") or data.get("id")
+                    target["_source_id"] = skill_id
+                    if current_source_hashes is not None and not _exposure_source_is_current(target, current_source_hashes):
+                        continue
                     if skill_id:
                         exposure.setdefault(str(skill_id), []).append(target)
                 else:
                     target["kind"] = "native"
                     skill_id = data.get("source_id") or data.get("id")
+                    target["_source_id"] = skill_id
+                    if current_source_hashes is not None and not _exposure_source_is_current(target, current_source_hashes):
+                        continue
                     if skill_id:
                         exposure.setdefault(str(skill_id), []).append(target)
     return exposure

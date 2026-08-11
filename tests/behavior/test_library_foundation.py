@@ -254,6 +254,135 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             self.assertFalse((library / "skills").exists())
 
     @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_ignored_required_paths_fail_before_writes_and_retry_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "ignored-library"
+            library.mkdir()
+            subprocess.run(["git", "init", "--quiet"], cwd=library, check=True)
+            subprocess.run(["git", "config", "user.name", "Library Test"], cwd=library, check=True)
+            subprocess.run(["git", "config", "user.email", "library@example.invalid"], cwd=library, check=True)
+            ignore = library / ".gitignore"
+            ignore.write_text(".skillager/\nskills/.gitkeep\n", encoding="utf-8")
+            subprocess.run(["git", "add", ".gitignore"], cwd=library, check=True)
+            subprocess.run(["git", "commit", "--quiet", "-m", "ignore required paths"], cwd=library, check=True)
+
+            refused = cli.run("library", "init", "--path", str(library))
+
+            self.assertEqual(refused.code, 2)
+            self.assertIn("required library paths are ignored by Git", refused.stderr)
+            self.assertIn(".skillager/library.json", refused.stderr)
+            self.assertIn(".skillager/provenance.json", refused.stderr)
+            self.assertIn("skills/.gitkeep", refused.stderr)
+            self.assertFalse((library / ".skillager").exists())
+            self.assertFalse((library / "skills").exists())
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=library,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    check=True,
+                ).stdout,
+                "",
+            )
+
+            ignore.write_text(".cache/\n", encoding="utf-8")
+            subprocess.run(["git", "commit", "--quiet", "-am", "allow required paths"], cwd=library, check=True)
+            retried = cli.run("library", "init", "--path", str(library), "--json")
+
+            self.assertEqual(retried.code, 0, retried.stderr)
+            self.assertTrue(retried.json()["created"])
+            self.assertTrue(retried.json()["history"]["available"])
+            tracked = subprocess.run(
+                ["git", "show", "--pretty=format:", "--name-only", "HEAD"],
+                cwd=library,
+                text=True,
+                stdout=subprocess.PIPE,
+                check=True,
+            ).stdout.splitlines()
+            self.assertEqual(tracked, [".skillager/library.json", ".skillager/provenance.json", "skills/.gitkeep"])
+
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_untracked_required_metadata_degrades_history_availability(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "untracked-metadata-library"
+            self.assertEqual(cli.run("library", "init", "--path", str(library)).code, 0)
+            (library / ".gitignore").write_text(".skillager/\n", encoding="utf-8")
+            subprocess.run(["git", "add", ".gitignore"], cwd=library, env=cli.env, check=True)
+            subprocess.run(
+                ["git", "rm", "--quiet", "--cached", ".skillager/library.json", ".skillager/provenance.json"],
+                cwd=library,
+                env=cli.env,
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Library Test",
+                    "-c",
+                    "user.email=library@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "drop required metadata",
+                ],
+                cwd=library,
+                env=cli.env,
+                check=True,
+            )
+
+            status = cli.run("library", "status", "--json")
+
+            self.assertEqual(status.code, 0, status.stderr)
+            self.assertEqual(status.json()["status"], "degraded")
+            self.assertEqual(status.json()["history"], {"available": False, "reason": "metadata-untracked"})
+            self.assertTrue(any("not recorded at Git HEAD" in warning for warning in status.json()["warnings"]))
+
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_failed_initial_commit_rolls_back_files_and_staging_for_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "hooked-library"
+            library.mkdir()
+            subprocess.run(["git", "init", "--quiet"], cwd=library, check=True)
+            subprocess.run(["git", "config", "user.name", "Library Test"], cwd=library, check=True)
+            subprocess.run(["git", "config", "user.email", "library@example.invalid"], cwd=library, check=True)
+            (library / "README.md").write_text("existing repository\n", encoding="utf-8")
+            subprocess.run(["git", "add", "README.md"], cwd=library, check=True)
+            subprocess.run(["git", "commit", "--quiet", "-m", "existing repository"], cwd=library, check=True)
+            hook = library / ".git" / "hooks" / "pre-commit"
+            hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            hook.chmod(0o700)
+
+            refused = cli.run("library", "init", "--path", str(library))
+
+            self.assertEqual(refused.code, 2)
+            self.assertIn("could not commit library metadata", refused.stderr)
+            self.assertFalse((library / ".skillager").exists())
+            self.assertFalse((library / "skills").exists())
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=library,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    check=True,
+                ).stdout,
+                "",
+            )
+
+            hook.unlink()
+            retried = cli.run("library", "init", "--path", str(library), "--json")
+            self.assertEqual(retried.code, 0, retried.stderr)
+            self.assertTrue(retried.json()["history"]["available"])
+
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
     def test_existing_repository_with_conflicts_is_refused_before_metadata_writes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

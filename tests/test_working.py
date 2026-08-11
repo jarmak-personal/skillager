@@ -226,6 +226,28 @@ class SkillagerWorkingTests(unittest.TestCase):
             )
             self.assertIsNone(data["next"]["command"])
 
+    def test_working_ready_empty_inventory_is_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            code, _, stderr = self.run_cli(
+                ["setup", "--fresh-project", "--agent", "codex", "--no-packages", "--summary-json"],
+                root=root,
+                state=state,
+            )
+            self.assertEqual(code, 0, stderr)
+
+            code, stdout, stderr = self.run_cli(["working", "--agent", "codex"], root=root, state=state)
+            self.assertEqual(code, 0, stderr)
+            self.assertIn("Skillager ready.", stdout)
+            self.assertIn("No available skills were discovered", stdout)
+
+            code, stdout, stderr = self.run_cli(["working", "--agent", "codex", "--json"], root=root, state=state)
+            self.assertEqual(code, 0, stderr)
+            data = json.loads(stdout)
+            self.assertEqual(data["inventory"]["available_source_entries"], 0)
+            self.assertIn("No available skills were discovered", data["curation"]["message"])
+
     def test_working_reports_advisory_exposure_drift_without_changing_readiness(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

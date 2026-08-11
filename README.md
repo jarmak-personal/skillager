@@ -43,7 +43,7 @@ artifact because there is no managed inventory for the agent to curate yet.
 
 `setup` discovers local/project skills, package-provided skills, collections, and native agent skills. Skillager makes discovered bodies available through its own activation and exposure commands only after review. Agent hosts can independently load directly installed native skills, so Skillager is a cooperative workflow layer rather than a sandbox. Register an external personal/team repository with `skillager collection add ~/skills/workflows --name workflows` when you want it in reusable inventory. Skillager is installed once as a user tool; it does not need to live inside every project environment.
 
-`working --json` keeps the `skillager.working.v1` contract. Its additive advisory `exposure_changes` block reports live current-project managed copies that are locally edited, partially missing, blocked, malformed, or unmanaged. `inventory` and `curation` distinguish source entries from agent-collapsed choices and suggest goal search without turning it into a required readiness action. Drift does not change readiness or the command's exit code, and Skillager never overwrites a locally edited exposure implicitly.
+`working --json` keeps the `skillager.working.v1` contract. Its additive advisory `exposure_changes` block reports live current-project managed copies that are locally edited, behind newly approved source content, partially missing, blocked, malformed, or unmanaged. A stale projection is excluded from current exposure counts and receives an explicit re-expose command; it is never refreshed automatically. `inventory` and `curation` distinguish source entries from agent-collapsed choices and suggest goal search without turning it into a required readiness action. Drift does not change readiness or the command's exit code, and Skillager never overwrites a locally edited exposure implicitly.
 
 ## Core Model
 
@@ -73,7 +73,7 @@ skillager expose --tag workflows --mode router --agent codex --scope project
 skillager activate workflows/pr-review --from-router workflows
 ```
 
-Metadata commands stay metadata-only: `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, `doctor`, `library status`, `library history`, `library diff --stat`, and summary JSON do not print full skill bodies. Scanner summaries on those surfaces contain rule codes and locations, never matched instruction excerpts.
+Metadata commands stay metadata-only: `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, `doctor`, `library status`, `library history`, `library diff --stat`, and summary or full metadata JSON do not print full skill bodies. Scanner summaries on those surfaces contain rule codes and locations, never matched instruction excerpts.
 
 ## Common Commands
 
@@ -116,7 +116,7 @@ skillager library relocate --path ~/skills/moved-personal
 skillager library relocate --path ~/skills/moved-personal --yes
 ```
 
-Initialization can adopt an existing directory without moving files. Existing skill bodies are indexed as pending metadata: initialization does not approve them, reveal their contents, or expose them to an agent. `library status` is read-only and reports identity, path, Git health, and an optional skill's working hash. If the registered path disappears, `working` and `doctor` report the library as degraded without blocking unrelated project discovery. Status returns structured relocation requirements without inventing a path; once the user supplies the moved root, `library relocate` changes only the registration after verifying the UUID and existing layout there.
+Initialization can adopt an existing directory without moving files. Existing skill bodies are indexed as pending metadata: initialization does not approve them, reveal their contents, or expose them to an agent. Git-backed initialization preflights required metadata against ignore rules and rolls back files and staging if its first commit fails, so retrying does not enter a partial-initialization trap. `library status` is read-only and reports identity, path, Git health, and an optional skill's working hash. If the registered path disappears, `working` and `doctor` report the library as degraded without blocking unrelated project discovery. Status returns structured relocation requirements without inventing a path; once the user supplies the moved root, `library relocate` changes only the registration after verifying the UUID and existing layout there.
 
 The no-Git form is useful for disposable environments and is also an opt-in,
 isolated runnable documentation example:
@@ -137,7 +137,7 @@ skillager library accept lib/orbital-review --json
 skillager expose lib/orbital-review --mode stub --agent codex --scope project
 ```
 
-`library new` never overwrites an existing skill and leaves its generated draft uncommitted. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, rejects symlinks and excluded files, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates the first meaningful path-scoped Git commit when Git is enabled. In non-interactive use, omitting `--yes` prints a body-safe hash/risk/lint preview, exits successfully, and gives an exact confirmation command containing an opaque token. The token binds the command to the previewed hash and any audited reason; a direct or stale `--yes` command is refused.
+`library new` never overwrites an existing skill and leaves its generated draft uncommitted. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, rejects symlinks and excluded files, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates the first meaningful path-scoped Git commit when Git is enabled. Shared import provenance is confirmation-bound and unrelated staged provenance edits are refused. In non-interactive use, omitting `--yes` prints a body-safe hash/risk/lint preview, exits successfully, and gives an exact confirmation command containing an opaque token. The token binds the command to the previewed hash, relevant provenance state, and any audited reason; a direct or stale `--yes` command is refused. Doctor keeps pending owned edits nonblocking but reports their exact `library accept` preview commands.
 
 The machine-readable contracts are versioned as `skillager.library-init.v1`, `skillager.library-relocate.v1`, `skillager.library-status.v1`, `skillager.library-new.v1`, `skillager.library-accept.v1`, `skillager.library-history.v1`, `skillager.library-diff.v1`, and `skillager.library-restore.v1`.
 
@@ -148,7 +148,7 @@ skillager import workflows/pr-review --json
 # Review the preview, then execute its next_command_argv exactly.
 ```
 
-The first command is a read-only preview. Import refuses an ID claimed by multiple discovered roots instead of choosing one representative. It re-resolves and rehashes the unambiguous origin after confirmation, copies only the canonical agent-visible tree, records attribution provenance, commits the skill and provenance paths when Git is enabled, and accepts only the resulting library hash. It never imports or executes the surrounding package and never modifies the origin. Its JSON contract is `skillager.import.v1`.
+The first command is a read-only preview. Import refuses an ID claimed by multiple discovered roots instead of choosing one representative. It re-resolves and rehashes the unambiguous origin after confirmation, copies only the canonical agent-visible tree, records attribution provenance, commits the skill and provenance paths when Git is enabled, and accepts only the resulting library hash. Mode-only source changes invalidate cached previews. Destination JSON keeps the canonical `id`, stable `slug`/`name`, and retained frontmatter `display_name` separate. Import never executes the surrounding package and never modifies the origin. Its JSON contract is `skillager.import.v1`.
 
 Inspect and recover verified library versions by Skillager content hash:
 

@@ -188,6 +188,7 @@ def cmd_library_status(args: argparse.Namespace) -> int:
         print(f"Accepted hash: {skill['accepted_hash'] or '-'}")
         print(f"HEAD hash: {skill['head_hash'] or '-'}")
         print(f"Acceptance: {skill['acceptance']}")
+        _print_library_exposure_updates(skill)
     for warning in result["warnings"]:
         print(f"Warning: {warning}")
     for advisory in result["advisories"]:
@@ -223,6 +224,7 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
         "library-accept",
         skill_id=preview["skill"]["id"],
         working_hash=preview["skill"]["working_hash"],
+        provenance_fingerprint=preview.get("_provenance_fingerprint"),
         override_lint=args.override_lint,
         reason=(args.reason or "").strip() or None,
     )
@@ -272,7 +274,19 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
     print(f"Accepted: {skill['id']}")
     print(f"Content hash: {skill['working_hash']}")
     print(f"Status: {skill['status']}")
+    _print_library_exposure_updates(skill)
     return 0
+
+
+def _print_library_exposure_updates(skill: dict[str, Any]) -> None:
+    updates = [item for item in skill.get("exposures") or [] if item.get("status") == "update_available"]
+    if not updates:
+        return
+    print(f"Exposure refresh available: {len(updates)} current-project target{'s' if len(updates) != 1 else ''}")
+    for item in updates:
+        argv = item.get("next_command_argv")
+        if isinstance(argv, list) and argv:
+            print(f"Next: {shlex.join(str(value) for value in argv)}")
 
 
 def cmd_library_history(args: argparse.Namespace) -> int:
@@ -413,6 +427,10 @@ def _print_acceptance_preview(preview: dict[str, Any]) -> None:
     print(f"Scanner risk: {preview['scan']['risk']}")
     print(f"Lint: {preview['lint']['status']} ({preview['lint']['blocking_count']} blocking)")
     print(f"Git mode: {preview['git']['mode']}")
+    for state in ("staged", "unstaged", "untracked"):
+        paths = preview["git"].get(state) or []
+        if paths:
+            print(f"Git {state}: {', '.join(str(path) for path in paths)}")
     if preview["requires_override"]:
         print("This hash requires --override-lint --reason <text> before acceptance.")
 

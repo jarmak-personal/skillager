@@ -613,7 +613,14 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "claude-only"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Claude Only\n\nUse Claude-only guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: claude-only\n"
+                "description: Use Claude-only guidance.\n"
+                "---\n\n"
+                "# Claude Only\n\nUse Claude-only guidance.\n",
+                encoding="utf-8",
+            )
             (skill_dir / "skillager.yaml").write_text(
                 "\n".join(
                     [

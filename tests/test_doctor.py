@@ -341,10 +341,8 @@ class SkillagerDoctorTests(unittest.TestCase):
             data = json.loads(output.getvalue())
             self.assertEqual(data["status"], "lint-blocked")
             self.assertEqual(data["next"]["command"], "skillager review --include-lint-blocked --summary")
-            self.assertIn(
-                'skillager review approve project/linted --override-lint --reason "<why>"',
-                data["next"]["next_commands"],
-            )
+            self.assertEqual(data["next"]["next_commands"], ["skillager review --include-lint-blocked --summary"])
+            self.assertNotIn("<why>", output.getvalue())
 
     def test_doctor_reports_active_lint_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

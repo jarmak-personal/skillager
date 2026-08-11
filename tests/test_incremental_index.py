@@ -68,6 +68,26 @@ class IncrementalIndexTests(unittest.TestCase):
             self.assertEqual(scan_mock.call_count, 1)
             self.assertEqual(lint_mock.call_count, 1)
 
+    def test_executable_mode_change_invalidates_fingerprint_and_recomputes_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skills = root / "skills"
+            state = root / "state"
+            skill_root = skills / "demo"
+            write_skill(skill_root)
+            tool = skill_root / "tool.sh"
+            tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            tool.chmod(0o644)
+            cold = build_index(state, [skills], include_packages=False)
+            old_fingerprint = cold["skills"][0]["tree_fingerprint"]
+            old_hash = cold["skills"][0]["content_hash"]
+
+            tool.chmod(0o755)
+            warm = build_index(state, [skills], include_packages=False, persist=False)
+
+            self.assertNotEqual(warm["skills"][0]["tree_fingerprint"], old_fingerprint)
+            self.assertNotEqual(warm["skills"][0]["content_hash"], old_hash)
+
     def test_fingerprint_uses_content_hash_file_eligibility_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "demo"

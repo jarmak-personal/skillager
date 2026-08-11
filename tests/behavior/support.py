@@ -96,6 +96,10 @@ def write_basic_skill(project: Path, slug: str = "gis-domain") -> Path:
     skill = project / ".skills" / slug
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(
+        "---\n"
+        "name: gis-domain\n"
+        "description: Use spatial indexing guidance for projected coordinate systems.\n"
+        "---\n\n"
         "# GIS Domain\n\n"
         "Use spatial indexing guidance for projected coordinate systems.\n\n"
         f"{BODY_SENTINEL}\n",

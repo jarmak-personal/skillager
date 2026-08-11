@@ -58,7 +58,7 @@ def library_history(
     registration, identity = _require_library_identity(catalog_root)
     where = library_where(catalog_root, skill_name, project_dir=project_dir)["skill"]
     git = repository_status(registration.layout.root, mode=identity.git_mode)
-    availability = _history_availability(identity, git)
+    availability = _history_availability(identity, git, registration.layout)
     if not availability["available"]:
         return {
             "schema": LIBRARY_HISTORY_SCHEMA,
@@ -210,7 +210,7 @@ def restore_library_skill(
         if _tree_fingerprint(current_endpoint.files) != expected_current_fingerprint:
             raise ValueError("library skill tree changed since restore preview; review it again")
         git = repository_status(registration.layout.root, mode=identity.git_mode)
-        availability = _history_availability(identity, git)
+        availability = _history_availability(identity, git, registration.layout)
         if not availability["available"]:
             raise ValueError(f"library history is unavailable: {availability['reason']}")
         _require_safe_git_mutation(git, allow_target_staged=False)
@@ -284,11 +284,17 @@ def restore_library_skill(
             ) from exc
         refresh_collection(catalog_root, LIBRARY_NAMESPACE)
         where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
+        restored_version = {
+            **version,
+            "head": True,
+            "current": True,
+            "accepted": True,
+        }
         return {
             "schema": LIBRARY_RESTORE_SCHEMA,
             "status": "restored",
             "skill": where,
-            "restored_version": version,
+            "restored_version": restored_version,
             "commit": commit,
             "approval": {
                 "state": record["state"],

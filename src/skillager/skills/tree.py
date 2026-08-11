@@ -15,7 +15,7 @@ CONTENT_TREE_EXCLUDES = {
     "skillager.materialized.yaml",
 }
 TRANSIENT_PATTERNS = ("*.tmp", "*.swp", "*~")
-TREE_FINGERPRINT_SCHEMA = "skillager.tree-fingerprint.v1"
+TREE_FINGERPRINT_SCHEMA = "skillager.tree-fingerprint.v2"
 
 
 def iter_content_files(root: Path) -> list[Path]:
@@ -100,6 +100,8 @@ def content_tree_fingerprint(root: Path) -> str:
         digest.update(str(stat.st_size).encode("ascii"))
         digest.update(b"\0")
         digest.update(str(stat.st_mtime_ns).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(b"x" if stat.st_mode & 0o111 else b"-")
         digest.update(b"\0")
     return digest.hexdigest()
 

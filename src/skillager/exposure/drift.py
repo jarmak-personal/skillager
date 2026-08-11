@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Any
 
 from ..simple_yaml import load_mapping
 from ..trust import content_hash
-from .impl import MATERIALIZED_SCHEMA, ROUTER_SCHEMA, WORKING_SKILL_ID
+from .impl import MATERIALIZED_SCHEMA, ROUTER_SCHEMA, WORKING_SKILL_ID, content_hashes
 from .target_state import matches_materialized_target
 
 EXPOSURE_CHANGES_SCHEMA = "skillager.exposure-changes.v1"
 ACTIONABLE_EXPOSURE_STATES = {
+    "source_update",
+    "source_unavailable",
     "local_edit",
     "target_missing",
     "blocked",
@@ -18,6 +21,8 @@ ACTIONABLE_EXPOSURE_STATES = {
 }
 _COUNT_KEYS = {
     "current": "current",
+    "source_update": "source_updates",
+    "source_unavailable": "source_unavailable",
     "local_edit": "local_edits",
     "target_missing": "target_missing",
     "blocked": "blocked",
@@ -32,6 +37,7 @@ def scan_project_exposures(
     agent: str | None = None,
     catalog_root: Path | None = None,
     known_native_roots: set[Path] | None = None,
+    current_source_hashes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Classify live current-project exposure targets without mutating state."""
 
@@ -41,6 +47,7 @@ def scan_project_exposures(
         catalog_root=catalog_root,
         authoritative=False,
         known_native_roots=known_native_roots,
+        current_source_hashes=current_source_hashes,
     )
     counts = {key: 0 for key in _COUNT_KEYS.values()}
     for record in records:
@@ -60,6 +67,7 @@ def list_project_exposures(
     catalog_root: Path | None = None,
     authoritative: bool = True,
     known_native_roots: set[Path] | None = None,
+    current_source_hashes: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return every discoverable current-project exposure classification."""
 
@@ -90,6 +98,7 @@ def list_project_exposures(
                         sidecar=sidecar,
                         fallback_agent=root_agent,
                         authoritative=authoritative,
+                        current_source_hashes=current_source_hashes,
                     )
                     if record is not None:
                         records.append(record)
@@ -108,6 +117,7 @@ def classify_exposure_target(
     sidecar: Path | None = None,
     fallback_agent: str = "codex",
     authoritative: bool = True,
+    current_source_hashes: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     """Classify one sidecar-backed target; return None for Skillager Working."""
 
@@ -155,7 +165,17 @@ def classify_exposure_target(
     if current_hash in blocked_hashes:
         status = "blocked"
     elif target_matches and current_hash == data["materialized_hash"]:
-        status = "current"
+        source_change = _source_change(data, current_source_hashes)
+        if source_change is None:
+            status = "current"
+        else:
+            status = str(source_change.pop("_status"))
+            record.update(source_change)
+            if status == "source_update":
+                command = _reexpose_command(record, data)
+                if command:
+                    record["command"] = shlex.join(command)
+                    record["next_command_argv"] = command
     else:
         status = "local_edit"
     record["status"] = status
@@ -192,7 +212,7 @@ def _base_record(
         mode = "stub"
     else:
         mode = "native"
-    return {
+    record = {
         "skill_id": str(data.get("source_id") or data.get("id")),
         "agent": str(data.get("agent") or fallback_agent),
         "scope": "project",
@@ -201,6 +221,71 @@ def _base_record(
         "source_hash": data.get("source_hash"),
         "materialized_hash": data.get("materialized_hash"),
     }
+    if source_type == "skillager-router":
+        record.update(
+            {
+                "router_kind": data.get("router_kind") or data.get("selection_kind"),
+                "router_slug": data.get("router_slug") or target.name,
+                "tag": data.get("tag"),
+                "skill_ids": [str(value) for value in data.get("skill_ids") or []],
+            }
+        )
+    return record
+
+
+def _source_change(data: dict[str, Any], current_source_hashes: dict[str, str] | None) -> dict[str, Any] | None:
+    if current_source_hashes is None:
+        return None
+    source_type = data.get("source_type")
+    if source_type == "skillager-router":
+        skill_ids = [str(value) for value in data.get("skill_ids") or []]
+        missing = [skill_id for skill_id in skill_ids if skill_id not in current_source_hashes]
+        if missing:
+            return {
+                "_status": "source_unavailable",
+                "expected_source_hash": None,
+                "reason": "router members are no longer all in the current approved inventory",
+                "unavailable_skill_ids": missing,
+            }
+        expected = content_hashes(
+            [{"id": skill_id, "content_hash": current_source_hashes[skill_id]} for skill_id in skill_ids]
+        )
+        if data.get("source_hash") != expected:
+            return {
+                "_status": "source_update",
+                "expected_source_hash": expected,
+                "reason": "approved router member content changed; re-expose to refresh this projection",
+            }
+        return None
+
+    skill_id = str(data.get("source_id") or data.get("id"))
+    expected_source_hash = current_source_hashes.get(skill_id)
+    if expected_source_hash is None:
+        return {
+            "_status": "source_unavailable",
+            "expected_source_hash": None,
+            "reason": "source is no longer in the current approved inventory",
+        }
+    if data.get("source_hash") != expected_source_hash:
+        return {
+            "_status": "source_update",
+            "expected_source_hash": expected_source_hash,
+            "reason": "approved source content changed; re-expose to refresh this projection",
+        }
+    return None
+
+
+def _reexpose_command(record: dict[str, Any], data: dict[str, Any]) -> list[str] | None:
+    agent = str(record.get("agent") or "codex")
+    common = ["--agent", agent, "--scope", "project"]
+    if record.get("mode") == "router":
+        if record.get("router_kind") == "tag" and record.get("tag"):
+            return ["skillager", "expose", "--tag", str(record["tag"]), "--mode", "router", *common]
+        skill_ids = [str(value) for value in data.get("skill_ids") or []]
+        if skill_ids:
+            return ["skillager", "expose", *skill_ids, "--mode", "router", *common]
+        return None
+    return ["skillager", "expose", str(record["skill_id"]), "--mode", str(record["mode"]), *common]
 
 
 def _sidecar_error_record(

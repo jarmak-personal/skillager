@@ -302,6 +302,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             accepted = cli.run_confirmed("library", "accept", "mode-aware", "--yes", "--json")
             self.assert_code(accepted, 0)
             accepted_hash = accepted.json()["skill"]["working_hash"]
+            self.assert_code(cli.run("setup", "--agent", "codex", "--json"), 0)
 
             tool.chmod(0o755)
             status = cli.run("library", "status", "mode-aware", "--json")
@@ -310,6 +311,152 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertNotEqual(status.json()["skill"]["working_hash"], accepted_hash)
             blocked = cli.run("show", "lib/mode-aware", "--content")
             self.assert_code(blocked, 2)
+            doctor = cli.run("doctor", "--agent", "codex", "--json")
+            self.assert_code(doctor, 0)
+            doctor_data = doctor.json()
+            self.assertEqual(doctor_data["status"], "ready")
+            self.assertIn("pending owner acceptance", doctor_data["message"])
+            self.assertEqual(
+                doctor_data["state"]["owned_changes"]["items"][0]["command"],
+                "skillager library accept lib/mode-aware",
+            )
+            self.assertIn(
+                "skillager library accept lib/mode-aware",
+                doctor_data["next"]["next_commands"],
+            )
+
+    def test_accepted_source_updates_make_direct_and_router_exposures_refreshable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project, cli = make_basic_workspace(root)
+            library = root / "library"
+            self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
+            for name in ("native-fresh", "stub-fresh", "router-fresh"):
+                self.assert_code(cli.run("library", "new", name), 0)
+                self.assert_code(cli.run_confirmed("library", "accept", name, "--yes"), 0)
+
+            self.assert_code(
+                cli.run("expose", "lib/native-fresh", "--mode", "native", "--agent", "codex", "--json"),
+                0,
+            )
+            self.assert_code(
+                cli.run("expose", "lib/stub-fresh", "--mode", "stub", "--agent", "codex", "--json"),
+                0,
+            )
+            self.assert_code(cli.run("tag", "create", "freshness"), 0)
+            self.assert_code(cli.run("tag", "add", "freshness", "lib/router-fresh"), 0)
+            self.assert_code(
+                cli.run("expose", "--tag", "freshness", "--mode", "router", "--agent", "codex", "--json"),
+                0,
+            )
+
+            for name in ("native-fresh", "stub-fresh", "router-fresh"):
+                skill_file = library / "skills" / name / "SKILL.md"
+                skill_file.write_text(
+                    skill_file.read_text(encoding="utf-8") + "\nNew accepted guidance.\n",
+                    encoding="utf-8",
+                )
+                if name == "native-fresh":
+                    pending = cli.run("working", "--agent", "codex", "--json")
+                    self.assert_code(pending, 0)
+                    pending_changes = pending.json()["exposure_changes"]
+                    self.assertEqual(pending_changes["source_unavailable"], 1)
+                    self.assertEqual(pending_changes["source_updates"], 0)
+                    unavailable = next(
+                        item for item in pending_changes["items"]
+                        if item["status"] == "source_unavailable"
+                    )
+                    self.assertNotIn("command", unavailable)
+                    self.assertNotIn("next_command_argv", unavailable)
+                    pending_plain = cli.run("working", "--agent", "codex")
+                    self.assert_code(pending_plain, 0)
+                    self.assertIn("cannot be refreshed until its source is approved", pending_plain.stdout)
+                accepted = cli.run_confirmed("library", "accept", name, "--yes", "--json")
+                self.assert_code(accepted, 0)
+
+            status = cli.run("library", "status", "lib/native-fresh", "--json")
+            self.assert_code(status, 0)
+            direct = status.json()["skill"]["exposures"][0]
+            self.assertEqual(direct["status"], "update_available")
+            self.assertEqual(
+                direct["next_command_argv"],
+                [
+                    "skillager",
+                    "expose",
+                    "lib/native-fresh",
+                    "--mode",
+                    "native",
+                    "--agent",
+                    "codex",
+                    "--scope",
+                    "project",
+                ],
+            )
+
+            working = cli.run("working", "--agent", "codex", "--json")
+            self.assert_code(working, 0)
+            data = working.json()
+            self.assertEqual(data["exposure_changes"]["source_updates"], 3)
+            self.assertEqual(data["exposure_changes"]["current"], 0)
+            self.assertEqual(data["inventory"]["exposed_now"], 0)
+            self.assertEqual(data["inventory"]["available_on_demand"], 3)
+            updates = data["exposure_changes"]["items"]
+            self.assertEqual({item["mode"] for item in updates}, {"native", "stub", "router"})
+            self.assertTrue(all(item["status"] == "source_update" for item in updates))
+            self.assertTrue(all(item.get("next_command_argv") for item in updates))
+            native_target = project / ".agents" / "skills" / "lib-native-fresh"
+            self.assertNotIn("New accepted guidance.", (native_target / "SKILL.md").read_text(encoding="utf-8"))
+
+            managed = cli.run("expose", "--list", "--agent", "codex", "--scope", "project", "--json")
+            self.assert_code(managed, 0)
+            native_exposure = next(
+                item for item in managed.json()["exposures"]
+                if item["skill_id"] == "lib/native-fresh"
+            )
+            removal = cli.run(
+                "expose",
+                "--remove",
+                native_exposure["exposure_id"],
+                "--agent",
+                "codex",
+                "--scope",
+                "project",
+                "--json",
+            )
+            self.assert_code(removal, 0)
+            self.assertEqual(removal.json()["results"][0]["current_status"], "current")
+            self.assertFalse(removal.json()["results"][0]["requires_force"])
+
+            listing = cli.run("list", "--full-json")
+            self.assert_code(listing, 0)
+            listed = {item["id"]: item for item in listing.json()}
+            for skill_id in ("lib/native-fresh", "lib/stub-fresh", "lib/router-fresh"):
+                self.assertEqual(listed[skill_id]["exposure"], "hidden")
+                self.assertEqual(listed[skill_id]["exposure_targets"], [])
+
+            plain = cli.run("working", "--agent", "codex")
+            self.assert_code(plain, 0)
+            self.assertIn("can be refreshed from newly approved content", plain.stdout)
+            self.assertIn("skillager expose lib/native-fresh --mode native", plain.stdout)
+
+            self.assert_code(
+                cli.run("expose", "lib/native-fresh", "--mode", "native", "--agent", "codex", "--json"),
+                0,
+            )
+            self.assert_code(
+                cli.run("expose", "lib/stub-fresh", "--mode", "stub", "--agent", "codex", "--json"),
+                0,
+            )
+            self.assert_code(
+                cli.run("expose", "--tag", "freshness", "--mode", "router", "--agent", "codex", "--json"),
+                0,
+            )
+            refreshed = cli.run("working", "--agent", "codex", "--json")
+            self.assert_code(refreshed, 0)
+            self.assertEqual(refreshed.json()["exposure_changes"]["source_updates"], 0)
+            self.assertEqual(refreshed.json()["exposure_changes"]["current"], 3)
+            self.assertEqual(refreshed.json()["inventory"]["exposed_now"], 3)
+            self.assertTrue((native_target / "SKILL.md").is_file())
 
     def test_working_revokes_stale_library_inventory_without_writing_trust(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

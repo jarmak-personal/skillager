@@ -60,7 +60,9 @@ def import_preview(
         "source": _compact_source(source),
         "destination": {
             "id": f"{LIBRARY_NAMESPACE}/{name}",
+            "slug": name,
             "name": name,
+            "display_name": source.get("name") or name,
             "path": str(target),
             "exists": False,
         },
@@ -195,11 +197,17 @@ def import_library_skill(
             ) from exc
         refresh_collection(catalog_root, LIBRARY_NAMESPACE)
         where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
+        destination = {
+            **where,
+            "slug": name,
+            "name": name,
+            "display_name": where.get("name") or name,
+        }
         return {
             "schema": IMPORT_SCHEMA,
             "status": "imported",
             "source": _compact_source(source),
-            "destination": where,
+            "destination": destination,
             "provenance": provenance,
             "approval": {
                 "state": record["state"],

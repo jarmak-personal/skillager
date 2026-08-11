@@ -1261,7 +1261,14 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "plain"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Plain Skill\n\nUse ordinary guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: plain\n"
+                "description: Use ordinary guidance.\n"
+                "---\n\n"
+                "# Plain Skill\n\nUse ordinary guidance.\n",
+                encoding="utf-8",
+            )
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)

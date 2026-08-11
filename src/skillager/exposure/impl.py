@@ -528,9 +528,9 @@ def materialize_stub_one(
     dry_run: bool = False,
     force: bool = False,
 ) -> dict[str, Any]:
-    with _target_lock_context(target, dry_run=dry_run):
+    with _projection_target_context(target, str(skill["id"]), dry_run=dry_run) as target:
         sidecar = target / "skillager.materialized.yaml"
-        rendered = render_stub_skill(skill)
+        rendered = render_stub_skill(skill, stub_slug=target.name)
         prospective_hash = _single_file_content_hash(rendered)
         decisions = _exposure_decisions(sidecar)
         if prospective_hash in decisions.get("exposure_blocked_hashes", []):
@@ -564,7 +564,7 @@ def materialize_stub_one(
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
-def render_stub_skill(skill: dict[str, Any]) -> str:
+def render_stub_skill(skill: dict[str, Any], *, stub_slug: str | None = None) -> str:
     skill_id = skill["id"]
     name = _stub_display_name(skill)
     summary = str(skill.get("summary") or "Use this Skillager-managed skill when it matches the user's task.").strip()
@@ -592,7 +592,7 @@ def render_stub_skill(skill: dict[str, Any]) -> str:
             "Before following the skill instructions, activate the full available skill body:",
             "",
             "```bash",
-            f"skillager activate {skill_id} --from-stub {slugify(skill_id)}",
+            f"skillager activate {skill_id} --from-stub {stub_slug or slugify(skill_id)}",
             "```",
             "",
             "Never use `--force`. If activation is refused, continue without this skill or ask the user to run `skillager setup`.",
@@ -626,10 +626,8 @@ def materialize_one(
     force: bool = False,
 ) -> dict[str, Any]:
     source_root = Path(skill["root"]).resolve()
-    if (skill.get("source") or {}).get("ownership") == "library":
-        _require_native_skill_frontmatter(source_root / "SKILL.md")
-    with _target_lock_context(target, dry_run=dry_run):
-        target = _collision_safe_target(target, skill["id"])
+    _require_native_skill_frontmatter(source_root / "SKILL.md")
+    with _projection_target_context(target, str(skill["id"]), dry_run=dry_run) as target:
         if scope == "project" and target.resolve() == source_root and (target / "SKILL.md").exists() and not (target / "skillager.materialized.yaml").exists():
             return _result(skill, target, "already_native", "existing unmanaged native skill", agent=agent, scope=scope)
         sidecar = target / "skillager.materialized.yaml"
@@ -799,6 +797,21 @@ def _target_lock_context(target: Path, *, dry_run: bool):
     return _target_lock(target)
 
 
+@contextlib.contextmanager
+def _projection_target_context(target: Path, skill_id: str, *, dry_run: bool):
+    """Choose a collision-safe direct projection target under one namespace lock."""
+
+    if dry_run:
+        yield _collision_safe_target(target, skill_id)
+        return
+    target.parent.mkdir(parents=True, exist_ok=True)
+    allocation_resource = target.parent / ".skillager-target-allocation"
+    with resource_lock(allocation_resource):
+        selected = _collision_safe_target(target, skill_id)
+        with resource_lock(selected):
+            yield selected
+
+
 def _sidecar(
     skill: dict[str, Any],
     *,
@@ -959,16 +972,33 @@ def _copy_skill_tree(source: Path, target: Path) -> None:
 
 
 def _collision_safe_target(target: Path, skill_id: str) -> Path:
-    sidecar = target / "skillager.materialized.yaml"
-    if not sidecar.exists():
+    current_source = _managed_target_source_id(target)
+    if current_source in {None, skill_id}:
         return target
+    alternate = target.with_name(f"{target.name}-{_slug_hash(skill_id)}")
+    if not alternate.exists() and not alternate.is_symlink():
+        return alternate
+    alternate_source = _managed_target_source_id(alternate)
+    if alternate_source == skill_id:
+        return alternate
+    occupant = f"managed source {alternate_source}" if alternate_source else "an unmanaged or unreadable target"
+    raise ValueError(f"collision fallback target is occupied by {occupant}: {alternate}")
+
+
+def _managed_target_source_id(target: Path) -> str | None:
+    if not target.exists() and not target.is_symlink():
+        return None
+    sidecar = target / "skillager.materialized.yaml"
+    if not sidecar.is_file() or sidecar.is_symlink():
+        # Returning the requested base identity would let the normal unmanaged-target
+        # protection produce its established diagnostic without allocating elsewhere.
+        return None
     try:
         data = load_mapping(sidecar)
     except Exception:
-        return target
-    if data.get("source_id") in {None, skill_id}:
-        return target
-    return target.with_name(f"{target.name}-{_slug_hash(skill_id)}")
+        return None
+    source_id = data.get("source_id") or data.get("id")
+    return str(source_id) if isinstance(source_id, str) and source_id else None
 
 
 def _is_customized(sidecar: Path, target: Path) -> bool:
@@ -977,6 +1007,9 @@ def _is_customized(sidecar: Path, target: Path) -> bool:
     try:
         data = load_mapping(sidecar)
     except Exception:
+        return True
+    source_id = data.get("source_id") or data.get("id")
+    if not isinstance(source_id, str) or not source_id:
         return True
     if data.get("customized") is True:
         return True

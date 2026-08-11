@@ -30,6 +30,17 @@ def write_manifest(skill_dir: Path, audience: str) -> None:
     )
 
 
+def native_skill_text(name: str, heading: str, guidance: str) -> str:
+    return (
+        "---\n"
+        f"name: {name}\n"
+        f"description: {guidance}\n"
+        "---\n\n"
+        f"# {heading}\n\n"
+        f"{guidance}\n"
+    )
+
+
 class SkillagerMaterializeTests(unittest.TestCase):
 
     def test_global_codex_target_uses_current_user_skill_directory(self) -> None:
@@ -46,7 +57,10 @@ class SkillagerMaterializeTests(unittest.TestCase):
             source = root / "source"
             target = root / "target"
             source.mkdir()
-            (source / "SKILL.md").write_text("# Accepted\n", encoding="utf-8")
+            (source / "SKILL.md").write_text(
+                native_skill_text("demo", "Accepted", "Use accepted guidance."),
+                encoding="utf-8",
+            )
             accepted_hash = content_hash(source)
             skill = {
                 "id": "project/demo",
@@ -62,7 +76,10 @@ class SkillagerMaterializeTests(unittest.TestCase):
 
             def racing_copy(source_root: Path, candidate: Path) -> None:
                 original_copy(source_root, candidate)
-                (source_root / "SKILL.md").write_text("# Unreviewed\n", encoding="utf-8")
+                (source_root / "SKILL.md").write_text(
+                    native_skill_text("demo", "Unreviewed", "Use changed guidance."),
+                    encoding="utf-8",
+                )
 
             with patch("skillager.exposure.impl._copy_skill_tree", side_effect=racing_copy):
                 with self.assertRaisesRegex(ValueError, "changed during exposure"):
@@ -209,7 +226,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo", "Use demo guidance."), encoding="utf-8")
             with patch.dict(
                 os.environ,
                 {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"},
@@ -237,7 +254,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo", "Use demo guidance."), encoding="utf-8")
             with patch.dict(
                 os.environ,
                 {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"},
@@ -265,7 +282,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo", "Use demo guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -285,7 +302,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo", "Use demo guidance."), encoding="utf-8")
             legacy = (
                 "Run `skillager working` at session start. Use only reviewed/exposed Skillager-managed skills; "
                 "ask the user to run `skillager doctor --agent codex` if review or repair is needed."
@@ -314,8 +331,8 @@ class SkillagerMaterializeTests(unittest.TestCase):
             dev_skill = root / ".skills" / "commit"
             user_skill.mkdir(parents=True)
             dev_skill.mkdir(parents=True)
-            (user_skill / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
-            (dev_skill / "SKILL.md").write_text("# Commit\n\nUse commit workflow guidance.\n", encoding="utf-8")
+            (user_skill / "SKILL.md").write_text(native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."), encoding="utf-8")
+            (dev_skill / "SKILL.md").write_text(native_skill_text("commit", "Commit", "Use commit workflow guidance."), encoding="utf-8")
             write_manifest(user_skill, "user")
             write_manifest(dev_skill, "dev")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
@@ -337,8 +354,8 @@ class SkillagerMaterializeTests(unittest.TestCase):
             second = root / ".skills" / "second"
             first.mkdir(parents=True)
             second.mkdir(parents=True)
-            (first / "SKILL.md").write_text("# First\n\nUse first guidance.\n", encoding="utf-8")
-            (second / "SKILL.md").write_text("# Second\n\nUse second guidance.\n", encoding="utf-8")
+            (first / "SKILL.md").write_text(native_skill_text("first", "First", "Use first guidance."), encoding="utf-8")
+            (second / "SKILL.md").write_text(native_skill_text("second", "Second", "Use second guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -370,7 +387,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo", "Use demo guidance."), encoding="utf-8")
             (root / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
             (root / "CLAUDE.md").write_text("# Claude\n", encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
@@ -386,7 +403,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo", "Use demo guidance."), encoding="utf-8")
             (root / "AGENTS.md").write_text("# Agents\n", encoding="utf-8")
             (root / "CLAUDE.md").write_text("# Claude\n", encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
@@ -402,7 +419,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo", "Use demo guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -434,7 +451,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse ordinary guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use ordinary guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root):
                     build_index(state, include_packages=False)
@@ -447,7 +464,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             (skill_dir / "skill.oms.sig").write_text("{}\n", encoding="utf-8")
             (skill_dir / "skill-card.md").write_text("# Skill Card\n\nRelease evidence.\n", encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
@@ -470,7 +487,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -501,7 +518,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -518,7 +535,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -568,7 +585,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -602,7 +619,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -633,7 +650,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -677,7 +694,10 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             native = root / ".agents" / "skills" / "gis-domain"
             native.mkdir(parents=True)
-            (native / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
+            (native / "SKILL.md").write_text(
+                native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."),
+                encoding="utf-8",
+            )
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
@@ -703,7 +723,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             skill_dir = root / ".skills" / "demo"
             scripts = skill_dir / "scripts"
             scripts.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             (scripts / "helper.py").write_text("print('helper')\n", encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
@@ -720,7 +740,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             skill_dir.mkdir(parents=True)
             secret = root / "secret.txt"
             secret.write_text("SECRET\n", encoding="utf-8")
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             os.symlink(secret, skill_dir / "secret-link.txt")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
@@ -738,8 +758,8 @@ class SkillagerMaterializeTests(unittest.TestCase):
             second = root / ".skills" / "flat"
             first.mkdir(parents=True)
             second.mkdir(parents=True)
-            (first / "SKILL.md").write_text("# First\n\nUse first guidance.\n", encoding="utf-8")
-            (second / "SKILL.md").write_text("# Second\n\nUse second guidance.\n", encoding="utf-8")
+            (first / "SKILL.md").write_text(native_skill_text("first", "First", "Use first guidance."), encoding="utf-8")
+            (second / "SKILL.md").write_text(native_skill_text("second", "Second", "Use second guidance."), encoding="utf-8")
             skills = [
                 {
                     "id": "project/a/b",
@@ -775,7 +795,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     build_index(state, include_packages=False)
@@ -789,7 +809,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             state = root / ".skillager"
             skill_dir = root / ".skills" / "demo"
             skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            (skill_dir / "SKILL.md").write_text(native_skill_text("demo", "Demo Skill", "Use project guidance."), encoding="utf-8")
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)

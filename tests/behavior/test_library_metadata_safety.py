@@ -52,6 +52,39 @@ class PersonalLibraryMetadataSafetyBehaviorTests(unittest.TestCase):
             self.assert_code(imported, 0)
             self.assert_safe_scan_metadata(imported)
 
+    def test_full_inventory_metadata_never_exposes_scanner_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "library"
+            self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
+            self.assert_code(cli.run("library", "new", "inventory-risk"), 0)
+            (library / "skills" / "inventory-risk" / "SKILL.md").write_text(RISKY_BODY, encoding="utf-8")
+            accepted = cli.run_confirmed(
+                "library",
+                "accept",
+                "inventory-risk",
+                "--yes",
+                "--override-lint",
+                "--reason",
+                "Reviewed metadata boundary fixture",
+                "--json",
+            )
+            self.assert_code(accepted, 0)
+
+            results = (
+                cli.run("list", "--full-json"),
+                cli.run("search", "inventory-risk", "--full-json"),
+                cli.run("show", "lib/inventory-risk", "--full-json"),
+            )
+            for result in results:
+                with self.subTest(stdout=result.stdout):
+                    self.assert_code(result, 0)
+                    self.assertNotIn(SCAN_BODY_SENTINEL, result.stdout)
+                    self.assertNotIn(SCAN_BODY_SENTINEL, result.stderr)
+                    self.assertNotIn('"message"', result.stdout)
+                    self.assertNotIn('"approval_key"', result.stdout)
+
     @unittest.skipUnless(shutil.which("git"), "system Git is required")
     def test_restore_preview_and_acceptance_receipt_do_not_expose_scanner_matches(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

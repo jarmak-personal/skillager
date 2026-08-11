@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import json
 import os
+import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +22,19 @@ from ..simple_yaml import load_mapping
 from ..skills.tree import require_canonical_content_tree
 from ..state.locking import resource_lock, resource_locks
 from ..trust import approval_key_for, load_trust, make_lint_override, set_trust
-from .git import commit_paths, git_available, head_content_hash, initialize_repository, path_changes, repository_status
+from .git import (
+    LibraryGitError,
+    commit_paths,
+    git_available,
+    git_file_content,
+    head_content_hash,
+    head_tracked_paths,
+    initialize_repository,
+    path_changes,
+    repository_status,
+    require_paths_trackable,
+    unstage_paths,
+)
 from .metadata import (
     load_library_identity,
     load_library_provenance,
@@ -42,7 +58,7 @@ def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: 
     created = False
     git_repository_created = False
     commit: dict[str, Any] | None = None
-    with resource_lock(catalog_root / "library-init"):
+    with resource_lock(catalog_root / "library-mutation"):
         registration = _registered_library_or_conflict(catalog_root)
         if registration is not None:
             if path is not None and LibraryLayout.from_root(path).root != registration.layout.root:
@@ -65,26 +81,51 @@ def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: 
             _validate_identity_git(identity, layout)
         else:
             _preflight_new_library(layout, no_git=no_git)
+            root_created = not layout.root.exists()
             layout.root.mkdir(parents=True, exist_ok=True)
             git_mode = "disabled" if no_git else "system"
-            if git_mode == "system":
-                git_repository_created = initialize_repository(layout.root)
-            layout.skills.mkdir(exist_ok=True)
-            layout.metadata.mkdir()
-            identity = new_library_identity(git_mode=git_mode)
-            write_library_identity(layout, identity)
-            write_empty_provenance(layout)
+            skills_created = not layout.skills.exists()
+            metadata_created = False
+            keep_path = layout.skills / ".gitkeep"
+            keep_created = False
             commit_targets = [layout.identity_path, layout.provenance_path]
-            if not any(layout.skills.iterdir()):
-                keep_path = layout.skills / ".gitkeep"
-                keep_path.touch(exist_ok=False)
-                commit_targets.append(keep_path)
-            if git_mode == "system":
-                commit = commit_paths(
-                    layout.root,
-                    commit_targets,
-                    "Initialize Skillager personal library",
+            try:
+                if git_mode == "system":
+                    git_repository_created = initialize_repository(layout.root)
+                keep_exists = keep_path.exists() or keep_path.is_symlink()
+                if keep_exists and (keep_path.is_symlink() or not keep_path.is_file()):
+                    raise ValueError(f"library skills placeholder must be a regular file: {keep_path}")
+                needs_placeholder = keep_exists or not layout.skills.exists() or not any(layout.skills.iterdir())
+                if needs_placeholder:
+                    commit_targets.append(keep_path)
+                if git_mode == "system":
+                    require_paths_trackable(layout.root, commit_targets)
+                layout.skills.mkdir(exist_ok=True)
+                layout.metadata.mkdir()
+                metadata_created = True
+                identity = new_library_identity(git_mode=git_mode)
+                write_library_identity(layout, identity)
+                write_empty_provenance(layout)
+                if needs_placeholder and not keep_exists:
+                    keep_path.touch(exist_ok=False)
+                    keep_created = True
+                if git_mode == "system":
+                    commit = commit_paths(
+                        layout.root,
+                        commit_targets,
+                        "Initialize Skillager personal library",
+                    )
+            except Exception:
+                _rollback_library_initialization(
+                    layout,
+                    commit_targets=commit_targets,
+                    root_created=root_created,
+                    skills_created=skills_created,
+                    metadata_created=metadata_created,
+                    keep_created=keep_created,
+                    git_repository_created=git_repository_created,
                 )
+                raise
             created = True
         register_library_collection(catalog_root, layout.root, identity.library_id)
         index = refresh_collection(catalog_root, LIBRARY_NAMESPACE)
@@ -133,7 +174,7 @@ def library_relocation_preview(catalog_root: Path, path: Path) -> dict[str, Any]
 
 
 def relocate_library(catalog_root: Path, path: Path) -> dict[str, Any]:
-    with resource_lock(catalog_root / "library-init"):
+    with resource_lock(catalog_root / "library-mutation"):
         preview = library_relocation_preview(catalog_root, path)
         relocate_library_collection(catalog_root, Path(preview["to_path"]), str(preview["library_id"]))
         index = refresh_collection(catalog_root, LIBRARY_NAMESPACE)
@@ -181,7 +222,12 @@ def library_acceptance_preview(catalog_root: Path, skill_name: str) -> dict[str,
     require_canonical_content_tree(registration.layout.skill_root(normalized), action="library acceptance")
     skill = _library_skill_entry(catalog_root, skill_name)
     git = repository_status(registration.layout.root, mode=identity.git_mode)
-    changes = path_changes(git, registration.layout.root, Path(skill["root"])) if identity.git_mode == "system" else _empty_path_changes()
+    commit_targets = _acceptance_commit_targets(registration.layout, normalized, Path(skill["root"]))
+    changes = (
+        _merge_path_changes(*(path_changes(git, registration.layout.root, path) for path in commit_targets))
+        if identity.git_mode == "system"
+        else _empty_path_changes()
+    )
     lint_blocked = bool(blocking_findings(skill.get("lint")))
     high_risk = skill.get("scan", {}).get("risk") == "high"
     return {
@@ -197,6 +243,7 @@ def library_acceptance_preview(catalog_root: Path, skill_name: str) -> dict[str,
             "operation": git.get("operation"),
             **changes,
         },
+        "_provenance_fingerprint": _provenance_state_fingerprint(registration.layout, git, normalized),
     }
 
 
@@ -230,10 +277,9 @@ def accept_library_skill(
         if identity.git_mode == "system":
             git = repository_status(layout.root, mode=identity.git_mode)
             target = Path(skill["root"])
-            commit_targets = [target]
-            provenance = load_library_provenance(layout)
-            if isinstance(provenance, dict) and normalized in provenance.get("skills", {}):
-                commit_targets.append(layout.provenance_path)
+            commit_targets = _acceptance_commit_targets(layout, normalized, target)
+            if layout.provenance_path in commit_targets:
+                _require_selected_provenance_only(layout, normalized, git)
             changes = _merge_path_changes(
                 *(path_changes(git, layout.root, path) for path in commit_targets)
             )
@@ -340,7 +386,11 @@ def library_status(
 
     git_mode = identity.git_mode if identity is not None else "disabled"
     git = repository_status(layout.root, mode=git_mode) if layout.root.is_dir() else _missing_git_status()
-    history = _history_availability(identity, git) if identity is not None else {"available": False, "reason": "identity-missing"}
+    history = (
+        _history_availability(identity, git, layout)
+        if identity is not None
+        else {"available": False, "reason": "identity-missing"}
+    )
     advisories: list[str] = []
     if git.get("error"):
         warnings.append(str(git["error"]))
@@ -348,6 +398,8 @@ def library_status(
         warnings.append("library Git repository has unresolved conflicts")
     if git.get("operation"):
         warnings.append(f"library Git repository has an in-progress {git['operation']} operation")
+    if identity is not None and identity.git_mode == "system" and history.get("reason") == "metadata-untracked":
+        warnings.append("library identity or provenance is not recorded at Git HEAD; history is unavailable")
     if identity is not None and identity.git_mode == "disabled":
         advisories.append("library history is disabled (--no-git); ordinary ownership remains available")
     elif identity is not None and git.get("repository"):
@@ -443,6 +495,40 @@ def _validate_identity_git(identity: LibraryIdentity, layout: LibraryLayout) -> 
             raise ValueError("library Git repository has staged changes; commit or unstage them before initializing")
 
 
+def _rollback_library_initialization(
+    layout: LibraryLayout,
+    *,
+    commit_targets: list[Path],
+    root_created: bool,
+    skills_created: bool,
+    metadata_created: bool,
+    keep_created: bool,
+    git_repository_created: bool,
+) -> None:
+    if git_repository_created:
+        git_dir = layout.root / ".git"
+        if git_dir.is_dir() and not git_dir.is_symlink():
+            shutil.rmtree(git_dir)
+    elif (layout.root / ".git").is_dir():
+        with contextlib.suppress(LibraryGitError):
+            unstage_paths(layout.root, commit_targets)
+    if keep_created:
+        with contextlib.suppress(FileNotFoundError):
+            (layout.skills / ".gitkeep").unlink()
+    if metadata_created:
+        for path in (layout.identity_path, layout.provenance_path):
+            with contextlib.suppress(FileNotFoundError):
+                path.unlink()
+        with contextlib.suppress(OSError):
+            layout.metadata.rmdir()
+    if skills_created:
+        with contextlib.suppress(OSError):
+            layout.skills.rmdir()
+    if root_created:
+        with contextlib.suppress(OSError):
+            layout.root.rmdir()
+
+
 def _preflight_new_library(layout: LibraryLayout, *, no_git: bool) -> None:
     if layout.root.exists() and not layout.root.is_dir():
         raise ValueError(f"library root is not a directory: {layout.root}")
@@ -453,6 +539,79 @@ def _preflight_new_library(layout: LibraryLayout, *, no_git: bool) -> None:
             raise ValueError(f"library skills path must be a non-symlinked directory: {layout.skills}")
     if not no_git and not git_available():
         raise ValueError("git executable is unavailable; install Git or rerun with --no-git")
+
+
+def _acceptance_commit_targets(layout: LibraryLayout, normalized: str, target: Path) -> list[Path]:
+    targets = [target]
+    provenance = load_library_provenance(layout)
+    if isinstance(provenance, dict) and normalized in provenance.get("skills", {}):
+        targets.append(layout.provenance_path)
+    return targets
+
+
+def _provenance_state_fingerprint(
+    layout: LibraryLayout,
+    git: dict[str, Any],
+    normalized: str,
+) -> str | None:
+    provenance = load_library_provenance(layout)
+    if not isinstance(provenance, dict) or normalized not in provenance.get("skills", {}):
+        return None
+    digest = hashlib.sha256()
+    if git.get("mode") == "system" and git.get("repository"):
+        for revision in ("HEAD", "index"):
+            content = git_file_content(layout.root, layout.provenance_path, revision=revision)
+            digest.update(revision.encode("ascii"))
+            digest.update(content if content is not None else b"<missing>")
+    digest.update(b"working")
+    digest.update(layout.provenance_path.read_bytes())
+    return digest.hexdigest()
+
+
+def _require_selected_provenance_only(
+    layout: LibraryLayout,
+    normalized: str,
+    git: dict[str, Any],
+) -> None:
+    head_content = git_file_content(layout.root, layout.provenance_path, revision="HEAD")
+    if head_content is None:
+        raise ValueError("library provenance is not recorded at Git HEAD; repair the library before accepting skills")
+    head = _provenance_mapping(head_content, source="Git HEAD")
+    relative = layout.provenance_path.relative_to(layout.root).as_posix()
+    if relative in git.get("staged", []):
+        index_content = git_file_content(layout.root, layout.provenance_path, revision="index")
+        if index_content is None:
+            raise ValueError("staged library provenance could not be verified")
+        index = _provenance_mapping(index_content, source="Git index")
+        if _without_provenance_skill(index, normalized) != _without_provenance_skill(head, normalized):
+            raise ValueError(
+                "library provenance has unrelated staged changes; commit or unstage them before accepting this skill"
+            )
+    working = load_library_provenance(layout)
+    if working is None:
+        raise ValueError(f"library provenance metadata is missing: {layout.provenance_path}")
+    if _without_provenance_skill(working, normalized) != _without_provenance_skill(head, normalized):
+        raise ValueError(
+            "library provenance has unrelated changes; commit or restore them before accepting this skill"
+        )
+
+
+def _provenance_mapping(content: bytes, *, source: str) -> dict[str, Any]:
+    try:
+        value = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid library provenance in {source}") from exc
+    if not isinstance(value, dict) or not isinstance(value.get("skills"), dict):
+        raise ValueError(f"invalid library provenance in {source}")
+    return value
+
+
+def _without_provenance_skill(value: dict[str, Any], normalized: str) -> dict[str, Any]:
+    result = dict(value)
+    skills = dict(value.get("skills") or {})
+    skills.pop(normalized, None)
+    result["skills"] = skills
+    return result
 
 
 def _require_library_layout(layout: LibraryLayout) -> None:
@@ -530,15 +689,27 @@ def _skill_status(
         "lint": _compact_lint(skill.get("lint")),
         "scan": _compact_scan(skill.get("scan")),
         "git": git_paths,
-        "history": _history_availability(identity, git),
-        "exposures": _library_exposures(project_dir, str(skill["id"])),
+        "history": _history_availability(identity, git, registration.layout),
+        "exposures": _library_exposures(
+            project_dir,
+            str(skill["id"]),
+            current_approved_hash=(
+                str(accepted_hash)
+                if acceptance == "accepted" and isinstance(accepted_hash, str)
+                else None
+            ),
+        ),
     }
     if skill.get("imported_from"):
         result["imported_from"] = skill["imported_from"]
     return result
 
 
-def _history_availability(identity: LibraryIdentity, git: dict[str, Any]) -> dict[str, Any]:
+def _history_availability(
+    identity: LibraryIdentity,
+    git: dict[str, Any],
+    layout: LibraryLayout | None = None,
+) -> dict[str, Any]:
     if identity.git_mode == "disabled":
         return {"available": False, "reason": "no-git"}
     if not git.get("available"):
@@ -551,6 +722,10 @@ def _history_availability(identity: LibraryIdentity, git: dict[str, Any]) -> dic
         return {"available": False, "reason": f"operation-in-progress:{git['operation']}"}
     if not git.get("head"):
         return {"available": False, "reason": "no-commits"}
+    if layout is not None:
+        tracked = head_tracked_paths(layout.root, [layout.identity_path, layout.provenance_path])
+        if not all(tracked.values()):
+            return {"available": False, "reason": "metadata-untracked"}
     return {"available": True, "reason": None}
 
 
@@ -738,7 +913,12 @@ def _new_skill_template(name: str) -> str:
     )
 
 
-def _library_exposures(project_dir: Path | None, skill_id: str) -> list[dict[str, Any]]:
+def _library_exposures(
+    project_dir: Path | None,
+    skill_id: str,
+    *,
+    current_approved_hash: str | None,
+) -> list[dict[str, Any]]:
     if project_dir is None:
         return []
     project = project_dir.resolve()
@@ -762,16 +942,35 @@ def _library_exposures(project_dir: Path | None, skill_id: str) -> list[dict[str
                 if not (is_router_member or is_direct):
                     continue
                 kind = "router" if is_router_member else "stub" if source_type == "skillager-stub" else "native"
-                exposures.append(
-                    {
-                        "agent": data.get("agent") or default_agent,
-                        "scope": data.get("scope") or "project",
-                        "kind": kind,
-                        "path": str(sidecar.parent.resolve()),
-                        "source_hash": None if is_router_member else data.get("source_hash"),
-                        "router": data.get("router_slug") if is_router_member else None,
-                    }
-                )
+                item = {
+                    "agent": data.get("agent") or default_agent,
+                    "scope": data.get("scope") or "project",
+                    "kind": kind,
+                    "path": str(sidecar.parent.resolve()),
+                    "source_hash": None if is_router_member else data.get("source_hash"),
+                    "router": data.get("router_slug") if is_router_member else None,
+                }
+                if is_direct:
+                    if current_approved_hash is None:
+                        item["status"] = "approval_pending"
+                    elif data.get("source_hash") == current_approved_hash:
+                        item["status"] = "current"
+                    else:
+                        item["status"] = "update_available"
+                        argv = [
+                            "skillager",
+                            "expose",
+                            skill_id,
+                            "--mode",
+                            kind,
+                            "--agent",
+                            str(item["agent"]),
+                            "--scope",
+                            "project",
+                        ]
+                        item["next_command_argv"] = argv
+                        item["command"] = " ".join(argv)
+                exposures.append(item)
     return sorted(exposures, key=lambda item: (str(item["agent"]), str(item["kind"]), str(item["path"])))
 
 

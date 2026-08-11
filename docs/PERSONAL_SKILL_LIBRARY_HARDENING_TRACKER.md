@@ -1,9 +1,10 @@
 # Personal Library Hardening Tracker
 
-Status: active closure; fixes implemented and awaiting fresh persona verification
-Source: two rounds of agentic-power-user, senior-engineer/maintainer, and skeptical
-security-reader reviews of `d75e926..e072f07`, followed by the current corrective
-worktree
+Status: active closure; second corrective cycle and integrated checks complete,
+awaiting fresh setup and persona verification
+Source: three review passes by agentic-power-user, senior-engineer/maintainer, and
+skeptical security-reader personas, followed by two corrective worktrees through the
+current branch
 Created: 2026-08-10
 
 This file prevents review findings from being lost during the hardening cycle. Remove
@@ -43,6 +44,20 @@ home in normal product documentation.
   and removal confirmation binds the complete target plus sidecar.
 - [x] Prompt for accept/import/restore only when both input and output are interactive;
   captured-output commands and the prescribed suite must never hide a prompt.
+- [x] Keep verbose `list`, `search`, and `show --full-json` body-safe. Scanner matches
+  remain codes/locations and internal approval keys are not public metadata.
+- [x] Include normalized executable state in advisory discovery fingerprints so a
+  mode-only source change cannot trap import in a permanently stale preview loop.
+- [x] Require host-valid `name` and `description` frontmatter for every native
+  projection, not only library-owned sources; manifest-free external sources remain
+  usable through stub, router, and on-demand paths.
+- [x] Never silently replace a different managed projection whose ID normalizes to the
+  same host slug. Allocate a deterministic alternate and fail closed if it is occupied.
+- [x] Preflight Git-backed initialization metadata against ignore rules and roll back
+  partial files/staging on commit failure so retry is clean and history never claims
+  missing identity/provenance.
+- [x] Bind imported-skill acceptance to relevant shared provenance state and refuse
+  unrelated staged or working provenance edits.
 
 ## P1 — Readiness And Exposure Correctness
 
@@ -61,6 +76,11 @@ home in normal product documentation.
 - [x] Keep a missing/moved optional library nonblocking while directing Working through
   `library status` and structured relocation requirements, never an impossible accept
   command or placeholder-bearing executable argv.
+- [x] Compare managed native, stub, and router sidecar source hashes with current
+  approved hashes. Report clean stale projections as `source_update`, exclude them from
+  current/exposed inventory, and provide exact re-expose guidance without auto-sync.
+- [x] Keep doctor ready for unrelated work while surfacing structured resolving actions
+  for pending owned changes; never publish an executable placeholder override reason.
 
 ## P2 — CLI And Documentation Consistency
 
@@ -78,6 +98,9 @@ home in normal product documentation.
   exposure sidecars live and what must be backed up.
 - [x] Align release-version language when the release is actually cut; planned 0.9 notes
   may coexist with the current 0.8 package during development.
+- [x] Keep import destination identity stable across preview/result (`id`, slug/name,
+  and retained frontmatter display name are distinct) and make restore receipts report
+  post-restore accepted/current/head truth.
 
 ## Product Decisions — Track, Do Not Smuggle Into Hardening
 
@@ -119,6 +142,18 @@ home in normal product documentation.
   resolving status/relocation guidance.
 - [x] Excluded files before refresh/removal are preserved without force, and files added
   or changed after a removal preview invalidate its token.
+- [x] Full list/search/show JSON with scanner-triggering bodies contains no matched text
+  or internal approval keys.
+- [x] Mode-only external changes produce a fresh import hash/token and a succeeding new
+  preview rather than an endless stale-preview failure.
+- [x] Doctor reports exact `library accept` actions for pending owned mode/content
+  changes while remaining exit-zero ready for unrelated work.
+- [x] Accepted source changes mark native, stub, and router projections stale, remove
+  them from current inventory, and become current only after explicit re-exposure.
+- [x] Colliding direct projection slugs preserve both skills deterministically and an
+  occupied fallback refuses even with force.
+- [x] Git-ignored required metadata fails before writes, initialization commit failure
+  rolls back cleanly, and unrelated staged provenance never enters an acceptance commit.
 
 ## Fresh User Workflow Result
 
@@ -140,5 +175,7 @@ added.
 
 That run proved the broad setup/working path but reused existing global exact-hash
 approvals and did not prove that the `skillager` executable came from the final branch
-checkout. Closure therefore requires another no-context run against the verified
-checkout with isolated user catalog/cache state after the fixes above are committed.
+checkout. A later worker was accidentally given stale repository URLs and is excluded
+from product evidence. Closure therefore requires another no-context run against the
+verified checkout, the live repositories named by the bundled skill, and isolated user
+catalog/cache state after the fixes above are committed.
