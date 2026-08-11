@@ -882,6 +882,10 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("skillager/working: skipped", text)
             self.assertIn("Skillager setup complete", text)
             self.assertIn("Working skill: current", text)
+            self.assertNotIn("Stub candidates", text)
+            self.assertIn("On-demand choices", text)
+            self.assertIn("1 Codex-ready choice remains available on demand", text)
+            self.assertIn("skillager list --agent codex", text)
 
     def test_interactive_setup_hides_skills_after_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1004,7 +1008,11 @@ class SkillagerSetupTests(unittest.TestCase):
         output = StringIO()
 
         with redirect_stdout(output):
-            _print_setup_completion_summary(skills, [], agents=["codex"])
+            _print_setup_completion_summary(
+                skills,
+                [{"skill_id": "skillager/working", "status": "materialized"}],
+                agents=["codex"],
+            )
 
         text = output.getvalue()
         self.assertIn("2 approved source entries: 0 exposed, 2 on demand", text)
@@ -1247,7 +1255,7 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["setup", "--include-global", "--agent", "codex", "--no-packages"]), 0)
             text = stdout.getvalue()
-            self.assertIn("No narrow native project skill candidates found", text)
+            self.assertIn("No always-on project-native suggestions found", text)
             self.assertNotIn("Native skill selection", text)
             self.assertFalse((project / ".agents" / "skills" / "global-simulate-skillager-setup" / "SKILL.md").exists())
 
@@ -1456,7 +1464,7 @@ class SkillagerSetupTests(unittest.TestCase):
                     self.assertEqual(main(["tag", "add", "mapping", "community/gis-domain"]), 0)
                 self.assertEqual(main(["setup", "--audience", "other", "--no-packages"]), 0)
             text = stdout.getvalue()
-            self.assertIn("No narrow native project skill candidates found", text)
+            self.assertIn("No always-on project-native suggestions found", text)
             self.assertIn("Router suggestions", text)
             self.assertIn("skillager expose --tag mapping --mode router --agent claude --scope project", text)
 

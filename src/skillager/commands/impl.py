@@ -7127,7 +7127,7 @@ def _print_setup_completion_summary(
         f"  - {_counted(choices, f'{_agent_label([agent])}-ready choice')}: "
         f"{agent_exposed} exposed, {agent_on_demand} on demand{collapsed_suffix}"
     )
-    if hidden:
+    if hidden and working_installed:
         print()
         print("  Stub candidates")
         print("    These are available but not loaded as native skills. Stub any that should be easy to invoke by name:")
@@ -7142,12 +7142,21 @@ def _print_setup_completion_summary(
         print("    To stub specific skills:")
         print(f"    skillager expose <skill-id> --mode stub --agent {agent} --scope project")
         print("    Or ask your agent: please stub 1, 5, 8 from the Skillager setup summary.")
+    elif hidden:
+        print()
+        print("  On-demand choices")
+        verb = "remains" if len(hidden) == 1 else "remain"
+        print(f"    {_counted(len(hidden), f'{_agent_label([agent])}-ready choice')} {verb} available on demand.")
+        print(f"    Use skillager search with a goal, or skillager list --agent {agent}, when you need another skill.")
 
 
 def _choose_native_project_skills(skills: list[dict[str, Any]], *, agents: list[str]) -> list[dict[str, Any]]:
     skills = _native_setup_candidates(skills, agents=agents)
     if not skills:
-        print("No narrow native project skill candidates found. Broad collection skills can be exposed later with router mode.")
+        print(
+            "No always-on project-native suggestions found. Approved skills remain available "
+            "on demand and can be exposed later as stubs or routers."
+        )
         return []
     if not _confirm("Expose a narrow always-relevant set of approved skills now?"):
         return []
