@@ -41,7 +41,7 @@ personal-library work; Skillager does not inject instructions into `AGENTS.md`,
 `agents.md`, or `CLAUDE.md`. A genuinely empty project can be ready without that
 artifact because there is no managed inventory for the agent to curate yet.
 
-`setup` discovers local/project skills, package-provided skills, collections, and native agent skills. It scans them and only makes content available after your review. Register an external personal/team repository with `skillager collection add ~/skills/workflows --name workflows` when you want it in reusable inventory. Skillager is installed once as a user tool; it does not need to live inside every project environment.
+`setup` discovers local/project skills, package-provided skills, collections, and native agent skills. Skillager makes discovered bodies available through its own activation and exposure commands only after review. Agent hosts can independently load directly installed native skills, so Skillager is a cooperative workflow layer rather than a sandbox. Register an external personal/team repository with `skillager collection add ~/skills/workflows --name workflows` when you want it in reusable inventory. Skillager is installed once as a user tool; it does not need to live inside every project environment.
 
 `working --json` keeps the `skillager.working.v1` contract. Its additive advisory `exposure_changes` block reports live current-project managed copies that are locally edited, partially missing, blocked, malformed, or unmanaged. `inventory` and `curation` distinguish source entries from agent-collapsed choices and suggest goal search without turning it into a required readiness action. Drift does not change readiness or the command's exit code, and Skillager never overwrites a locally edited exposure implicitly.
 
@@ -86,11 +86,11 @@ Metadata commands stay metadata-only: `working`, `list`, `search`, `show` withou
 | Inspect personal library and Git state | `skillager library status --json` |
 | Create a pending personal skill | `skillager library new my-skill` |
 | Locate a personal skill | `skillager library status lib/my-skill` |
-| Accept the exact current personal-skill hash | `skillager library accept lib/my-skill --yes` |
-| Adopt a discovered external skill | `skillager import workflows/pr-review --yes` |
+| Preview acceptance of the exact current personal-skill hash | `skillager library accept lib/my-skill --json` |
+| Preview adoption of a discovered external skill | `skillager import workflows/pr-review --json` |
 | Inspect verified personal-skill versions | `skillager library history lib/pr-review --json` |
 | Compare personal-skill versions | `skillager library diff lib/pr-review --from <hash> --to <hash>` |
-| Restore a verified version as a new commit | `skillager library restore lib/pr-review --to <content-hash> --yes` |
+| Preview restoring a verified version as a new commit | `skillager library restore lib/pr-review --to <content-hash> --json` |
 | Repair the Skillager working skill | `skillager doctor --agent codex --fix` |
 | Approve a skill | `skillager review approve workflows/pr-review` |
 | Expose a tag as a router | `skillager expose --tag workflows --mode router --agent codex --scope project` |
@@ -132,11 +132,12 @@ Create, edit, and accept an owned skill with an exact-hash workflow:
 ```bash
 skillager library new orbital-review
 # Edit the SKILL.md path printed by library new.
-skillager library accept lib/orbital-review --yes
+skillager library accept lib/orbital-review --json
+# Review the preview, then execute its next_command_argv exactly.
 skillager expose lib/orbital-review --mode stub --agent codex --scope project
 ```
 
-`library new` never overwrites an existing skill and leaves its generated draft uncommitted. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, rejects symlinks and excluded files, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates the first meaningful path-scoped Git commit when Git is enabled. In non-interactive use, omitting `--yes` prints a body-safe hash/risk/lint preview, exits successfully, and gives the exact confirmed command without changing state.
+`library new` never overwrites an existing skill and leaves its generated draft uncommitted. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. Acceptance runs lint and static scanning, rejects symlinks and excluded files, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates the first meaningful path-scoped Git commit when Git is enabled. In non-interactive use, omitting `--yes` prints a body-safe hash/risk/lint preview, exits successfully, and gives an exact confirmation command containing an opaque token. The token binds the command to the previewed hash and any audited reason; a direct or stale `--yes` command is refused.
 
 The machine-readable contracts are versioned as `skillager.library-init.v1`, `skillager.library-relocate.v1`, `skillager.library-status.v1`, `skillager.library-new.v1`, `skillager.library-accept.v1`, `skillager.library-history.v1`, `skillager.library-diff.v1`, and `skillager.library-restore.v1`.
 
@@ -144,7 +145,7 @@ Adopt one project, collection, environment, package, editable-source, or native 
 
 ```bash
 skillager import workflows/pr-review --json
-skillager import workflows/pr-review --as pr-review --yes
+# Review the preview, then execute its next_command_argv exactly.
 ```
 
 The first command is a read-only preview. Import re-resolves and rehashes the origin after confirmation, copies only the canonical agent-visible tree, records attribution provenance, commits the skill and provenance paths when Git is enabled, and accepts only the resulting library hash. It never imports or executes the surrounding package and never modifies the origin. Its JSON contract is `skillager.import.v1`.
@@ -155,14 +156,15 @@ Inspect and recover verified library versions by Skillager content hash:
 skillager library history lib/pr-review --json
 skillager library diff lib/pr-review --from <hash> --to <hash> --stat
 skillager library diff lib/pr-review --from <hash> --to <hash>
-skillager library restore lib/pr-review --to <hash> --yes
+skillager library restore lib/pr-review --to <hash> --json
+# Review the preview, then execute its next_command_argv exactly.
 ```
 
 History is path-specific, deduplicates commits with identical agent-visible content, and never prints bodies. `diff --stat` is also metadata-only; plain `diff` is deliberately content-bearing. Restore accepts a unique content-hash prefix, reconstructs and verifies that exact historical tree outside the library, re-runs lint/static checks, and creates a new descendant commit before recording acceptance. It never resets, checks out over the worktree, rewrites history, or contacts remotes. No-Git libraries report history as unavailable while remaining otherwise usable. History and restore JSON use `skillager.library-history.v1` and `skillager.library-restore.v1`.
 
 ### Managed Exposure Edits
 
-The personal library is the source of truth for owned skills; exposed copies are managed projections. `working` reports live local edits as advisory metadata, and normal exposure refuses to overwrite them. When an exposure was edited intentionally, compare it with the canonical library skill, move the intended work into the library, accept that exact hash, and expose it again. Use `expose --force` only when you explicitly choose to replace the local copy. Skillager does not infer whether a project edit should become a library version, silently merge divergent trees, or update other projects.
+The personal library is the source of truth for owned skills; exposed copies are managed projections. `working` reports live local edits as advisory metadata, and normal exposure refuses to overwrite them. When an exposure was edited intentionally, compare it with the canonical library skill, move the intended work into the library, accept that exact hash, and expose it again. Removal is also preview-first: `skillager expose --remove <exposure-id> --json` returns a bound confirmation command only for a current target; a locally edited target additionally requires a new preview with explicit `--force`. Use `--force` only when you explicitly choose to discard or replace the local copy. Skillager does not infer whether a project edit should become a library version, silently merge divergent trees, or update other projects.
 
 ## Collections
 

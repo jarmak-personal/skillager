@@ -201,7 +201,7 @@ def restore_library_skill(
             raise ValueError("historical version changed since preview; review the restore again")
         current = library_where(catalog_root, name, project_dir=project_dir)["skill"]
         if current["working_hash"] != expected_current_hash:
-            raise ValueError("library skill changed since restore preview; review it again")
+            raise ValueError("library skill tree changed since restore preview; review it again")
         if current["working_hash"] == expected_hash:
             raise ValueError("library skill already matches the selected historical version")
         target = registration.layout.skill_root(name)
@@ -252,7 +252,7 @@ def restore_library_skill(
         except LibraryGitError as exc:
             raise ValueError(
                 f"{exc}; restored content remains pending. Fix Git, then run "
-                f"`skillager library accept lib/{name} --yes`"
+                f"`skillager library accept lib/{name} --json` and execute its returned command"
             ) from exc
         approval_key = approval_key_for(
             f"{LIBRARY_NAMESPACE}/{name}",
@@ -280,7 +280,7 @@ def restore_library_skill(
         except Exception as exc:
             raise ValueError(
                 f"restored content is committed but pending acceptance: {exc}; repair with "
-                f"`skillager library accept lib/{name} --yes`"
+                f"`skillager library accept lib/{name} --json` and execute its returned command"
             ) from exc
         refresh_collection(catalog_root, LIBRARY_NAMESPACE)
         where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
@@ -409,7 +409,7 @@ def _working_endpoint(target: Path, expected_hash: str) -> _TreeEndpoint:
 
 
 def _files_content_hash(files: tuple[GitTreeFile, ...] | list[GitTreeFile]) -> str:
-    return content_hash_entries((file.path, file.content) for file in files)
+    return content_hash_entries((file.path, file.content, file.mode) for file in files)
 
 
 def _tree_fingerprint(files: tuple[GitTreeFile, ...]) -> str:

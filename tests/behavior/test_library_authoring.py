@@ -23,6 +23,29 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
         self.assertNotIn(BODY_SENTINEL, result.stdout)
         self.assertNotIn(BODY_SENTINEL, result.stderr)
 
+    def test_owned_draft_is_advisory_and_points_to_library_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "library"
+            self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
+            self.assert_code(cli.run("library", "new", "pending-draft"), 0)
+
+            working = cli.run("working", "--agent", "codex", "--json")
+            self.assert_code(working, 0)
+            data = working.json()
+            self.assertEqual(data["pending_external_review_count"], 0)
+            self.assertEqual(data["pending_owner_review_count"], 0)
+            self.assertEqual(data["pending_owned_change_count"], 1)
+            self.assertEqual(data["pending_owned_changes"][0]["id"], "lib/pending-draft")
+            self.assertIn("library accept", data["pending_owned_changes"][0]["command"])
+            self.assertNotEqual((data.get("next") or {}).get("command"), "skillager setup --agent codex")
+
+            shown = cli.run("show", "lib/pending-draft", "--content")
+            self.assert_code(shown, 2)
+            self.assertIn("skillager library accept lib/pending-draft", shown.stderr)
+            self.assertNotIn("skillager setup", shown.stderr)
+
     def test_pending_library_skill_cannot_be_overwritten_or_force_exposed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -39,6 +62,8 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
                 created_data["next_command_argv"],
                 ["skillager", "library", "accept", "lib/orbital-review"],
             )
+            template = (library / "skills" / "orbital-review" / "SKILL.md").read_text(encoding="utf-8")
+            self.assertTrue(template.startswith("---\nname: orbital-review\ndescription:"))
             skill_file = library / "skills" / "orbital-review" / "SKILL.md"
             self.assertEqual(Path(created_data["skill"]["skill_file"]), skill_file.resolve())
             skill_file.write_text(
@@ -94,7 +119,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
                 "# Safe Demo\n\nAccepted personal guidance.\n",
                 encoding="utf-8",
             )
-            self.assert_code(cli.run("library", "accept", "lib/demo", "--yes"), 0)
+            self.assert_code(cli.run_confirmed("library", "accept", "lib/demo", "--yes"), 0)
 
             external_body = "UNREVIEWED_EXTERNAL_COLLISION_BODY"
             external = project / ".venv" / "lib" / "python3.13" / "site-packages" / "lib" / ".skills" / "demo"
@@ -140,21 +165,34 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertNotIn("will_accept", preview.json())
             self.assertNotIn("approval_key", preview.stdout)
             self.assertNotIn('"next_command"', preview.stdout)
-            self.assertEqual(
-                preview.json()["next_command_argv"],
-                ["skillager", "library", "accept", "lib/orbital-review", "--yes"],
-            )
+            next_command = preview.json()["next_command_argv"]
+            self.assertEqual(next_command[:5], ["skillager", "library", "accept", "lib/orbital-review", "--yes"])
+            self.assertEqual(next_command[5], "--confirmation-token")
+            self.assertRegex(next_command[6], r"^[0-9a-f]{64}$")
             self.assertFalse((catalog / "trust.json").exists())
             self.assert_body_not_exposed(preview)
+
+            unbound = cli.run("library", "accept", "lib/orbital-review", "--yes")
+            self.assert_code(unbound, 2)
+            self.assertIn("confirmation token", unbound.stderr)
+            self.assertFalse((catalog / "trust.json").exists())
+
+            previewed_body = skill_file.read_text(encoding="utf-8")
+            skill_file.write_text(previewed_body + "\nChanged after preview.\n", encoding="utf-8")
+            stale = cli.run(*next_command[1:], "--json")
+            self.assert_code(stale, 2)
+            self.assertIn("preview is stale", stale.stderr)
+            self.assertFalse((catalog / "trust.json").exists())
+            skill_file.write_text(previewed_body, encoding="utf-8")
 
             readable_preview = cli.run("library", "accept", "lib/orbital-review")
             self.assert_code(readable_preview, 0)
             self.assertIn("Preview only; no changes were made.", readable_preview.stdout)
-            self.assertIn("Next: skillager library accept lib/orbital-review --yes", readable_preview.stdout)
+            self.assertIn("Next: skillager library accept lib/orbital-review --yes --confirmation-token", readable_preview.stdout)
             self.assertEqual(readable_preview.stderr, "")
             self.assert_body_not_exposed(readable_preview)
 
-            accepted = cli.run("library", "accept", "lib/orbital-review", "--yes", "--json")
+            accepted = cli.run_confirmed("library", "accept", "lib/orbital-review", "--yes", "--json")
             self.assert_code(accepted, 0)
             accepted_data = accepted.json()
             self.assertEqual(accepted_data["status"], "accepted")
@@ -174,6 +212,19 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assert_code(search, 0)
             self.assertEqual(search.json()[0]["id"], "lib/orbital-review")
             self.assert_body_not_exposed(search)
+
+            invalid_native = cli.run(
+                "expose",
+                "lib/orbital-review",
+                "--mode",
+                "native",
+                "--agent",
+                "codex",
+                "--json",
+            )
+            self.assert_code(invalid_native, 0)
+            self.assertEqual(invalid_native.json()[0]["status"], "skipped")
+            self.assertIn("frontmatter", invalid_native.json()[0]["reason"])
 
             expose = cli.run(
                 "expose",
@@ -219,7 +270,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             library = root / "library"
             self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
             self.assert_code(cli.run("library", "new", "mutable-skill"), 0)
-            self.assert_code(cli.run("library", "accept", "mutable-skill", "--yes"), 0)
+            self.assert_code(cli.run_confirmed("library", "accept", "mutable-skill", "--yes"), 0)
 
             skill_file = library / "skills" / "mutable-skill" / "SKILL.md"
             skill_file.write_text(skill_file.read_text(encoding="utf-8") + f"\n{BODY_SENTINEL}\n", encoding="utf-8")
@@ -238,10 +289,49 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
                 self.assert_code(blocked, 2)
                 self.assert_body_not_exposed(blocked)
 
-            self.assert_code(cli.run("library", "accept", "mutable-skill", "--yes"), 0)
-            shown = cli.run("show", "lib/mutable-skill", "--content")
-            self.assert_code(shown, 0)
-            self.assertIn(BODY_SENTINEL, shown.stdout)
+    def test_executable_mode_change_revokes_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "library"
+            self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
+            self.assert_code(cli.run("library", "new", "mode-aware"), 0)
+            tool = library / "skills" / "mode-aware" / "tool.sh"
+            tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            tool.chmod(0o644)
+            accepted = cli.run_confirmed("library", "accept", "mode-aware", "--yes", "--json")
+            self.assert_code(accepted, 0)
+            accepted_hash = accepted.json()["skill"]["working_hash"]
+
+            tool.chmod(0o755)
+            status = cli.run("library", "status", "mode-aware", "--json")
+            self.assert_code(status, 0)
+            self.assertEqual(status.json()["skill"]["acceptance"], "pending")
+            self.assertNotEqual(status.json()["skill"]["working_hash"], accepted_hash)
+            blocked = cli.run("show", "lib/mode-aware", "--content")
+            self.assert_code(blocked, 2)
+
+    def test_working_revokes_stale_library_inventory_without_writing_trust(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "library"
+            catalog = root / "state" / "catalog"
+            self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
+            self.assert_code(cli.run("library", "new", "stale-working"), 0)
+            self.assert_code(cli.run_confirmed("library", "accept", "stale-working", "--yes"), 0)
+            trust_path = catalog / "trust.json"
+            trust_before = trust_path.read_bytes()
+
+            skill_file = library / "skills" / "stale-working" / "SKILL.md"
+            skill_file.write_text(skill_file.read_text(encoding="utf-8") + "\nChanged after acceptance.\n", encoding="utf-8")
+            working = cli.run("working", "--agent", "codex", "--json")
+            self.assert_code(working, 0)
+            data = working.json()
+            self.assertEqual(data["inventory"]["available_source_entries"], 0)
+            self.assertEqual(data["pending_owned_change_count"], 1)
+            self.assertEqual(data["pending_owned_changes"][0]["status"], "changed")
+            self.assertEqual(trust_path.read_bytes(), trust_before)
 
     def test_lint_blocked_library_acceptance_requires_audited_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -261,6 +351,11 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
+            preview = cli.run("library", "accept", "linted-skill", "--json")
+            self.assert_code(preview, 0)
+            self.assertEqual(preview.json()["required_arguments"], ["--override-lint", "--reason"])
+            self.assertNotIn("next_command_argv", preview.json())
+
             refused = cli.run("library", "accept", "linted-skill", "--yes")
             self.assert_code(refused, 2)
             self.assertIn("--override-lint --reason", refused.stderr)
@@ -270,16 +365,18 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assert_code(missing_reason, 2)
             self.assertIn("--reason is required", missing_reason.stderr)
 
-            accepted = cli.run(
+            reason_preview = cli.run(
                 "library",
                 "accept",
                 "linted-skill",
-                "--yes",
                 "--override-lint",
                 "--reason",
                 "Reviewed local authoring metadata",
                 "--json",
             )
+            self.assert_code(reason_preview, 0)
+            self.assertIn("Reviewed local authoring metadata", reason_preview.json()["next_command_argv"])
+            accepted = cli.run(*reason_preview.json()["next_command_argv"][1:], "--json")
             self.assert_code(accepted, 0)
             override = accepted.json()["approval"]["lint_override"]
             self.assertEqual(override["reason"], "Reviewed local authoring metadata")
@@ -310,7 +407,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             unrelated = library / "unrelated.txt"
             unrelated.write_text("do not commit\n", encoding="utf-8")
             subprocess.run(["git", "add", "unrelated.txt"], cwd=library, env=cli.env, check=True)
-            refused = cli.run("library", "accept", "git-skill", "--yes")
+            refused = cli.run_confirmed("library", "accept", "git-skill", "--yes")
             self.assert_code(refused, 2)
             self.assertIn("unrelated staged changes", refused.stderr)
             self.assertFalse((catalog / "trust.json").exists())
@@ -325,7 +422,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertEqual(staged, ["unrelated.txt"])
 
             subprocess.run(["git", "restore", "--staged", "unrelated.txt"], cwd=library, env=cli.env, check=True)
-            accepted = cli.run("library", "accept", "git-skill", "--yes", "--json")
+            accepted = cli.run_confirmed("library", "accept", "git-skill", "--yes", "--json")
             self.assert_code(accepted, 0)
             skill = accepted.json()["skill"]
             self.assertEqual(skill["status"], "clean")

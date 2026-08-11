@@ -54,7 +54,6 @@ def import_preview(
             "source_type": str((source.get("source") or {}).get("type") or "unknown"),
         },
     }
-    next_command_argv = _import_argv(source_skill_id, name, override=requires_override)
     return {
         "schema": IMPORT_SCHEMA,
         "status": "preview",
@@ -73,7 +72,6 @@ def import_preview(
         "lint": lint,
         "scan": scan,
         "requires_override": requires_override,
-        "next_command_argv": next_command_argv,
         "project": str(project_dir.resolve()) if project_dir is not None else None,
     }
 
@@ -162,7 +160,8 @@ def import_library_skill(
                 )
             except LibraryGitError as exc:
                 raise ValueError(
-                    f"{exc}; imported content remains pending. Fix Git, then run `skillager library accept lib/{name} --yes`"
+                    f"{exc}; imported content remains pending. Fix Git, then preview "
+                    f"`skillager library accept lib/{name} --json`"
                 ) from exc
 
         approval_key = approval_key_for(
@@ -191,7 +190,8 @@ def import_library_skill(
         except Exception as exc:
             pending_state = "committed but pending" if identity.git_mode == "system" else "copied but pending"
             raise ValueError(
-                f"imported content is {pending_state} acceptance: {exc}; repair with `skillager library accept lib/{name} --yes`"
+                f"imported content is {pending_state} acceptance: {exc}; repair by previewing "
+                f"`skillager library accept lib/{name} --json`"
             ) from exc
         refresh_collection(catalog_root, LIBRARY_NAMESPACE)
         where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
@@ -305,13 +305,6 @@ def _saved_setup_paths(project_state: Path) -> list[Path] | None:
         if path.exists():
             paths.append(path)
     return paths or None
-
-
-def _import_argv(source_skill_id: str, name: str, *, override: bool) -> list[str]:
-    command = ["skillager", "import", source_skill_id, "--as", name, "--yes"]
-    if override:
-        command.extend(["--override-lint", "--reason", "<why>"])
-    return command
 
 
 __all__ = [

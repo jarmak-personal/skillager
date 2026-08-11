@@ -58,18 +58,20 @@ class ExposureDriftTests(unittest.TestCase):
             self.assertNotIn("ownership", record)
             self.assertEqual(hash_mock.call_count, 1)
 
-    def test_working_scan_may_reuse_fingerprint_for_advisory_display_only(self) -> None:
+    def test_working_scan_rehashes_instead_of_authorizing_with_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             project = Path(tmp) / "project"
             target = project / ".agents" / "skills" / "demo"
             write_target(target)
             write_sidecar(target)
 
-            with patch.object(drift_impl, "content_hash", side_effect=AssertionError("advisory scan rehashed")):
+            original_hash = drift_impl.content_hash
+            with patch.object(drift_impl, "content_hash", wraps=original_hash) as hash_mock:
                 changes = scan_project_exposures(project, agent="codex")
 
             self.assertEqual(changes["current"], 1)
             self.assertEqual(changes["items"], [])
+            self.assertEqual(hash_mock.call_count, 1)
 
     def test_legacy_keep_local_metadata_does_not_hide_a_local_edit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -117,6 +119,24 @@ class ExposureDriftTests(unittest.TestCase):
             assert record is not None
             self.assertEqual(record["status"], "current")
             self.assertEqual(hash_mock.call_count, 1)
+
+    def test_same_size_edit_with_restored_mtime_is_still_a_local_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "demo"
+            write_target(target)
+            write_sidecar(target)
+            skill_file = target / "SKILL.md"
+            original_stat = skill_file.stat()
+            original = skill_file.read_text(encoding="utf-8")
+            edited = original.replace("Demo", "Dome", 1)
+            self.assertEqual(len(edited.encode()), len(original.encode()))
+            skill_file.write_text(edited, encoding="utf-8")
+            os.utime(skill_file, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+
+            record = classify_exposure_target(target)
+
+            assert record is not None
+            self.assertEqual(record["status"], "local_edit")
 
     def test_target_missing_blocked_and_sidecar_error_states(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

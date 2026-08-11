@@ -166,6 +166,34 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
                 working.stdout,
             )
 
+    def test_existing_native_source_counts_as_exposed_without_drift_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            project, cli = self.make_workspace(Path(tmp_name))
+            native = project / ".agents" / "skills" / "native-source"
+            native.mkdir(parents=True)
+            (native / "SKILL.md").write_text("# Native Source\n\nUse native project guidance.\n", encoding="utf-8")
+            setup = cli.run(
+                "setup",
+                "--source",
+                "project",
+                "--accept-low",
+                "--agent",
+                "codex",
+                "--no-packages",
+                "--summary-json",
+            )
+            self.assert_code(setup, 0)
+
+            listed = cli.run("list", "--agent", "codex", "--json")
+            self.assert_code(listed, 0)
+            self.assertEqual(listed.json()[0]["exposure"], "native")
+            working = cli.run("working", "--agent", "codex", "--json")
+            self.assert_code(working, 0)
+            self.assertEqual(working.json()["inventory"]["exposed_now"], 1)
+            self.assertEqual(working.json()["inventory"]["agent_visible_on_demand"], 0)
+            self.assertEqual(working.json()["exposure_changes"]["unmanaged"], 0)
+            self.assertEqual(working.json()["exposure_changes"]["local_edits"], 0)
+
     def test_agent_search_is_monotonic_by_displayed_fractional_score(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             project, cli = self.make_workspace(Path(tmp_name))

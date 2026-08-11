@@ -72,6 +72,7 @@ def default_source_roots(project_root: Path | None = None) -> list[tuple[Path, d
         roots.extend(project_child_skill_repo_roots(project_root))
     roots.extend(
         [
+            (Path.home() / ".agents" / "skills", {"type": "global", "agent": "codex"}),
             (Path.home() / ".codex" / "skills", {"type": "global", "agent": "codex"}),
             (Path.home() / ".claude" / "skills", {"type": "global", "agent": "claude"}),
             (Path.home() / ".skillager" / "skills", {"type": "global", "agent": "skillager"}),

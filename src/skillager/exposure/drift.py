@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import Any
 
 from ..simple_yaml import load_mapping
-from ..skills.tree import content_tree_fingerprint
 from ..trust import content_hash
 from .impl import MATERIALIZED_SCHEMA, ROUTER_SCHEMA, WORKING_SKILL_ID
 
@@ -31,6 +30,7 @@ def scan_project_exposures(
     *,
     agent: str | None = None,
     catalog_root: Path | None = None,
+    known_native_roots: set[Path] | None = None,
 ) -> dict[str, Any]:
     """Classify live current-project exposure targets without mutating state."""
 
@@ -39,6 +39,7 @@ def scan_project_exposures(
         agent=agent,
         catalog_root=catalog_root,
         authoritative=False,
+        known_native_roots=known_native_roots,
     )
     counts = {key: 0 for key in _COUNT_KEYS.values()}
     for record in records:
@@ -57,6 +58,7 @@ def list_project_exposures(
     agent: str | None = None,
     catalog_root: Path | None = None,
     authoritative: bool = True,
+    known_native_roots: set[Path] | None = None,
 ) -> list[dict[str, Any]]:
     """Return every discoverable current-project exposure classification."""
 
@@ -90,7 +92,11 @@ def list_project_exposures(
                     )
                     if record is not None:
                         records.append(record)
-                elif (target / "SKILL.md").is_file() and target.name != "skillager-working":
+                elif (
+                    (target / "SKILL.md").is_file()
+                    and target.name != "skillager-working"
+                    and resolved not in (known_native_roots or set())
+                ):
                     records.append(_unmanaged_record(target, agent=root_agent))
     return sorted(records, key=lambda item: (str(item.get("agent")), str(item.get("target"))))
 
@@ -129,10 +135,7 @@ def classify_exposure_target(
         return record
 
     try:
-        fingerprint = content_tree_fingerprint(target)
-        current_hash = None if authoritative else _hash_from_matching_fingerprint(data, fingerprint)
-        if current_hash is None:
-            current_hash = content_hash(target)
+        current_hash = content_hash(target)
     except OSError as exc:
         record.update(
             {
@@ -155,13 +158,6 @@ def classify_exposure_target(
         status = "local_edit"
     record["status"] = status
     return record
-
-
-def _hash_from_matching_fingerprint(data: dict[str, Any], fingerprint: str) -> str | None:
-    materialized_hash = data.get("materialized_hash")
-    if isinstance(materialized_hash, str) and data.get("materialized_fingerprint") == fingerprint:
-        return materialized_hash
-    return None
 
 
 def _sidecar_validation_error(data: dict[str, Any]) -> str | None:

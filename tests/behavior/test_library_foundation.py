@@ -124,7 +124,8 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             self.assertEqual(content.code, 2)
             self.assertNotIn(BODY_SENTINEL, content.stdout)
             self.assertNotIn(BODY_SENTINEL, content.stderr)
-            self.assertIn("not available", content.stderr)
+            self.assertIn("pending exact-hash acceptance", content.stderr)
+            self.assertIn("skillager library accept lib/gis-owned", content.stderr)
 
     def test_conflicting_registration_and_relocation_fail_without_creating_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -181,6 +182,10 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             self.assertEqual(doctor.code, 0, doctor.stderr)
             self.assertEqual(doctor.json()["status"], "ready")
             self.assertEqual(doctor.json()["library"]["status"], "degraded")
+            plain_doctor = cli.run("doctor", "--no-packages")
+            self.assertEqual(plain_doctor.code, 0, plain_doctor.stderr)
+            self.assertIn("Library: degraded", plain_doctor.stdout)
+            self.assertIn("recovery: skillager library status", plain_doctor.stdout)
 
             collections_path = root / "state" / "catalog" / "collections.json"
             before = collections_path.read_bytes()

@@ -1,6 +1,6 @@
 # Safety Model
 
-Skillager is a review and activation gate. It reduces accidental context exposure and catches common malicious skill patterns, but it does not prove a skill is safe.
+Skillager is a cooperative local review and activation gate. It reduces accidental context exposure and catches common malicious skill patterns, but it does not prove a skill is safe. It is not a sandbox or a same-user authorization boundary, and an agent host may load directly installed native skills without consulting Skillager.
 
 ## Security Goals
 
@@ -12,7 +12,7 @@ Skillager is a review and activation gate. It reduces accidental context exposur
 - Require approve or pin state before activation or exposure.
 - Assume agent compatibility by default; block only explicit agent exclusions unless the user overrides them.
 - Copy skills into project-local native directories so users can inspect managed projections while keeping canonical edits at their source.
-- Preserve content hashes so changed skills require fresh review.
+- Preserve content hashes over eligible paths, bytes, and normalized executable bits so changed skills require fresh review.
 
 Setup always scans the current selected content locally. A reusable global approval suppresses a repeated owner prompt only when the logical source identity and exact current content hash match. Setup reports current hashes scanned, decisions recorded this run, and reusable exact-hash matches separately; scanner finding totals are distinct from the per-skill risk distribution, and non-low rows expose only IDs, risk, counts, and rule codes. `--fresh-project` does not imply deleting reusable catalog approvals.
 
@@ -20,7 +20,7 @@ Setup always scans the current selected content locally. A reusable global appro
 
 Library ownership does not grant body availability. Every new or edited `lib/<name>` skill remains pending until `skillager library accept` records its exact current tree hash. Pending bodies stay unavailable through `show --content`, activation, native/stub exposure, and routers; generic force or include-unreviewed flags do not bypass this boundary.
 
-Acceptance previews scanner and lint metadata, recomputes the hash under a bounded lock, and requires explicit confirmation. Blocking lint or high scanner risk requires `--override-lint --reason "..."`, stored as an audited exact-hash override. Git-backed libraries commit the selected skill path before trust is recorded and refuse conflicts, in-progress repository operations, and unrelated staged changes. Adding a remote does not alter approval identity: library approvals use `library:<library_id>#<skill-name>` plus the accepted content hash.
+Acceptance previews scanner and lint metadata, recomputes the hash under a bounded lock, and requires explicit confirmation. The non-interactive command carries an opaque token bound to the exact previewed hash and any audited reason; missing or stale tokens fail before mutation. Blocking lint or high scanner risk requires a real `--override-lint --reason "..."` before a confirmation command is emitted. Git-backed libraries commit the selected skill path before trust is recorded and refuse conflicts, in-progress repository operations, and unrelated staged changes. Adding a remote does not alter approval identity: library approvals use `library:<library_id>#<skill-name>` plus the accepted content hash.
 
 ## Import Boundary
 
@@ -36,19 +36,19 @@ Git stores library history, but Git commit IDs are never accepted as Skillager v
 
 Restore is append-only. It resolves a unique Skillager content-hash prefix, reconstructs and scans the tree outside the library, rechecks the selected historical commit and current working hash under the mutation lock, and then creates a new descendant commit. It never runs reset, checkout over the worktree, rebase, force-push, fetch, pull, or another remote/history-rewriting operation. Trust is recorded only after the new commit succeeds. Git or trust failure leaves an exact pending tree with a documented `library accept` repair path.
 
-Conflicts, in-progress operations, unrelated staged files, missing or ambiguous hashes, changed previews, unsafe historical trees, and current symlinks or excluded files fail closed. Acceptance applies the same canonical-tree rule before staging, so an ignored symlink cannot poison append-only history. A transaction-only tree fingerprint also catches executable-mode changes that do not affect the public Skillager content hash. No-Git libraries explicitly report history as unavailable without affecting ordinary authored/imported library use.
+Conflicts, in-progress operations, unrelated staged files, missing or ambiguous hashes, changed previews, unsafe historical trees, and current symlinks or excluded files fail closed. Acceptance applies the same canonical-tree rule before staging, so an ignored symlink cannot poison append-only history. Normalized executable bits are part of the public Skillager content hash; a mode-only change therefore revokes acceptance. No-Git libraries explicitly report history as unavailable without affecting ordinary authored/imported library use.
 
 ## Incremental Index And Exposure Drift
 
-Skillager stores an advisory fingerprint with each local index entry. The fingerprint covers the same agent-visible file set as `content_hash`, but uses relative path, byte size, and nanosecond modification time rather than reading file bodies. A hit may reuse the prior full hash, scanner result, and lint result for metadata/readiness work. A miss recomputes all three. Approval paths bypass the advisory cache; body-bearing access and every exposure write recompute authoritative hashes. Native exposure copies into a verified candidate and atomically installs it only if candidate and source still reproduce the accepted hash. Fingerprint equality never authorizes trust, body emission, or mutation.
+Skillager stores an advisory fingerprint with each local discovery index entry. The fingerprint covers the same agent-visible file set as `content_hash`, but uses relative path, byte size, and nanosecond modification time rather than reading file bodies. A hit may reuse prior discovery metadata; a miss recomputes it. Approval and body-bearing paths bypass the advisory cache. `working` also fully hashes personal-library sources and managed exposure targets before reporting availability or drift, and every exposure write recomputes authoritative hashes. Native exposure copies into a verified candidate and atomically installs it only if candidate and source still reproduce the accepted hash. Fingerprint equality never authorizes trust, drift classification, body emission, or mutation.
 
-New materialization sidecars record the source identity, exact source/materialized hashes, materialized fingerprint, agent, and scope. Library-owned direct exposures additionally record the stable `source_library_id`; duplicated ownership labels are not authoritative and are no longer written. `working --json` compares only live current-project targets and emits metadata-only drift in `exposure_changes`; it does not refresh source/library state, change readiness, or write state, sidecars, or target files. Exposure-blocked legacy decisions take precedence over ordinary local-edit classification. Unreadable or incomplete sidecars fail into an explicit error state. Fully deleted exposure directories remain unknowable without a ledger; Skillager does not infer their existence from global state.
+New materialization sidecars record the source identity, exact source/materialized hashes, materialized fingerprint, agent, and scope. Library-owned direct exposures additionally record the stable `source_library_id`; duplicated ownership labels are not authoritative and are no longer written. `working --json` compares live current-project targets and revalidates personal-library hashes read-only; owned drafts and edits are advisory and do not enter the external setup gate. It does not change readiness decisions, trust, indexes, sidecars, or target files. Exposure-blocked legacy decisions take precedence over ordinary local-edit classification. Unreadable or incomplete sidecars fail into an explicit error state. Fully deleted exposure directories remain unknowable without a ledger; Skillager does not infer their existence from global state.
 
 ## Managed Exposure Recovery
 
 Exposed copies are managed projections, not independent canonical sources. Ordinary native, stub, and router exposure fully hashes existing targets and refuses to overwrite local changes unless the user explicitly chooses `--force`. Drift metadata never decides whether a project edit should become a library version.
 
-For an intentional edit to an owned skill, the safe workflow is to compare the exposure with the canonical library tree, move the intended work into the library, accept that exact hash, then explicitly re-expose it. For an accidental edit, preserve anything needed before choosing forced re-exposure. Skillager performs no automatic merge, promotion, upstream update, or cross-project rollout.
+For an intentional edit to an owned skill, the safe workflow is to compare the exposure with the canonical library tree, move the intended work into the library, accept that exact hash, then explicitly re-expose it. For an accidental edit, preserve anything needed before choosing forced re-exposure. Removal is preview-first and confirmation-bound; non-current targets do not receive a removal command until the user explicitly previews with `--force`. Skillager performs no automatic merge, promotion, upstream update, or cross-project rollout.
 
 ## Static Scanner
 

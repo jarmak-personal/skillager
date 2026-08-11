@@ -12,7 +12,7 @@ from unittest.mock import patch
 from support import chdir
 from skillager.cli import _print_expose_results, build_parser, main
 from skillager.index import build_index, load_index
-from skillager.materialize import materialize_skills
+from skillager.materialize import materialize_skills, target_dir
 from skillager.exposure.impl import materialize_one
 from skillager.simple_yaml import load_mapping
 from skillager.skills.tree import content_tree_fingerprint
@@ -31,6 +31,14 @@ def write_manifest(skill_dir: Path, audience: str) -> None:
 
 
 class SkillagerMaterializeTests(unittest.TestCase):
+
+    def test_global_codex_target_uses_current_user_skill_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            skill = {"id": "lib/demo", "root": str(home / "source"), "source": {"ownership": "library"}}
+            with patch("pathlib.Path.home", return_value=home):
+                target = target_dir(agent="codex", scope="global", skill=skill)
+            self.assertEqual(target, home / ".agents" / "skills" / "lib-demo")
 
     def test_native_exposure_refuses_source_that_changes_during_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -117,7 +125,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             (["expose", "--list", "--dry-run"], "--dry-run"),
             (["expose", "--list", "--mode", "stub"], "--mode"),
             (["expose", "--remove", "project-demo", "--audience", "user"], "--audience"),
-            (["expose", "--remove", "project-demo", "--force"], "--force"),
+            (["expose", "--list", "--force"], "--force"),
             (["expose", "--remove", "project-demo", "--include-blocked"], "--include-blocked"),
         ]
         for argv, expected in cases:
@@ -215,7 +223,11 @@ class SkillagerMaterializeTests(unittest.TestCase):
                         self.assertEqual(main(["expose", "--list", "--json"]), 0)
                     payload = json.loads(listed.getvalue())
                     self.assertEqual([item["agent"] for item in payload["exposures"]], ["claude"])
-                    self.assertEqual(main(["expose", "--remove", "project-demo"]), 0)
+                    preview = StringIO()
+                    with redirect_stdout(preview):
+                        self.assertEqual(main(["expose", "--remove", "project-demo", "--json"]), 0)
+                    command = json.loads(preview.getvalue())["results"][0]["next_command_argv"]
+                    self.assertEqual(main(command[1:]), 0)
             self.assertFalse((root / ".agents" / "skills" / "project-demo").exists())
             self.assertFalse((root / ".claude" / "skills" / "project-demo").exists())
 
@@ -483,6 +495,23 @@ class SkillagerMaterializeTests(unittest.TestCase):
             self.assertFalse(would_expose[0]["restart_required"])
             self.assertNotIn("would_write", dry_run_output.getvalue())
 
+    def test_expose_dry_run_does_not_create_target_parents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
+                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                    self.assertFalse((root / ".agents").exists())
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        self.assertEqual(main(["expose", "project/demo", "--agent", "codex", "--dry-run", "--json"]), 0)
+                    self.assertEqual(json.loads(output.getvalue())[0]["status"], "would_expose")
+                    self.assertFalse((root / ".agents").exists())
+
     def test_expose_list_and_remove_manage_sidecar_backed_targets(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -523,7 +552,11 @@ class SkillagerMaterializeTests(unittest.TestCase):
                     self.assertTrue((root / ".agents" / "skills" / "project-demo").exists())
                     removed = StringIO()
                     with redirect_stdout(removed):
-                        self.assertEqual(main(["expose", "--remove", "project-demo", "--agent", "codex"]), 0)
+                        preview = StringIO()
+                        with redirect_stdout(preview):
+                            self.assertEqual(main(["expose", "--remove", "project-demo", "--agent", "codex", "--json"]), 0)
+                        command = json.loads(preview.getvalue())["results"][0]["next_command_argv"]
+                        self.assertEqual(main(command[1:]), 0)
             self.assertIn("project-demo: removed", removed.getvalue())
             self.assertFalse((root / ".agents" / "skills" / "project-demo").exists())
             self.assertTrue((root / ".agents" / "skills" / "unmanaged" / "SKILL.md").exists())
@@ -554,10 +587,45 @@ class SkillagerMaterializeTests(unittest.TestCase):
 
                     removed = StringIO()
                     with redirect_stdout(removed):
-                        self.assertEqual(main(["expose", "--remove", "project-demo", "--agent", "codex"]), 0)
+                        preview = StringIO()
+                        with redirect_stdout(preview):
+                            self.assertEqual(main(["expose", "--remove", "project-demo", "--agent", "codex", "--json"]), 0)
+                        command = json.loads(preview.getvalue())["results"][0]["next_command_argv"]
+                        self.assertEqual(main(command[1:]), 0)
                     self.assertIn("project-demo: removed", removed.getvalue())
                     self.assertFalse(codex_target.exists())
                     self.assertTrue(claude_target.exists())
+
+    def test_expose_remove_preserves_local_edits_without_explicit_force_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "demo"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text("# Demo Skill\n\nUse project guidance.\n", encoding="utf-8")
+            with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}):
+                with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
+                    self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--no-packages"]), 0)
+                    self.assertEqual(main(["expose", "project/demo", "--agent", "codex"]), 0)
+                    target = root / ".agents" / "skills" / "project-demo"
+                    with (target / "SKILL.md").open("a", encoding="utf-8") as handle:
+                        handle.write("\nLOCAL_ONLY_EDIT\n")
+
+                    preview_output = StringIO()
+                    with redirect_stdout(preview_output):
+                        self.assertEqual(main(["expose", "--remove", "project-demo", "--agent", "codex", "--json"]), 0)
+                    preview = json.loads(preview_output.getvalue())["results"][0]
+                    self.assertTrue(preview["requires_force"])
+                    self.assertNotIn("next_command_argv", preview)
+                    self.assertTrue(target.exists())
+
+                    forced_output = StringIO()
+                    with redirect_stdout(forced_output):
+                        self.assertEqual(main(["expose", "--remove", "project-demo", "--agent", "codex", "--force", "--json"]), 0)
+                    forced = json.loads(forced_output.getvalue())["results"][0]
+                    self.assertFalse(forced["requires_force"])
+                    self.assertEqual(main(forced["next_command_argv"][1:]), 0)
+                    self.assertFalse(target.exists())
 
     def test_materialize_stub_writes_tiny_activation_handle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -623,7 +691,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             self.assertEqual(indexed["native"]["agent"], "codex")
             listing = StringIO()
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}), patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root), redirect_stdout(listing):
-                self.assertEqual(main(["list", "--no-packages", "--json", "--full-json"]), 0)
+                self.assertEqual(main(["list", "--no-packages", "--full-json"]), 0)
             skill = json.loads(listing.getvalue())[0]
             self.assertEqual(skill["exposure_targets"][0]["exposure_status"], "existing")
             self.assertFalse((state / "native_inventory.json").exists())

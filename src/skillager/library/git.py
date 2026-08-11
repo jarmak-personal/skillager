@@ -179,7 +179,7 @@ def head_content_hash(root: Path, path: Path) -> str | None:
     if not tree_entries:
         return None
     prefix = f"{relative.rstrip('/')}/"
-    entries: list[tuple[str, bytes]] = []
+    entries: list[tuple[str, bytes, str]] = []
     for tree_entry in tree_entries:
         metadata, separator, raw_name = tree_entry.partition(b"\t")
         if not separator:
@@ -193,7 +193,7 @@ def head_content_hash(root: Path, path: Path) -> str | None:
         shown = _run_git_bytes(root, "show", f"HEAD:{name}")
         if shown.returncode != 0:
             raise LibraryGitError(_git_bytes_error(f"could not read {name} from library HEAD", shown))
-        entries.append((name[len(prefix) :], shown.stdout))
+        entries.append((name[len(prefix) :], shown.stdout, mode.decode("ascii")))
     return content_hash_entries(entries) if entries else None
 
 

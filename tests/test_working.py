@@ -276,7 +276,7 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.assertEqual(code, 0, stderr)
             self.assertEqual(json.loads(stdout)["schema"], "skillager.working.v1")
 
-    def test_working_reuses_saved_library_index_without_resolving_library_freshness(self) -> None:
+    def test_working_reuses_index_but_reports_owned_draft_separately(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -299,7 +299,9 @@ class SkillagerWorkingTests(unittest.TestCase):
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
             self.assertEqual(data["schema"], "skillager.working.v1")
-            self.assertEqual(data["pending_external_review"][0]["id"], "lib/cached-skill")
+            self.assertEqual(data["pending_external_review"], [])
+            self.assertEqual(data["pending_owned_changes"][0]["id"], "lib/cached-skill")
+            self.assertIn("library accept", data["pending_owned_changes"][0]["command"])
 
 
 if __name__ == "__main__":

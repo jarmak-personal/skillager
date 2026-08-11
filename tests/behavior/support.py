@@ -55,6 +55,26 @@ class SkillagerCli:
         )
         return CliResult(completed.returncode, completed.stdout, completed.stderr)
 
+    def run_confirmed(self, *args: str) -> CliResult:
+        """Preview a mutation and execute the exact bound command it returns."""
+        values = list(args)
+        if "--yes" not in values:
+            raise ValueError("run_confirmed requires --yes in the requested command")
+        values.remove("--yes")
+        wants_json = "--json" in values
+        preview_values = values if wants_json else [*values, "--json"]
+        preview = self.run(*preview_values)
+        if preview.code != 0:
+            return preview
+        payload = preview.json()
+        command = list(payload.get("next_command_argv") or [])
+        if not command or command[0] != "skillager":
+            return preview
+        confirmed = command[1:]
+        if wants_json and "--json" not in confirmed:
+            confirmed.append("--json")
+        return self.run(*confirmed)
+
 
 def make_basic_workspace(tmp: Path) -> tuple[Path, SkillagerCli]:
     project = tmp / "project"

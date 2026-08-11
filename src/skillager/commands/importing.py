@@ -7,6 +7,7 @@ import sys
 import textwrap
 from typing import Any
 
+from ..library.confirmation import confirmation_token, require_confirmation_token
 from ..library.importing import import_library_skill, import_preview
 from .context import catalog_root, current_project_dir, root
 
@@ -24,20 +25,28 @@ def add_import_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             """\
             Examples:
               skillager import project/orbital-review --json
-              skillager import community/brainstorm --as brainstorm --yes
-              skillager import demo-package/release-check --yes
+              skillager import community/brainstorm --as brainstorm --json
+              skillager import demo-package/release-check --json
             """
         ),
     )
     parser.add_argument("skill", help="External discovered skill ID.")
     parser.add_argument("--as", dest="destination_name", help="Collision-free library skill name.")
-    parser.add_argument("--yes", action="store_true", help="Confirm the exact reviewed source hash for import.")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Run a non-interactive import using the token returned by its preview.",
+    )
     parser.add_argument(
         "--override-lint",
         action="store_true",
         help="Import lint-blocking or high-risk content with an audited --reason.",
     )
     parser.add_argument("--reason", help="Required audit reason with --override-lint.")
+    parser.add_argument(
+        "--confirmation-token",
+        help="Opaque token from the current import preview.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit versioned import metadata as JSON.")
     parser.set_defaults(func=cmd_import)
 
@@ -55,19 +64,55 @@ def cmd_import(args: argparse.Namespace) -> int:
         destination_name=args.destination_name,
         project_dir=current_project_dir(),
     )
+    token = confirmation_token(
+        "library-import",
+        source_id=preview["source"]["id"],
+        source_key=preview["_source_key"],
+        source_hash=preview["source_hash"],
+        destination_name=preview["destination"]["name"],
+        override_lint=args.override_lint,
+        reason=(args.reason or "").strip() or None,
+    )
+    preview = dict(preview)
+    if preview["blocked"]:
+        preview["required_action"] = "unblock the external source before importing it"
+        preview.pop("next_command_argv", None)
+    elif preview["requires_override"] and not args.override_lint:
+        preview["required_arguments"] = ["--override-lint", "--reason"]
+        preview.pop("next_command_argv", None)
+    else:
+        preview["next_command_argv"] = _import_argv(
+            preview["source"]["id"],
+            preview["destination"]["name"],
+            token,
+            override_lint=args.override_lint,
+            reason=args.reason,
+        )
     if not args.yes:
         if args.json:
             print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
             return 0
         _print_preview(preview)
+        if preview["blocked"]:
+            print("Unblock the source, then preview the import again.")
+            return 0
         if not sys.stdin.isatty():
-            print(f"Next: {shlex.join(preview['next_command_argv'])}")
+            _print_preview_next(preview)
+            return 0
+        if preview["requires_override"] and not args.override_lint:
+            print("Rerun the preview with --override-lint and a real --reason to continue.")
             return 0
         response = input("Import and accept this exact external skill hash? [y/N] ").strip().lower()
         if response not in {"y", "yes"}:
             print("Import cancelled; no library files were written.")
             return 1
 
+    if preview["blocked"]:
+        raise ValueError(f"source skill is blocked and cannot be imported: {preview['source']['id']}")
+    if preview["requires_override"] and not args.override_lint:
+        raise ValueError("this source requires --override-lint --reason with an audited explanation")
+    if args.yes:
+        require_confirmation_token(args.confirmation_token, token, operation="library import")
     result = import_library_skill(
         root(args),
         catalog_root(args),
@@ -104,6 +149,39 @@ def _print_preview(preview: dict[str, Any]) -> None:
         print("Blocked: this source must be unblocked before import.")
     elif preview["requires_override"]:
         print("This hash requires --override-lint --reason <text> before import.")
+
+
+def _import_argv(
+    source_skill_id: str,
+    name: str,
+    token: str,
+    *,
+    override_lint: bool,
+    reason: str | None,
+) -> list[str]:
+    command = [
+        "skillager",
+        "import",
+        source_skill_id,
+        "--as",
+        name,
+        "--yes",
+        "--confirmation-token",
+        token,
+    ]
+    if override_lint:
+        command.extend(["--override-lint", "--reason", (reason or "").strip()])
+    return command
+
+
+def _print_preview_next(preview: dict[str, Any]) -> None:
+    command = preview.get("next_command_argv")
+    if command:
+        print(f"Next: {shlex.join(command)}")
+    elif preview.get("blocked"):
+        print("Next: unblock the source, then preview the import again.")
+    else:
+        print("Next: provide --override-lint with a real --reason and preview again.")
 
 
 def _public_payload(value: Any) -> Any:

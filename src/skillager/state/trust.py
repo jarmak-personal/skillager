@@ -26,6 +26,8 @@ def content_hash(path: Path) -> str:
             relative = file_path.relative_to(path).as_posix()
             digest.update(relative.encode("utf-8"))
             digest.update(b"\0")
+            if file_path.stat(follow_symlinks=False).st_mode & 0o111:
+                digest.update(b"executable\0")
             with file_path.open("rb") as handle:
                 for chunk in iter(lambda: handle.read(65536), b""):
                     digest.update(chunk)
@@ -37,11 +39,14 @@ def content_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
-def content_hash_entries(entries: Iterable[tuple[str, bytes]]) -> str:
+def content_hash_entries(entries: Iterable[tuple[str, bytes] | tuple[str, bytes, bool | str]]) -> str:
     """Hash an in-memory tree with the same public identity as ``content_hash``."""
 
     digest = hashlib.sha256()
-    for relative, payload in sorted(entries, key=lambda item: item[0]):
+    for entry in sorted(entries, key=lambda item: item[0]):
+        relative, payload = entry[:2]
+        mode = entry[2] if len(entry) == 3 else False
+        executable = mode is True or mode == "100755"
         relative_path = Path(relative)
         if relative_path.is_absolute() or ".." in relative_path.parts:
             raise ValueError(f"content hash entry must be a safe relative path: {relative}")
@@ -50,6 +55,8 @@ def content_hash_entries(entries: Iterable[tuple[str, bytes]]) -> str:
         canonical = relative_path.as_posix()
         digest.update(canonical.encode("utf-8"))
         digest.update(b"\0")
+        if executable:
+            digest.update(b"executable\0")
         digest.update(payload)
         digest.update(b"\0")
     return digest.hexdigest()

@@ -70,11 +70,26 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             self.assertNotIn("source_key", preview.stdout)
             self.assertNotIn("artifact_kind", preview.stdout)
             self.assertNotIn('"next_command"', preview.stdout)
-            self.assertEqual(preview_data["next_command_argv"][-1], "--yes")
+            self.assertIn("--yes", preview_data["next_command_argv"])
+            self.assertEqual(preview_data["next_command_argv"][-2], "--confirmation-token")
+            self.assertRegex(preview_data["next_command_argv"][-1], r"^[0-9a-f]{64}$")
             self.assertFalse((library / "skills" / "orbital-review").exists())
             self.assert_body_not_exposed(preview)
 
-            imported = cli.run("import", "project/orbital-review", "--yes", "--json")
+            unbound = cli.run("import", "project/orbital-review", "--yes")
+            self.assert_code(unbound, 2)
+            self.assertIn("confirmation token", unbound.stderr)
+            self.assertFalse((library / "skills" / "orbital-review").exists())
+
+            stale_command = preview_data["next_command_argv"][1:]
+            (source / "reference.md").write_text("Changed after preview.\n", encoding="utf-8")
+            stale = cli.run(*stale_command, "--json")
+            self.assert_code(stale, 2)
+            self.assertIn("preview is stale", stale.stderr)
+            self.assertFalse((library / "skills" / "orbital-review").exists())
+            (source / "reference.md").write_text("Reviewed reference.\n", encoding="utf-8")
+
+            imported = cli.run_confirmed("import", "project/orbital-review", "--yes", "--json")
             self.assert_code(imported, 0)
             data = imported.json()
             self.assertEqual(data["status"], "imported")
@@ -118,7 +133,7 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             collision = cli.run("import", "project/orbital-review", "--yes")
             self.assert_code(collision, 2)
             self.assertIn("collision-free --as", collision.stderr)
-            renamed = cli.run("import", "project/orbital-review", "--as", "orbital-copy", "--yes", "--json")
+            renamed = cli.run_confirmed("import", "project/orbital-review", "--as", "orbital-copy", "--yes", "--json")
             self.assert_code(renamed, 0)
             self.assertEqual(renamed.json()["destination"]["id"], "lib/orbital-copy")
 
@@ -140,6 +155,13 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
             target = library / "skills" / "risky-import"
 
+            preview = cli.run("import", "project/risky-import", "--json")
+            self.assert_code(preview, 0)
+            self.assertTrue(preview.json()["requires_override"])
+            self.assertEqual(preview.json()["required_arguments"], ["--override-lint", "--reason"])
+            self.assertNotIn("next_command_argv", preview.json())
+            self.assertNotIn("<why>", preview.stdout)
+
             refused = cli.run("import", "project/risky-import", "--yes")
             self.assert_code(refused, 2)
             self.assertIn("--override-lint --reason", refused.stderr)
@@ -150,15 +172,18 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             self.assertIn("--reason is required", missing_reason.stderr)
             self.assertFalse(target.exists())
 
-            accepted = cli.run(
+            reason_preview = cli.run(
                 "import",
                 "project/risky-import",
-                "--yes",
                 "--override-lint",
                 "--reason",
                 "Reviewed local security documentation",
                 "--json",
             )
+            self.assert_code(reason_preview, 0)
+            self.assertIn("Reviewed local security documentation", reason_preview.json()["next_command_argv"])
+            self.assertNotIn("<why>", reason_preview.stdout)
+            accepted = cli.run(*reason_preview.json()["next_command_argv"][1:], "--json")
             self.assert_code(accepted, 0)
             approval = accepted.json()["approval"]
             self.assertEqual(approval["lint_override"]["reason"], "Reviewed local security documentation")
@@ -230,6 +255,11 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
                 "Native Help",
                 "Use native Codex guidance.",
             )
+            self.write_skill(
+                root / "home" / ".agents" / "skills" / "native-current",
+                "Native Current",
+                "Use current native Codex guidance.",
+            )
 
             cases = (
                 ("shared/shared-help", "owned-shared", "collection", False),
@@ -239,10 +269,11 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
                 ("npm-demo/npm-help", "owned-npm", "npm-package", False),
                 ("cargo-demo/cargo-help", "owned-cargo", "cargo-package", False),
                 ("global/native-help", "owned-native", "global", False),
+                ("global/native-current", "owned-native-current", "global", False),
             )
             for source_id, destination, source_type, editable in cases:
                 with self.subTest(source_id=source_id):
-                    result = cli.run("import", source_id, "--as", destination, "--yes", "--json")
+                    result = cli.run_confirmed("import", source_id, "--as", destination, "--yes", "--json")
                     self.assert_code(result, 0)
                     data = result.json()
                     self.assertEqual(data["source"]["type"], source_type)
@@ -269,17 +300,17 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
             hook.chmod(0o700)
 
-            failed = cli.run("import", "project/git-import", "--yes")
+            failed = cli.run_confirmed("import", "project/git-import", "--yes")
             self.assert_code(failed, 2)
             self.assertIn("content remains pending", failed.stderr)
-            self.assertIn("library accept lib/git-import --yes", failed.stderr)
+            self.assertIn("library accept lib/git-import --json", failed.stderr)
             target = library / "skills" / "git-import"
             self.assertTrue(target.is_dir())
             blocked = cli.run("show", "lib/git-import", "--content")
             self.assert_code(blocked, 2)
 
             hook.unlink()
-            repaired = cli.run("library", "accept", "lib/git-import", "--yes", "--json")
+            repaired = cli.run_confirmed("library", "accept", "lib/git-import", "--yes", "--json")
             self.assert_code(repaired, 0)
             self.assertEqual(repaired.json()["skill"]["status"], "clean")
             tracked = subprocess.run(

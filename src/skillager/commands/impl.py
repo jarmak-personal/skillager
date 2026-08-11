@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import json
 import os
+import shlex
 import shutil
 import sys
 import tempfile
@@ -37,8 +38,10 @@ from ..collections import (
     select_collection_skills,
 )
 from ..families import agent_variant_family_key, canonical_agent_variant_slug
-from ..exposure.drift import scan_project_exposures
+from ..exposure.drift import classify_exposure_target, scan_project_exposures
 from ..index import build_index, find_skill, load_index
+from ..library.confirmation import confirmation_token, require_confirmation_token
+from ..library.paths import load_library_registration
 from ..library.service import library_status
 from ..materialize import (
     TRUSTED_STATES,
@@ -69,6 +72,7 @@ from ..selection import select_visible_skills
 from ..signing import verify_oms_signature
 from ..simple_yaml import YamlError, load_mapping
 from ..skills.tree import content_tree_fingerprint
+from ..state.locking import resource_lock
 from ..trust import content_hash, load_trust, merge_global_approvals, save_trust, set_trust
 from .context import (
     catalog_root,
@@ -574,6 +578,8 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
             or repair Skillager Working; use `skillager doctor --fix` for the
             first-party working skill.
             Locally edited managed copies are not overwritten unless --force is used.
+            Managed removal is preview-first and refuses to discard local changes
+            without an explicit --force preview and bound confirmation.
             """
         ),
         epilog=textwrap.dedent(
@@ -585,7 +591,7 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
               skillager activate <skill-id> --from-router <router-slug>
               skillager expose fastapi/fastapi --mode stub --agent codex
               skillager expose --list --agent codex --scope project
-              skillager expose --remove fastapi-fastapi --agent codex --scope project
+              skillager expose --remove fastapi-fastapi --agent codex --scope project --json
               skillager expose fastapi/fastapi --dry-run --json
             """
         ),
@@ -612,7 +618,13 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--list", action="store_true", dest="list_exposures", help="List Skillager-managed exposed targets for the selected agent/scope.")
     p.add_argument("--remove", metavar="EXPOSURE_ID", help="Remove one Skillager-managed exposed target by exposure id.")
     p.add_argument("--dry-run", action="store_true", help="Report target paths without writing files.")
-    p.add_argument("--force", action="store_true", help="Overwrite existing Skillager-managed targets with local edits.")
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Explicitly discard local target changes during overwrite or removal.",
+    )
+    p.add_argument("--yes", action="store_true", help="Confirm a removal using its current preview token.")
+    p.add_argument("--confirmation-token", help="Opaque token from the current removal preview.")
     add_review_filters(p, include_lint_flag=False)
     p.add_argument("--json", action="store_true", help="Emit exposure results as JSON.")
     p.set_defaults(func=cmd_expose)
@@ -915,6 +927,8 @@ def cmd_tag_list(args: argparse.Namespace) -> int:
 
 
 def cmd_tag_show(args: argparse.Namespace) -> int:
+    if args.full_json:
+        args.json = True
     all_skills = _select_project_tag_skills(
         root(args),
         catalog_root(args),
@@ -1715,6 +1729,8 @@ def _build_visible_skill_view(
     )
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
+    data["skills"] = _exclude_registered_library_duplicates(data.get("skills", []), catalog_root)
+    data["skills"] = _refresh_owned_library_truth(data.get("skills", []))
     lint_overrides = _active_lint_overrides(state_root, catalog_root, data.get("skills", []))
     saved_scope = _load_status_scope(state_root) if use_saved_scope else None
     scope_audience = saved_scope.get("audience") if saved_scope else None
@@ -1726,12 +1742,15 @@ def _build_visible_skill_view(
         include_lint_blocked=True,
     )
     skills = annotate_duplicate_content(skills)
-    review_needed = _status_review_needed(skills, saved_scope=saved_scope)
-    lint_blocked = [skill for skill in skills if skill.get("trust") == "lint_blocked"]
+    owned_changes = [skill for skill in skills if _is_owned_library_skill(skill) and not _is_available_skill(skill)]
+    review_candidates = [skill for skill in skills if not _is_owned_library_skill(skill)]
+    review_needed = _status_review_needed(review_candidates, saved_scope=saved_scope)
+    lint_blocked = [skill for skill in review_candidates if skill.get("trust") == "lint_blocked"]
     approved = [skill for skill in skills if skill.get("trust") in TRUSTED_STATES]
-    authored_unreviewed = _authored_unreviewed(skills)
+    authored_unreviewed = _authored_unreviewed(review_candidates)
     blocked = [skill for skill in data.get("skills", []) if skill.get("trust") == "blocked"]
     project_exposure = _project_exposure(project_dir)
+    _add_native_source_exposures(project_exposure, skills, project_dir=project_dir)
     attached_tags = _project_tag_names(project_dir)
     materialized_router_tags = sorted(_materialized_router_tags(project_dir, agent=agent)) if agent else []
     artifacts = _handoff_artifacts(project_dir, agent=agent) if agent else {}
@@ -1759,6 +1778,7 @@ def _build_visible_skill_view(
         "lint_blocked": lint_blocked,
         "approved": approved,
         "authored_unreviewed": authored_unreviewed,
+        "owned_changes": owned_changes,
         "blocked": blocked,
         "project_exposure": project_exposure,
         "attached_tags": attached_tags,
@@ -2032,11 +2052,13 @@ def _build_working_result(
     diagnosis = _doctor_diagnosis(view, agent=agent)
     setup_complete = _working_setup_complete(state_root)
     pending_external = _working_pending_external_review(view["skills"])
+    owned_changes = [_working_owned_item(skill) for skill in view.get("owned_changes", [])]
     pending_owner_review_count = len(view["review_needed"]) + len(view["lint_blocked"])
     exposure_changes = scan_project_exposures(
         project_dir,
         agent=agent,
         catalog_root=catalog_root,
+        known_native_roots=_known_native_source_roots(view["skills"], project_dir),
     )
     inventory = _available_inventory_summary(
         view["approved"],
@@ -2053,6 +2075,8 @@ def _build_working_result(
         "pending_owner_review_count": pending_owner_review_count,
         "pending_external_review_count": len(pending_external),
         "pending_external_review": [_working_sync_item(skill) for skill in pending_external],
+        "pending_owned_change_count": len(owned_changes),
+        "pending_owned_changes": owned_changes,
         "exposure_changes": exposure_changes,
         "inventory": inventory,
         "curation": _working_curation(inventory, agent=agent, exposed_router_tags=view["exposed_router_tags"]),
@@ -2128,6 +2152,12 @@ def _print_working_result(result: dict[str, Any]) -> None:
     pending = int(result.get("pending_owner_review_count") or 0)
     if pending:
         print(f"  Owner review needed: {_counted(pending, 'skill')}.")
+    owned = list(result.get("pending_owned_changes") or [])
+    if owned:
+        print(f"  Personal library changes pending: {_counted(len(owned), 'skill')} (does not block other work).")
+        for item in owned:
+            if item.get("command"):
+                print(f"    {item['command']}")
     changed = len(changes.get("items") or [])
     if changed:
         print(f"  {_counted(changed, 'managed exposure')} changed locally; Skillager will not overwrite it.")
@@ -2148,6 +2178,7 @@ def _working_pending_external_review(skills: list[dict[str, Any]]) -> list[dict[
         skill
         for skill in sorted(skills, key=lambda item: str(item.get("id") or ""))
         if (skill.get("source") or {}).get("type") != "project"
+        and not _is_owned_library_skill(skill)
         and skill.get("trust") in {"discovered", "lint_blocked"}
         and skill.get("id")
     ]
@@ -2202,6 +2233,16 @@ def _working_sync_item(skill: dict[str, Any]) -> dict[str, Any]:
             if key in {"type", "collection", "package", "environment", "agent"}
         },
         "path": skill.get("root"),
+    }
+
+
+def _working_owned_item(skill: dict[str, Any]) -> dict[str, Any]:
+    skill_id = str(skill.get("id") or "")
+    return {
+        "id": skill_id,
+        "status": skill.get("library_change") or skill.get("trust") or "pending",
+        "path": skill.get("root"),
+        "command": f"skillager library accept {skill_id}" if skill_id else None,
     }
 
 
@@ -2292,6 +2333,10 @@ def _doctor_state(view: dict[str, Any]) -> dict[str, Any]:
         "authored_unreviewed": {
             "count": len(view["authored_unreviewed"]),
             "ids": [skill["id"] for skill in view["authored_unreviewed"]],
+        },
+        "owned_changes": {
+            "count": len(view.get("owned_changes", [])),
+            "ids": [skill["id"] for skill in view.get("owned_changes", [])],
         },
         "migration": view["migration"],
         "artifacts": view["artifacts"],
@@ -2478,6 +2523,10 @@ def _print_doctor_result(result: dict[str, Any], *, migration_details: bool = Fa
     advisory_count = len(library.get("advisories") or [])
     advisory_suffix = f" ({advisory_count} advisor{'y' if advisory_count == 1 else 'ies'})" if advisory_count else ""
     print(f"  Library: {library.get('status', 'unknown')}{advisory_suffix}")
+    if library.get("status") == "degraded":
+        for warning in library.get("warnings") or []:
+            print(f"    warning: {warning}")
+        print("    recovery: skillager library status")
     overrides = ((result.get("state") or {}).get("lint_overrides") or {})
     override_ids = overrides.get("ids") or []
     override_suffix = f" ({', '.join(override_ids)})" if override_ids else ""
@@ -3414,6 +3463,64 @@ def _authored_unreviewed(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+def _is_owned_library_skill(skill: dict[str, Any]) -> bool:
+    return (skill.get("source") or {}).get("ownership") == "library"
+
+
+def _refresh_owned_library_truth(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Revoke stale cached library availability without mutating catalog state."""
+    refreshed: list[dict[str, Any]] = []
+    for skill in skills:
+        if not _is_owned_library_skill(skill):
+            refreshed.append(skill)
+            continue
+        item = dict(skill)
+        root_value = item.get("root")
+        root_path = Path(root_value) if root_value else None
+        if root_path is None or not root_path.is_dir():
+            item["trust"] = "discovered"
+            item["library_change"] = "missing"
+            refreshed.append(item)
+            continue
+        try:
+            current_hash = content_hash(root_path)
+        except (OSError, ValueError):
+            item["trust"] = "discovered"
+            item["library_change"] = "unreadable"
+            refreshed.append(item)
+            continue
+        if current_hash != item.get("content_hash"):
+            item["content_hash"] = current_hash
+            item["trust"] = "discovered"
+            item["library_change"] = "changed"
+        refreshed.append(item)
+    return refreshed
+
+
+def _exclude_registered_library_duplicates(
+    skills: list[dict[str, Any]],
+    catalog_root: Path,
+) -> list[dict[str, Any]]:
+    registration = load_library_registration(catalog_root)
+    if registration is None:
+        return skills
+    library_skills = registration.layout.skills.resolve()
+    result: list[dict[str, Any]] = []
+    for skill in skills:
+        if _is_owned_library_skill(skill):
+            result.append(skill)
+            continue
+        root_value = skill.get("root")
+        if not isinstance(root_value, str):
+            result.append(skill)
+            continue
+        try:
+            Path(root_value).resolve().relative_to(library_skills)
+        except (ValueError, OSError):
+            result.append(skill)
+    return result
+
+
 def _status_scope_path(state_root: Path) -> Path:
     return state_root / "status_scope.json"
 
@@ -3674,6 +3781,8 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
+    if args.full_json:
+        args.json = True
     if args.json and args.summary_json:
         raise ValueError("--json and --summary-json cannot be combined")
     inventory = _effective_project_skills(
@@ -4162,6 +4271,8 @@ def _same_skill_variant(left: dict[str, Any], right: dict[str, Any]) -> bool:
 
 
 def cmd_show(args: argparse.Namespace) -> int:
+    if args.full_json:
+        args.json = True
     skill = _find_project_skill(root(args), args.skill_id, catalog_root=catalog_root(args), include_lint_blocked=True)
     if skill.get("identity_collision"):
         if args.content:
@@ -4184,6 +4295,11 @@ def cmd_show(args: argparse.Namespace) -> int:
             _print_lint_blocked([skill])
         return 0
     if not _is_available_skill(skill):
+        if _is_owned_library_skill(skill):
+            raise ValueError(
+                f"owned library skill is pending exact-hash acceptance: {args.skill_id}; "
+                f"run `skillager library accept {skill['id']}` to preview it"
+            )
         raise ValueError(f"skill is not available: {args.skill_id}; ask the user to run `skillager setup`")
     if args.content and skill.get("trust") not in {"reviewed", "trusted", "pinned"}:
         raise ValueError(f"skill content is not available: {args.skill_id}; {_approval_hint(skill)}")
@@ -4355,7 +4471,6 @@ def _effective_project_skills(
         include_lint_blocked=include_lint_blocked,
     ):
         item = dict(skill)
-        item["availability"] = sorted(set(item.get("availability", [])) | {"attached-tag"})
         _merge_skill_inventory(by_id, item)
     for skill_id, tags in tag_membership.items():
         existing = by_id.get(skill_id)
@@ -4717,6 +4832,31 @@ def _unmanaged_native_target(skill: dict[str, Any], project: Path) -> dict[str, 
     return None
 
 
+def _known_native_source_roots(skills: list[dict[str, Any]], project: Path) -> set[Path]:
+    roots: set[Path] = set()
+    for skill in skills:
+        target = _unmanaged_native_target(skill, project)
+        if target:
+            roots.add(Path(target["path"]).resolve())
+    return roots
+
+
+def _add_native_source_exposures(
+    exposure: dict[str, list[dict[str, Any]]],
+    skills: list[dict[str, Any]],
+    *,
+    project_dir: Path,
+) -> None:
+    for skill in skills:
+        skill_id = skill.get("id")
+        target = _unmanaged_native_target(skill, project_dir)
+        if not skill_id or not target:
+            continue
+        existing = exposure.setdefault(str(skill_id), [])
+        if not any(item.get("path") == target["path"] for item in existing):
+            existing.append(target)
+
+
 def _project_skill_roots(project: Path) -> dict[str, list[Path]]:
     project = project.resolve()
     return {
@@ -4845,7 +4985,13 @@ def _router_sidecar_roots(project_dir: Path) -> list[Path]:
     roots: list[Path] = []
     for agent_roots in _project_skill_roots(project_dir).values():
         roots.extend(agent_roots)
-    roots.extend([Path.home() / ".codex" / "skills", Path.home() / ".claude" / "skills"])
+    roots.extend(
+        [
+            Path.home() / ".agents" / "skills",
+            Path.home() / ".codex" / "skills",
+            Path.home() / ".claude" / "skills",
+        ]
+    )
     deduped: list[Path] = []
     seen: set[Path] = set()
     for path in roots:
@@ -5202,12 +5348,19 @@ def _require_expose_management_only(args: argparse.Namespace, flag: str) -> None
         ("package", "--package"),
         ("activation", "--activation"),
         ("mode", "--mode"),
-        ("force", "--force"),
     ):
         if getattr(args, attr, None):
             conflicts.append(option)
     if flag == "--list" and args.dry_run:
         conflicts.append("--dry-run")
+    if flag == "--list" and args.force:
+        conflicts.append("--force")
+    if flag == "--list" and args.yes:
+        conflicts.append("--yes")
+    if flag == "--list" and args.confirmation_token:
+        conflicts.append("--confirmation-token")
+    if flag == "--remove" and args.dry_run and args.yes:
+        conflicts.append("--yes")
     if conflicts:
         raise ValueError(f"{flag} cannot be combined with {', '.join(conflicts)}")
 
@@ -5227,7 +5380,7 @@ def _cmd_expose_list(args: argparse.Namespace) -> int:
 
 
 def _cmd_expose_remove(args: argparse.Namespace) -> int:
-    agents = _resolve_expose_agents(args, root(args), mutating=not args.dry_run)
+    agents = _resolve_expose_agents(args, root(args), mutating=args.yes and not args.dry_run)
     records = _exposure_records(_current_project_dir(), agents=agents, scope=args.scope)
     matches = [item for item in records if _exposure_record_matches(item, args.remove)]
     if not matches:
@@ -5235,24 +5388,91 @@ def _cmd_expose_remove(args: argparse.Namespace) -> int:
     if len(matches) > 1:
         details = ", ".join(f"{item['agent']}:{item['target']}" for item in matches)
         raise ValueError(f"ambiguous exposure id: {args.remove} ({details})")
-    results: list[dict[str, Any]] = []
     item = matches[0]
     target = Path(item["target"])
-    result = dict(item)
-    if args.dry_run:
-        result["status"] = "would_remove"
-        result["reason"] = None
-    else:
-        shutil.rmtree(target)
+    preview = _exposure_removal_preview(item, target=target, force=args.force)
+    if args.yes and not args.dry_run:
+        with resource_lock(target):
+            current = _exposure_removal_preview(item, target=target, force=args.force)
+            expected_token = str(current["_confirmation_token"])
+            require_confirmation_token(args.confirmation_token, expected_token, operation="exposure removal")
+            if current["requires_force"]:
+                raise ValueError(
+                    "managed exposure has local edits; preview again with --force only if those edits may be discarded"
+                )
+            shutil.rmtree(target)
+        result = {key: value for key, value in current.items() if not key.startswith("_")}
         result["status"] = "removed"
-        result["reason"] = None
-    results.append(result)
+        result.pop("next_command_argv", None)
+    else:
+        result = {key: value for key, value in preview.items() if not key.startswith("_")}
+    results = [result]
     if args.json:
         print(json.dumps({"schema": "skillager.exposure-remove.v1", "results": results}, indent=2, sort_keys=True))
     else:
         for item in results:
             print(f"{item['exposure_id']}: {item['status']} {item['target']}")
+            if item.get("requires_force"):
+                print("  Local edits detected; inspect or preserve them before previewing with --force.")
+            elif item.get("next_command_argv"):
+                print(f"  Next: {shlex.join(item['next_command_argv'])}")
     return 0
+
+
+def _exposure_removal_preview(item: dict[str, Any], *, target: Path, force: bool) -> dict[str, Any]:
+    sidecar = target / "skillager.materialized.yaml"
+    classification = classify_exposure_target(
+        target,
+        sidecar=sidecar,
+        fallback_agent=str(item["agent"]),
+        authoritative=True,
+    )
+    if classification is None:
+        raise ValueError(f"exposure is not removable through this command: {item['exposure_id']}")
+    current_status = str(classification.get("status") or "unknown")
+    local_changes = current_status != "current"
+    requires_force = local_changes and not force
+    sidecar_state = load_mapping(sidecar)
+    token = confirmation_token(
+        "exposure-remove",
+        exposure_id=item["exposure_id"],
+        target=str(target.resolve()),
+        agent=item["agent"],
+        scope=item["scope"],
+        current_status=current_status,
+        current_hash=classification.get("current_hash"),
+        sidecar=sidecar_state,
+        force=force,
+    )
+    result = {
+        **item,
+        "status": "would_remove",
+        "reason": classification.get("reason"),
+        "current_status": current_status,
+        "local_changes": local_changes,
+        "requires_force": requires_force,
+        "_confirmation_token": token,
+    }
+    if requires_force:
+        result["required_arguments"] = ["--force"]
+    else:
+        command = [
+            "skillager",
+            "expose",
+            "--remove",
+            str(item["exposure_id"]),
+            "--agent",
+            str(item["agent"]),
+            "--scope",
+            str(item["scope"]),
+            "--yes",
+            "--confirmation-token",
+            token,
+        ]
+        if force:
+            command.append("--force")
+        result["next_command_argv"] = command
+    return result
 
 
 def _exposure_record_matches(item: dict[str, Any], value: str) -> bool:
@@ -5292,7 +5512,7 @@ def _exposure_roots(project_dir: Path, *, agents: list[str], scope: str) -> dict
         roots: dict[str, list[Path]] = {}
         for agent in agents:
             if agent == "codex":
-                roots[agent] = [Path.home() / ".codex" / "skills"]
+                roots[agent] = [Path.home() / ".agents" / "skills", Path.home() / ".codex" / "skills"]
             elif agent == "claude":
                 roots[agent] = [Path.home() / ".claude" / "skills"]
             else:

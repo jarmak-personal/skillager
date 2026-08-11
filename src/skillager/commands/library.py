@@ -8,6 +8,7 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
+from ..library.confirmation import confirmation_token, require_confirmation_token
 from ..library.service import (
     accept_library_skill,
     initialize_library,
@@ -45,10 +46,10 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
               skillager library status
               skillager library status lib/my-skill --json
               skillager library new my-skill
-              skillager library accept lib/my-skill --yes
+              skillager library accept lib/my-skill --json
               skillager library history lib/my-skill --json
               skillager library diff lib/my-skill --stat
-              skillager library restore lib/my-skill --to <content-hash> --yes
+              skillager library restore lib/my-skill --to <content-hash> --json
             """
         ),
     )
@@ -73,13 +74,21 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     new.set_defaults(func=cmd_library_new)
     accept = library_sub.add_parser("accept", help="Accept the exact current hash after review.")
     accept.add_argument("skill", help="Library skill name or lib/<name> ID.")
-    accept.add_argument("--yes", action="store_true", help="Confirm non-interactive exact-hash acceptance.")
+    accept.add_argument(
+        "--yes",
+        action="store_true",
+        help="Run a non-interactive acceptance using the token returned by its preview.",
+    )
     accept.add_argument(
         "--override-lint",
         action="store_true",
         help="Accept lint-blocking or high-risk content with an audited --reason.",
     )
     accept.add_argument("--reason", help="Required audit reason with --override-lint.")
+    accept.add_argument(
+        "--confirmation-token",
+        help="Opaque token from the current acceptance preview.",
+    )
     accept.add_argument("--json", action="store_true", help="Emit versioned preview or acceptance metadata as JSON.")
     accept.set_defaults(func=cmd_library_accept)
     history = library_sub.add_parser("history", help="List verified content-addressed versions without bodies.")
@@ -96,13 +105,21 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     restore = library_sub.add_parser("restore", help="Restore a verified historical tree as a new commit.")
     restore.add_argument("skill", help="Library skill name or lib/<name> ID.")
     restore.add_argument("--to", dest="to_hash", required=True, help="Historical Skillager content-hash prefix.")
-    restore.add_argument("--yes", action="store_true", help="Confirm non-interactive append-only restoration.")
+    restore.add_argument(
+        "--yes",
+        action="store_true",
+        help="Run a non-interactive restore using the token returned by its preview.",
+    )
     restore.add_argument(
         "--override-lint",
         action="store_true",
         help="Restore lint-blocking or high-risk content with an audited --reason.",
     )
     restore.add_argument("--reason", help="Required audit reason with --override-lint.")
+    restore.add_argument(
+        "--confirmation-token",
+        help="Opaque token from the current restore preview.",
+    )
     restore.add_argument("--json", action="store_true", help="Emit versioned restore preview or result JSON.")
     restore.set_defaults(func=cmd_library_restore)
 
@@ -201,22 +218,44 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
     if args.reason and not args.override_lint:
         raise ValueError("--reason can only be used with --override-lint")
     preview = library_acceptance_preview(catalog_root(args), args.skill)
+    token = confirmation_token(
+        "library-accept",
+        skill_id=preview["skill"]["id"],
+        working_hash=preview["skill"]["working_hash"],
+        override_lint=args.override_lint,
+        reason=(args.reason or "").strip() or None,
+    )
+    preview = dict(preview)
+    if preview["requires_override"] and not args.override_lint:
+        preview["required_arguments"] = ["--override-lint", "--reason"]
+    else:
+        preview["next_command_argv"] = _accept_argv(
+            preview["skill"]["id"],
+            token,
+            override_lint=args.override_lint,
+            reason=args.reason,
+    )
     if not args.yes:
+        if args.json:
+            print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
+            return 0
         if not sys.stdin.isatty():
-            preview = dict(preview)
-            preview["next_command_argv"] = ["skillager", "library", "accept", preview["skill"]["id"], "--yes"]
-            if args.json:
-                print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
-                return 0
             _print_acceptance_preview(preview)
             print("Preview only; no changes were made.")
-            print(f"Next: {shlex.join(preview['next_command_argv'])}")
+            _print_preview_next(preview)
             return 0
         _print_acceptance_preview(preview)
+        if preview["requires_override"] and not args.override_lint:
+            print("Rerun the preview with --override-lint and a real --reason to continue.")
+            return 0
         response = input("Accept this exact library skill hash? [y/N] ").strip().lower()
         if response not in {"y", "yes"}:
             print("Library acceptance cancelled.")
             return 1
+    if preview["requires_override"] and not args.override_lint:
+        raise ValueError("this skill requires --override-lint --reason with an audited explanation")
+    if args.yes:
+        require_confirmation_token(args.confirmation_token, token, operation="library acceptance")
     result = accept_library_skill(
         catalog_root(args),
         args.skill,
@@ -302,30 +341,48 @@ def cmd_library_restore(args: argparse.Namespace) -> int:
         else:
             print(f"Already current: {preview['skill']['id']} at {preview['selected_version']['short_hash']}")
         return 0
+    token = confirmation_token(
+        "library-restore",
+        skill_id=preview["skill"]["id"],
+        selected_hash=preview["selected_version"]["content_hash"],
+        selected_commit=preview["selected_version"]["commit"],
+        current_hash=preview["current_hash"],
+        current_tree_fingerprint=preview["_current_tree_fingerprint"],
+        override_lint=args.override_lint,
+        reason=(args.reason or "").strip() or None,
+    )
+    preview = dict(preview)
+    if preview["requires_override"] and not args.override_lint:
+        preview["required_arguments"] = ["--override-lint", "--reason"]
+    else:
+        preview["next_command_argv"] = _restore_argv(
+            preview["skill"]["id"],
+            preview["selected_version"]["short_hash"],
+            token,
+            override_lint=args.override_lint,
+            reason=args.reason,
+    )
     if not args.yes:
+        if args.json:
+            print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
+            return 0
         if not sys.stdin.isatty():
-            preview = dict(preview)
-            preview["next_command_argv"] = [
-                "skillager",
-                "library",
-                "restore",
-                preview["skill"]["id"],
-                "--to",
-                preview["selected_version"]["short_hash"],
-                "--yes",
-            ]
-            if args.json:
-                print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
-                return 0
             _print_restore_preview(preview)
             print("Preview only; no files were changed.")
-            print(f"Next: {shlex.join(preview['next_command_argv'])}")
+            _print_preview_next(preview)
             return 0
         _print_restore_preview(preview)
+        if preview["requires_override"] and not args.override_lint:
+            print("Rerun the preview with --override-lint and a real --reason to continue.")
+            return 0
         response = input("Restore this exact historical tree as a new commit? [y/N] ").strip().lower()
         if response not in {"y", "yes"}:
             print("Library restore cancelled; no files were changed.")
             return 1
+    if preview["requires_override"] and not args.override_lint:
+        raise ValueError("this historical version requires --override-lint --reason with an audited explanation")
+    if args.yes:
+        require_confirmation_token(args.confirmation_token, token, operation="library restore")
     version = preview["selected_version"]
     result = restore_library_skill(
         catalog_root(args),
@@ -380,6 +437,61 @@ def _print_diff_stat(stat: dict[str, Any]) -> None:
     for file in stat["files"]:
         counts = "binary" if file["binary"] else f"+{file['additions']} -{file['deletions']}"
         print(f"{file['status']}: {file['path']} ({counts})")
+
+
+def _accept_argv(
+    skill_id: str,
+    token: str,
+    *,
+    override_lint: bool,
+    reason: str | None,
+) -> list[str]:
+    command = [
+        "skillager",
+        "library",
+        "accept",
+        skill_id,
+        "--yes",
+        "--confirmation-token",
+        token,
+    ]
+    return _with_override(command, override_lint=override_lint, reason=reason)
+
+
+def _restore_argv(
+    skill_id: str,
+    selected_hash: str,
+    token: str,
+    *,
+    override_lint: bool,
+    reason: str | None,
+) -> list[str]:
+    command = [
+        "skillager",
+        "library",
+        "restore",
+        skill_id,
+        "--to",
+        selected_hash,
+        "--yes",
+        "--confirmation-token",
+        token,
+    ]
+    return _with_override(command, override_lint=override_lint, reason=reason)
+
+
+def _with_override(command: list[str], *, override_lint: bool, reason: str | None) -> list[str]:
+    if override_lint:
+        command.extend(["--override-lint", "--reason", (reason or "").strip()])
+    return command
+
+
+def _print_preview_next(preview: dict[str, Any]) -> None:
+    command = preview.get("next_command_argv")
+    if command:
+        print(f"Next: {shlex.join(command)}")
+    else:
+        print("Next: provide --override-lint with a real --reason and preview again.")
 
 
 def _public_payload(value: Any) -> Any:

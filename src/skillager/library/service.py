@@ -723,9 +723,12 @@ def _new_skill_template(name: str) -> str:
     title = " ".join(part.capitalize() for part in name.split("-"))
     return "\n".join(
         [
-            f"# {title}",
+            "---",
+            f"name: {name}",
+            "description: Use this skill when the task clearly matches this workflow.",
+            "---",
             "",
-            "Use this skill when the task clearly matches this workflow.",
+            f"# {title}",
             "",
             "## Instructions",
             "",

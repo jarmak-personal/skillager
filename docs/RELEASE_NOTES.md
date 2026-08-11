@@ -12,15 +12,17 @@ Highlights:
   `lib/<name>` namespace, diagnose a missing registered path, and explicitly
   re-register the same UUID after the directory moves.
 - Create or explicitly import one skill, then accept only its exact scanned and linted
-  content hash.
+  content hash, including normalized executable bits.
 - Inspect content-addressed history and diffs, and restore an old version as a new
   descendant commit.
 - Detect current-project exposure drift without writes and refuse to overwrite local
-  edits unless the user explicitly chooses forced re-exposure.
+  edits or remove them unless the user explicitly confirms a bound force preview.
 - Keep metadata commands body-safe and keep ownership separate from approval and
   exposure.
 - Fail closed on display-ID collisions, source/exposure races, same-size timestamp
   spoofing, and noncanonical acceptance trees.
+- Bind non-interactive accept/import/restore commands to their exact previewed state
+  and never emit executable placeholder reasons.
 - Keep summary inventory bounded, retain curated-tag search matches, and make
   successful non-mutating previews exit zero.
 
@@ -30,6 +32,8 @@ Compatibility and migration:
   remains available; no source is automatically moved into the personal library.
 - Existing exposures and older sidecars remain readable; new sidecars keep exact
   hashes and stable library identity without redundant ownership labels.
+- New Codex user-scope exposures use `~/.agents/skills`; legacy `~/.codex/skills`
+  remains discoverable and manageable without automatic migration.
 - A legacy ordinary collection named `lib` must be renamed or removed explicitly
   before initializing the reserved library; Skillager never claims it silently.
 - Git-less libraries remain usable, with history-dependent operations reported as

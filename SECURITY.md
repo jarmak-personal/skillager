@@ -16,11 +16,15 @@ Useful reports include:
 
 ## Supported Versions
 
-During early 0.1 development, only the latest release is supported.
+Only the latest released Skillager version receives security fixes.
 
 ## Security Boundaries
 
-Skillager's built-in scanner is deterministic and local. It does not use an agent or external model to classify skill bodies.
+Skillager is a cooperative local workflow and approval layer. It is not a sandbox, an operating-system security boundary, or an authorization boundary against another process running as the same user. The same user can edit skill sources, approval files, exposure sidecars, native agent directories, or the Skillager executable itself.
+
+Agent hosts discover native skills independently. A skill placed directly in a host's native directory may be loaded by that host without going through Skillager. Skillager can discover and review those skills, but cannot enforce host behavior outside commands and projections it controls.
+
+Skillager's built-in scanner is deterministic and local. It does not use an agent or external model to classify skill bodies. Exact content identity includes eligible paths, bytes, and normalized executable bits. Preview tokens bind cooperative follow-up commands to the reviewed state, but are not secrets or capabilities against the local user.
 
 **The scanner is a review aid, not a guarantee. Users own the final trust decision.**
 
@@ -36,4 +40,6 @@ Skillager should not:
 - import arbitrary packages during indexing
 - store chat transcripts in session logs
 
-Manually installed native skills are trusted by default only after manifest lint passes. Lint-blocked native skills remain blocked until the user fixes the source or records an audited override.
+Manually installed native skills are not trusted by default. They remain unavailable through Skillager until the current exact hash is reviewed; lint-blocked native skills remain quarantined until the user fixes the source or records an audited override. This does not prevent the agent host from loading directly installed native content on its own.
+
+For stronger isolation, use operating-system accounts, filesystem permissions, containers or virtual machines, network controls, and the agent host's own sandbox/approval settings. Do not treat a clean Skillager scan as proof that a skill is benign.

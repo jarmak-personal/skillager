@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..compatibility import compatibility_problem, compatibility_warnings
-from ..simple_yaml import dumps, load_mapping
+from ..simple_yaml import dumps, load_mapping, loads
 from ..skills.tree import content_tree_fingerprint, iter_content_files
 from ..state.locking import resource_lock
 from ..trust import content_hash, content_hash_entries
@@ -259,7 +259,7 @@ def materialize_working_skill_one(
     force: bool = False,
 ) -> dict[str, Any]:
     skill = _working_skill(agent)
-    with _target_lock(target):
+    with _target_lock_context(target, dry_run=dry_run):
         sidecar = target / "skillager.materialized.yaml"
         if target.exists():
             if _is_customized(sidecar, target) and not force:
@@ -408,7 +408,7 @@ def materialize_router_one(
     router_kind: str = "tag",
 ) -> dict[str, Any]:
     router_skill = _router_skill(tag, skills, router_slug=router_slug, router_kind=router_kind)
-    with _target_lock(target):
+    with _target_lock_context(target, dry_run=dry_run):
         sidecar = target / "skillager.materialized.yaml"
         actual_router_slug = router_slug or target.name
         rendered = render_router_skill(tag, skills, agent=agent, router_slug=actual_router_slug, router_kind=router_kind)
@@ -523,7 +523,7 @@ def materialize_stub_one(
     dry_run: bool = False,
     force: bool = False,
 ) -> dict[str, Any]:
-    with _target_lock(target):
+    with _target_lock_context(target, dry_run=dry_run):
         sidecar = target / "skillager.materialized.yaml"
         rendered = render_stub_skill(skill)
         prospective_hash = _single_file_content_hash(rendered)
@@ -619,7 +619,9 @@ def materialize_one(
     force: bool = False,
 ) -> dict[str, Any]:
     source_root = Path(skill["root"]).resolve()
-    with _target_lock(target):
+    if (skill.get("source") or {}).get("ownership") == "library":
+        _require_native_skill_frontmatter(source_root / "SKILL.md")
+    with _target_lock_context(target, dry_run=dry_run):
         target = _collision_safe_target(target, skill["id"])
         if scope == "project" and target.resolve() == source_root and (target / "SKILL.md").exists() and not (target / "skillager.materialized.yaml").exists():
             return _result(skill, target, "already_native", "existing unmanaged native skill", agent=agent, scope=scope)
@@ -679,6 +681,28 @@ def _install_verified_candidate(candidate: Path, target: Path, *, temp_root: Pat
         shutil.rmtree(backup)
 
 
+def _require_native_skill_frontmatter(skill_file: Path) -> None:
+    try:
+        lines = skill_file.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"native exposure requires a readable UTF-8 SKILL.md: {exc}") from exc
+    if not lines or lines[0].strip() != "---":
+        raise ValueError("native exposure requires SKILL.md frontmatter with non-empty name and description")
+    try:
+        closing = next(index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---")
+    except StopIteration as exc:
+        raise ValueError("native exposure requires closed SKILL.md frontmatter") from exc
+    try:
+        metadata = loads("\n".join(lines[1:closing]) + "\n")
+    except Exception as exc:
+        raise ValueError(f"native exposure requires valid SKILL.md frontmatter: {exc}") from exc
+    if not isinstance(metadata, dict) or any(
+        not isinstance(metadata.get(key), str) or not metadata[key].strip()
+        for key in ("name", "description")
+    ):
+        raise ValueError("native exposure requires SKILL.md frontmatter with non-empty name and description")
+
+
 def target_dir(*, agent: str, scope: str, skill: dict[str, Any], project_dir: Path | None = None) -> Path:
     slug = slugify(skill["id"])
     if scope == "project":
@@ -694,7 +718,7 @@ def target_dir(*, agent: str, scope: str, skill: dict[str, Any], project_dir: Pa
             base = project / ".agents" / agent / "skills"
     elif scope == "global":
         if agent == "codex":
-            base = Path.home() / ".codex" / "skills"
+            base = Path.home() / ".agents" / "skills"
         elif agent == "claude":
             base = Path.home() / ".claude" / "skills"
         else:
@@ -760,6 +784,12 @@ def _target_lock(target: Path):
     target.parent.mkdir(parents=True, exist_ok=True)
     with resource_lock(target):
         yield
+
+
+def _target_lock_context(target: Path, *, dry_run: bool):
+    if dry_run:
+        return contextlib.nullcontext()
+    return _target_lock(target)
 
 
 def _sidecar(
