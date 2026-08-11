@@ -682,7 +682,7 @@ def _dedupe(skills: list[IndexableSkill]) -> list[IndexableSkill]:
             while skill_id in seen_ids:
                 skill_id = f"{base_id}-{count}"
                 count += 1
-            skill = replace(skill, id=skill_id)
+            skill = replace(skill, id=skill_id, claimed_id=skill.id)
         seen_ids.add(skill_id)
         result.append(skill)
     return result

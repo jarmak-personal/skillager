@@ -56,9 +56,9 @@ Do not blindly execute every fenced command in docs. Examples with placeholders,
 - Personal library lifecycle: owned skills remain pending after creation or edits until their exact hash is accepted; history is append-only, exposure updates are current-project and preview-first, and customized or pinned targets are not overwritten.
 - Reviewed project skill path: setup approves low-risk content, search returns trusted metadata, stub/native exposure writes project files, and guarded activation emits the reviewed body.
 - Router path: collection or tag inventory can be exposed through one compact router without loading every skill body.
-- Working loop: agents run `skillager working` after context resets or resumed sessions; `handoff` is explicit post-setup curation/onboarding, not an automatic first prompt ritual.
+- Working loop: agents run `skillager working` after context resets or resumed sessions; post-setup curation is explicit and task-driven, not an automatic first-prompt ritual.
 - Lookback: session signals are compact behavioral hints, not automatic approval or exposure decisions.
 
 ## Release Notes
 
-Keep README and docs aligned with CLI behavior when changing command names, flags, JSON schemas, or setup/handoff flow. The package includes `.agents/skills/simulate-skillager-setup`; changes to discovery, manifests, setup, handoff, exposure, packages, or collections should consider that black-box simulation workflow.
+Keep README and docs aligned with CLI behavior when changing command names, flags, JSON schemas, or setup/working flow. The package includes `.agents/skills/simulate-skillager-setup`; changes to discovery, metadata, setup, working, exposure, packages, or collections should consider that black-box simulation workflow.

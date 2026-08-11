@@ -39,6 +39,7 @@ from ..collections import (
 )
 from ..families import agent_variant_family_key, canonical_agent_variant_slug
 from ..exposure.drift import classify_exposure_target, scan_project_exposures
+from ..exposure.target_state import matches_materialized_target, target_state_hash
 from ..index import build_index, find_skill, load_index
 from ..library.confirmation import confirmation_token, require_confirmation_token
 from ..library.paths import load_library_registration
@@ -71,13 +72,14 @@ from ..search import search as search_index
 from ..selection import select_visible_skills
 from ..signing import verify_oms_signature
 from ..simple_yaml import YamlError, load_mapping
-from ..skills.tree import content_tree_fingerprint
 from ..state.locking import resource_lock
 from ..trust import content_hash, load_trust, merge_global_approvals, save_trust, set_trust
 from .context import (
     catalog_root,
     current_project_dir as _current_project_dir,
     legacy_project_state_report as _legacy_project_state_report,
+    remember_project_catalog,
+    remember_project_catalog_for_state,
     root,
 )
 from .library import add_library_parser
@@ -774,12 +776,15 @@ def _migrate_project_tags_for_collection_refresh(project_dir: Path, catalog_root
 
 
 def cmd_tag_create(args: argparse.Namespace) -> int:
-    tag = project_tags.create_tag(_current_project_dir(), args.tag, catalog_state_dir=catalog_root(args))
+    catalog = catalog_root(args)
+    tag = project_tags.create_tag(_current_project_dir(), args.tag, catalog_state_dir=catalog)
+    remember_project_catalog(args, catalog)
     print(f"{tag['tag']}: created")
     return 0
 
 
 def cmd_tag_add(args: argparse.Namespace) -> int:
+    catalog = catalog_root(args)
     previous = _existing_tag_members(args.tag)
     skill_ids = list(args.skill_ids)
     source_collection = None
@@ -787,11 +792,11 @@ def cmd_tag_add(args: argparse.Namespace) -> int:
         source_collection = args.from_collection
         skill_ids.extend(
             skill["id"]
-            for skill in select_collection_skills(catalog_root(args), args.from_collection, trust_root=root(args), approval_root=catalog_root(args))
+            for skill in select_collection_skills(catalog, args.from_collection, trust_root=root(args), approval_root=catalog)
         )
     if args.all:
-        skill_ids.extend(skill["id"] for skill in select_collection_skills(catalog_root(args), trust_root=root(args), approval_root=catalog_root(args)))
-    skill_ids = _validate_taggable_skill_ids(root(args), catalog_root(args), _current_project_dir(), skill_ids)
+        skill_ids.extend(skill["id"] for skill in select_collection_skills(catalog, trust_root=root(args), approval_root=catalog))
+    skill_ids = _validate_taggable_skill_ids(root(args), catalog, _current_project_dir(), skill_ids)
     if not skill_ids:
         raise ValueError("provide at least one available skill id")
     if args.sync or args.from_collection or args.all:
@@ -801,11 +806,13 @@ def cmd_tag_add(args: argparse.Namespace) -> int:
             skill_ids,
             sync=args.sync,
             source_collection=source_collection,
-            catalog_state_dir=catalog_root(args),
+            catalog_state_dir=catalog,
         )
+        remember_project_catalog(args, catalog)
         _print_tag_update(updated_tag, previous=previous)
         return 0
-    tag = project_tags.add_tag_skills(_current_project_dir(), args.tag, skill_ids, catalog_state_dir=catalog_root(args))
+    tag = project_tags.add_tag_skills(_current_project_dir(), args.tag, skill_ids, catalog_state_dir=catalog)
+    remember_project_catalog(args, catalog)
     _print_tag_update(tag, previous=previous)
     return 0
 
@@ -871,11 +878,12 @@ def cmd_tag_sync(args: argparse.Namespace) -> int:
         raise ValueError("no destination projects found")
     source_tags = project_tags.load_tags(source)
     selected = _select_sync_tags(source_tags, args.tag)
-    sync_catalog_root = _tag_sync_catalog_root(source_tags, catalog_root(args))
+    sync_catalog_root = catalog_root(args)
     results: list[dict[str, Any]] = []
     for destination in destinations:
         if destination == source:
             continue
+        destination_results: list[dict[str, Any]] = []
         for tag, entry in selected.items():
             updated = project_tags.set_tag_skills(
                 destination,
@@ -884,7 +892,11 @@ def cmd_tag_sync(args: argparse.Namespace) -> int:
                 sync=args.replace,
                 catalog_state_dir=sync_catalog_root,
             )
-            results.append({"project": str(destination), "tag": updated["tag"], "skills": len(updated["skills"])})
+            destination_results.append({"project": str(destination), "tag": updated["tag"], "skills": len(updated["skills"])})
+        if destination_results:
+            destination_state = root(args) if destination == _current_project_dir() else project_state_root(destination)
+            remember_project_catalog_for_state(destination_state, destination, sync_catalog_root)
+            results.extend(destination_results)
     payload = {"schema": "skillager.tag-sync.v1", "source": str(source), "results": results}
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -892,13 +904,6 @@ def cmd_tag_sync(args: argparse.Namespace) -> int:
         for item in results:
             print(f"{item['project']}: {item['tag']} {_counted(item['skills'], 'skill')}")
     return 0
-
-
-def _tag_sync_catalog_root(source_tags: dict[str, Any], fallback: Path) -> Path:
-    source_catalog = source_tags.get("catalog_state_dir")
-    if isinstance(source_catalog, str) and source_catalog:
-        return Path(source_catalog).expanduser().resolve()
-    return fallback
 
 
 def _select_sync_tags(data: dict[str, Any], tag: str | None) -> dict[str, dict[str, Any]]:
@@ -955,16 +960,18 @@ def cmd_tag_show(args: argparse.Namespace) -> int:
 
 def cmd_project_attach_tag(args: argparse.Namespace) -> int:
     project_dir = _current_project_dir()
+    catalog = catalog_root(args)
     tag_key = project_tags.normalize_tag(args.tag)
     if tag_key not in project_tags.load_tags(project_dir).get("tags", {}):
-        legacy_skill_ids = load_tags(catalog_root(args)).get("tags", {}).get(tag_key)
+        legacy_skill_ids = load_tags(catalog).get("tags", {}).get(tag_key)
         if legacy_skill_ids is None:
             raise KeyError(f"tag not found: {tag_key}")
-        project_tags.set_tag_skills(project_dir, tag_key, list(legacy_skill_ids), sync=True, catalog_state_dir=catalog_root(args))
+        project_tags.set_tag_skills(project_dir, tag_key, list(legacy_skill_ids), sync=True, catalog_state_dir=catalog)
+    remember_project_catalog(args, catalog)
     data = project_tags.load_tags(project_dir)
     print(f"{tag_key}: attached")
     print(f"attached tags: {', '.join(sorted(data.get('tags', {}))) or '-'}")
-    _print_tag_owner_review_note(_tag_trust_summary(args.tag, _select_project_tag_skills(root(args), catalog_root(args), args.tag, include_lint_blocked=True)))
+    _print_tag_owner_review_note(_tag_trust_summary(args.tag, _select_project_tag_skills(root(args), catalog, args.tag, include_lint_blocked=True)))
     return 0
 
 
@@ -2052,6 +2059,7 @@ def _build_working_result(
     diagnosis = _doctor_diagnosis(view, agent=agent)
     setup_complete = _working_setup_complete(state_root)
     pending_external = _working_pending_external_review(view["skills"])
+    library = _doctor_library_health(catalog_root)
     owned_changes = [_working_owned_item(skill) for skill in view.get("owned_changes", [])]
     pending_owner_review_count = len(view["review_needed"]) + len(view["lint_blocked"])
     exposure_changes = scan_project_exposures(
@@ -2077,6 +2085,7 @@ def _build_working_result(
         "pending_external_review": [_working_sync_item(skill) for skill in pending_external],
         "pending_owned_change_count": len(owned_changes),
         "pending_owned_changes": owned_changes,
+        "library": _working_library_summary(library),
         "exposure_changes": exposure_changes,
         "inventory": inventory,
         "curation": _working_curation(inventory, agent=agent, exposed_router_tags=view["exposed_router_tags"]),
@@ -2153,11 +2162,20 @@ def _print_working_result(result: dict[str, Any]) -> None:
     if pending:
         print(f"  Owner review needed: {_counted(pending, 'skill')}.")
     owned = list(result.get("pending_owned_changes") or [])
-    if owned:
-        print(f"  Personal library changes pending: {_counted(len(owned), 'skill')} (does not block other work).")
-        for item in owned:
+    library = result.get("library") or {}
+    library_unavailable = (library.get("recovery") or {}).get("action") == "relocate"
+    actionable_owned = [item for item in owned if item.get("status") not in {"missing", "unreadable"}]
+    if actionable_owned:
+        print(
+            f"  Personal library changes pending: {_counted(len(actionable_owned), 'skill')} "
+            "(does not block other work)."
+        )
+        for item in actionable_owned:
             if item.get("command"):
                 print(f"    {item['command']}")
+    if library_unavailable:
+        print("  Personal library unavailable (does not block other work).")
+        print("    skillager library status")
     changed = len(changes.get("items") or [])
     if changed:
         print(f"  {_counted(changed, 'managed exposure')} changed locally; Skillager will not overwrite it.")
@@ -2238,11 +2256,23 @@ def _working_sync_item(skill: dict[str, Any]) -> dict[str, Any]:
 
 def _working_owned_item(skill: dict[str, Any]) -> dict[str, Any]:
     skill_id = str(skill.get("id") or "")
+    status = skill.get("library_change") or skill.get("trust") or "pending"
+    command = "skillager library status" if status in {"missing", "unreadable"} else None
+    if command is None and skill_id:
+        command = f"skillager library accept {skill_id}"
     return {
         "id": skill_id,
-        "status": skill.get("library_change") or skill.get("trust") or "pending",
+        "status": status,
         "path": skill.get("root"),
-        "command": f"skillager library accept {skill_id}" if skill_id else None,
+        "command": command,
+    }
+
+
+def _working_library_summary(library: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: library[key]
+        for key in ("status", "initialized", "warnings", "next_command_argv", "recovery")
+        if key in library
     }
 
 
@@ -2787,13 +2817,7 @@ def _working_artifact_status(project_dir: Path, *, agent: str) -> dict[str, Any]
     if data.get("source_hash") != expected_hash:
         result["status"] = "stale"
         return result
-    materialized_hash = data.get("materialized_hash")
-    materialized_fingerprint = data.get("materialized_fingerprint")
-    current_matches = (
-        isinstance(materialized_fingerprint, str)
-        and content_tree_fingerprint(target) == materialized_fingerprint
-    )
-    if not isinstance(materialized_hash, str) or (not current_matches and content_hash(target) != materialized_hash):
+    if not matches_materialized_target(target, data):
         result["status"] = "drift"
         result["reason"] = "local customization"
         return result
@@ -5441,6 +5465,7 @@ def _exposure_removal_preview(item: dict[str, Any], *, target: Path, force: bool
         scope=item["scope"],
         current_status=current_status,
         current_hash=classification.get("current_hash"),
+        target_state_hash=target_state_hash(target, include_sidecar=True),
         sidecar=sidecar_state,
         force=force,
     )

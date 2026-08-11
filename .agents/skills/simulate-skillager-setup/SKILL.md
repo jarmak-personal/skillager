@@ -1,5 +1,5 @@
 ---
-name: "Simulate Skillager Setup"
+name: simulate-skillager-setup
 description: "Run a repeatable black-box Skillager setup and working-readiness simulation in a fresh temp directory and report discovery, scoped exposure decisions, and UX findings."
 ---
 
@@ -44,14 +44,22 @@ If a subagent/worker is unavailable, do not run the simulation locally. Report t
    Do not run `git init` in that temp directory; cloned repositories may keep
    their own `.git` directories, but the setup root itself should be an ordinary
    project directory.
-2. Confirm Skillager is already installed and available as `skillager` on `PATH`:
+   Create temporary home, config, cache, data, and state directories below that root.
+   Unset `SKILLAGER_STATE_DIR`, `SKILLAGER_CATALOG_STATE_DIR`, and
+   `SKILLAGER_CACHE_DIR`, then export `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`,
+   `XDG_DATA_HOME`, and `XDG_STATE_HOME` to those temporary directories. This run must
+   not reuse the operator's approvals, catalog, or setup state.
+2. Confirm the Skillager executable supplied by the main session is the one resolved
+   on `PATH`, then record its version:
 
 ```bash
+command -v skillager
 skillager --version
 ```
 
-Do not install Skillager as part of this workflow. The setup run is testing the
-project onboarding and working-readiness experience, not installation.
+Stop if `command -v` does not match the executable under review. Do not install
+Skillager as part of this workflow. The setup run is testing the project onboarding
+and working-readiness experience, not installation.
 
 3. Clone these skill repositories into the temp directory:
 
@@ -87,18 +95,17 @@ I am going to do large-scale GIS and spatial data work in Python, including work
 
 Run the commands that Skillager's own working output and exposed working skill lead you to run. If they do not make the next step discoverable, report that as a product issue instead of filling in missing process from prior knowledge.
 
-Only run `skillager manifest init` when explicitly creating metadata sidecars for existing skills. It is not the normal post-setup agent readiness command.
-
 ## Report
 
 Include:
 
 - Temp directory path.
 - Exact commands run, including any retries or network approvals.
-- Which `skillager --version` was available on `PATH`.
+- Which executable and `skillager --version` were available on `PATH`.
+- Whether HOME, catalog, config, cache, and data state were isolated from the operator.
 - Whether both repositories cloned.
 - What `skillager setup` indexed, selected, skipped, or blocked.
-- Whether no-manifest skills from both cloned repos were discovered without requiring manifest initialization.
+- Whether manifest-free skills from both cloned repos were discovered without requiring extra metadata setup.
 - What `skillager working` reported, and whether generated Skillager guidance made the next step discoverable.
 - The scripted user goal above.
 - Which commands you chose after working readiness, and what product guidance caused you to choose them.

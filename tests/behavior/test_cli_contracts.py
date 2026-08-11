@@ -136,6 +136,91 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assertIn("# GIS Domain", activated.stdout)
             self.assertIn(BODY_SENTINEL, activated.stdout)
 
+    def test_exposure_refresh_preserves_excluded_local_files_without_force(self) -> None:
+        for mode in ("native", "stub"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp_name:
+                project, cli = self.make_workspace(Path(tmp_name))
+                self.write_skill(project)
+                setup = cli.run("setup", "--source", "project", "--accept-low", "--no-packages", "--summary-json")
+                self.assert_code(setup, 0)
+                exposed = cli.run("expose", "project/gis-domain", "--mode", mode, "--agent", "codex", "--json")
+                self.assert_code(exposed, 0)
+                target = project / ".agents" / "skills" / "project-gis-domain"
+                local_file = target / "draft.tmp"
+                local_file.write_bytes(b"LOCAL EXCLUDED BY CANONICAL HASH\n")
+
+                refresh = cli.run("expose", "project/gis-domain", "--mode", mode, "--agent", "codex", "--json")
+
+                self.assert_code(refresh, 0)
+                result = refresh.json()[0]
+                self.assertEqual(result["status"], "skipped")
+                self.assertEqual(result["reason"], "target has local edits")
+                self.assertEqual(local_file.read_bytes(), b"LOCAL EXCLUDED BY CANONICAL HASH\n")
+
+    def test_exposure_removal_requires_force_for_excluded_local_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            project, cli = self.make_workspace(Path(tmp_name))
+            self.write_skill(project)
+            setup = cli.run("setup", "--source", "project", "--accept-low", "--no-packages", "--summary-json")
+            self.assert_code(setup, 0)
+            exposed = cli.run("expose", "project/gis-domain", "--mode", "native", "--agent", "codex", "--json")
+            self.assert_code(exposed, 0)
+            target = project / ".agents" / "skills" / "project-gis-domain"
+            local_file = target / "draft.tmp"
+            local_file.write_bytes(b"PRESERVE ME\n")
+
+            preview = cli.run("expose", "--remove", "project-gis-domain", "--agent", "codex", "--json")
+
+            self.assert_code(preview, 0)
+            result = preview.json()["results"][0]
+            self.assertTrue(result["local_changes"])
+            self.assertTrue(result["requires_force"])
+            self.assertNotIn("next_command_argv", result)
+            self.assertEqual(local_file.read_bytes(), b"PRESERVE ME\n")
+
+            forced_preview = cli.run(
+                "expose",
+                "--remove",
+                "project-gis-domain",
+                "--agent",
+                "codex",
+                "--force",
+                "--json",
+            )
+            self.assert_code(forced_preview, 0)
+            forced_command = forced_preview.json()["results"][0]["next_command_argv"]
+            local_file.write_bytes(b"CHANGED AFTER FORCED PREVIEW\n")
+
+            stale = cli.run(*forced_command[1:])
+
+            self.assert_code(stale, 2)
+            self.assertIn("preview is stale", stale.stderr)
+            self.assertEqual(local_file.read_bytes(), b"CHANGED AFTER FORCED PREVIEW\n")
+            self.assertTrue(target.exists())
+
+    def test_exposure_removal_confirmation_stales_when_excluded_entry_is_added(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            project, cli = self.make_workspace(Path(tmp_name))
+            self.write_skill(project)
+            setup = cli.run("setup", "--source", "project", "--accept-low", "--no-packages", "--summary-json")
+            self.assert_code(setup, 0)
+            exposed = cli.run("expose", "project/gis-domain", "--mode", "stub", "--agent", "codex", "--json")
+            self.assert_code(exposed, 0)
+            target = project / ".agents" / "skills" / "project-gis-domain"
+            preview = cli.run("expose", "--remove", "project-gis-domain", "--agent", "codex", "--json")
+            self.assert_code(preview, 0)
+            command = preview.json()["results"][0]["next_command_argv"]
+            local_file = target / "__pycache__" / "valuable.pyc"
+            local_file.parent.mkdir()
+            local_file.write_bytes(b"ADDED AFTER PREVIEW\n")
+
+            stale = cli.run(*command[1:])
+
+            self.assert_code(stale, 2)
+            self.assertIn("preview is stale", stale.stderr)
+            self.assertEqual(local_file.read_bytes(), b"ADDED AFTER PREVIEW\n")
+            self.assertTrue(target.exists())
+
     def test_working_plain_ready_output_is_compact_and_body_safe(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             project, cli = self.make_workspace(Path(tmp_name))

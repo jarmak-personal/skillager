@@ -26,6 +26,8 @@ Agent hosts discover native skills independently. A skill placed directly in a h
 
 Skillager's built-in scanner is deterministic and local. It does not use an agent or external model to classify skill bodies. Exact content identity includes eligible paths, bytes, and normalized executable bits. Preview tokens bind cooperative follow-up commands to the reviewed state, but are not secrets or capabilities against the local user.
 
+Repository metadata is not user-catalog authority. A project may store portable tag hints, but those hints cannot select approval or library state unless matching user-owned project state has already bound that catalog. Explicit command-line and environment configuration remain user-controlled authority.
+
 **The scanner is a review aid, not a guarantee. Users own the final trust decision.**
 
 Skillager should not:

@@ -50,7 +50,7 @@ class SkillagerProjectTagTests(unittest.TestCase):
             tags = json.loads((dest / ".skillager" / "tags.json").read_text(encoding="utf-8"))
             self.assertEqual(tags["tags"]["gis"]["skills"], ["community/gis"])
 
-    def test_tag_sync_preserves_source_catalog_state_dir(self) -> None:
+    def test_tag_sync_uses_caller_catalog_as_authority(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source_catalog = root / "source-catalog"
@@ -76,7 +76,7 @@ class SkillagerProjectTagTests(unittest.TestCase):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["tag", "sync", "--from", str(source)]), 0)
             tags = json.loads((dest / ".skillager" / "tags.json").read_text(encoding="utf-8"))
-            self.assertEqual(tags["catalog_state_dir"], str(source_catalog.resolve()))
+            self.assertEqual(tags["catalog_state_dir"], str(caller_catalog.resolve()))
 
     def test_tag_sync_rejects_missing_destination_project(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

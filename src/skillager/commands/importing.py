@@ -3,13 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
-import sys
 import textwrap
 from typing import Any
 
 from ..library.confirmation import confirmation_token, require_confirmation_token
 from ..library.importing import import_library_skill, import_preview
-from .context import catalog_root, current_project_dir, root
+from .context import catalog_root, current_project_dir, root, terminal_can_prompt
 
 
 def add_import_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -96,7 +95,7 @@ def cmd_import(args: argparse.Namespace) -> int:
         if preview["blocked"]:
             print("Unblock the source, then preview the import again.")
             return 0
-        if not sys.stdin.isatty():
+        if not terminal_can_prompt():
             _print_preview_next(preview)
             return 0
         if preview["requires_override"] and not args.override_lint:

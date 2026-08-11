@@ -8,6 +8,10 @@ from typing import Any
 
 from .. import project_tags
 from ..state.paths import catalog_state_root, find_project_root, legacy_project_state_root, state_root
+from ..state.statefiles import mutate_user_json, read_user_json
+
+
+CATALOG_BINDING_SCHEMA = "skillager.project-catalog-binding.v1"
 
 
 def root(args: argparse.Namespace) -> Path:
@@ -28,13 +32,72 @@ def current_project_dir() -> Path:
     return (find_project_root() or Path.cwd()).resolve()
 
 
+def terminal_can_prompt() -> bool:
+    """Return whether a CLI prompt would be visible and answerable."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def catalog_root(args: argparse.Namespace) -> Path:
+    cached = getattr(args, "_skillager_catalog_root", None)
+    if cached:
+        return cached
     if getattr(args, "catalog_state_dir", None):
-        return args.catalog_state_dir.resolve()
+        resolved = args.catalog_state_dir.expanduser().resolve()
+        setattr(args, "_skillager_catalog_root", resolved)
+        return resolved
+    if os.environ.get("SKILLAGER_CATALOG_STATE_DIR") is not None:
+        resolved = catalog_state_root().resolve()
+        setattr(args, "_skillager_catalog_root", resolved)
+        return resolved
     stored = project_tags.load_tags(current_project_dir()).get("catalog_state_dir")
-    if stored:
-        return Path(stored).expanduser().resolve()
-    return catalog_state_root()
+    trusted = _trusted_project_catalog(args)
+    if stored and trusted:
+        candidate = Path(stored).expanduser().resolve()
+        if candidate == trusted:
+            setattr(args, "_skillager_catalog_root", candidate)
+            return candidate
+    resolved = catalog_state_root().resolve()
+    setattr(args, "_skillager_catalog_root", resolved)
+    return resolved
+
+
+def remember_project_catalog(args: argparse.Namespace, catalog: Path) -> None:
+    """Bind a repository catalog hint to user-owned per-project state."""
+
+    remember_project_catalog_for_state(root(args), current_project_dir(), catalog)
+
+
+def remember_project_catalog_for_state(project_state: Path, project: Path, catalog: Path) -> None:
+    project = project.expanduser().resolve()
+    resolved = catalog.expanduser().resolve()
+
+    def mutation(data: dict[str, Any]) -> None:
+        data.clear()
+        data.update(
+            {
+                "schema": CATALOG_BINDING_SCHEMA,
+                "project": str(project),
+                "catalog_state_dir": str(resolved),
+            }
+        )
+
+    mutate_user_json(_catalog_binding_path(project_state), {}, mutation)
+
+
+def _trusted_project_catalog(args: argparse.Namespace) -> Path | None:
+    data = read_user_json(_catalog_binding_path(root(args)), {})
+    if data.get("schema") != CATALOG_BINDING_SCHEMA:
+        return None
+    if data.get("project") != str(current_project_dir()):
+        return None
+    stored = data.get("catalog_state_dir")
+    if not isinstance(stored, str) or not stored:
+        return None
+    return Path(stored).expanduser().resolve()
+
+
+def _catalog_binding_path(project_state: Path) -> Path:
+    return project_state / "catalog_binding.json"
 
 
 def warn_legacy_project_state(new_state_root: Path) -> None:

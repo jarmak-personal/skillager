@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
-import sys
 import textwrap
 from pathlib import Path
 from typing import Any
@@ -24,7 +23,7 @@ from ..library.versioning import (
     library_restore_preview,
     restore_library_skill,
 )
-from .context import catalog_root, current_project_dir
+from .context import catalog_root, current_project_dir, terminal_can_prompt
 
 
 def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -193,6 +192,8 @@ def cmd_library_status(args: argparse.Namespace) -> int:
         print(f"Warning: {warning}")
     for advisory in result["advisories"]:
         print(f"Note: {advisory}")
+    if (result.get("recovery") or {}).get("action") == "relocate":
+        print("Next: locate the moved library root, then run `skillager library relocate --path PATH`.")
     if result.get("next_command_argv"):
         print(f"Next: {' '.join(result['next_command_argv'])}")
     return 0
@@ -239,7 +240,7 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
             return 0
-        if not sys.stdin.isatty():
+        if not terminal_can_prompt():
             _print_acceptance_preview(preview)
             print("Preview only; no changes were made.")
             _print_preview_next(preview)
@@ -366,7 +367,7 @@ def cmd_library_restore(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
             return 0
-        if not sys.stdin.isatty():
+        if not terminal_can_prompt():
             _print_restore_preview(preview)
             print("Preview only; no files were changed.")
             _print_preview_next(preview)
@@ -505,6 +506,8 @@ def _public_payload(value: Any) -> Any:
 def _git_summary(git: dict[str, Any] | None) -> str:
     if git is None:
         return "unavailable"
+    if git.get("reason") == "library-path-missing":
+        return "unavailable (library path missing)"
     if git["mode"] == "disabled":
         return "disabled (--no-git)"
     if not git["available"]:

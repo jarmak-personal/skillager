@@ -48,10 +48,12 @@ class SkillagerCli:
             [sys.executable, "-m", "skillager", *args],
             cwd=self.project,
             env=self.env,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             check=False,
+            timeout=30,
         )
         return CliResult(completed.returncode, completed.stdout, completed.stderr)
 

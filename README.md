@@ -73,7 +73,7 @@ skillager expose --tag workflows --mode router --agent codex --scope project
 skillager activate workflows/pr-review --from-router workflows
 ```
 
-Metadata commands stay metadata-only: `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, `doctor`, `library status`, `library history`, `library diff --stat`, and summary JSON do not print full skill bodies.
+Metadata commands stay metadata-only: `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, `doctor`, `library status`, `library history`, `library diff --stat`, and summary JSON do not print full skill bodies. Scanner summaries on those surfaces contain rule codes and locations, never matched instruction excerpts.
 
 ## Common Commands
 
@@ -116,7 +116,7 @@ skillager library relocate --path ~/skills/moved-personal
 skillager library relocate --path ~/skills/moved-personal --yes
 ```
 
-Initialization can adopt an existing directory without moving files. Existing skill bodies are indexed as pending metadata: initialization does not approve them, reveal their contents, or expose them to an agent. `library status` is read-only and reports identity, path, Git health, and an optional skill's working hash. If the registered path disappears, `doctor` reports the library as degraded without blocking unrelated project discovery; `library relocate` changes only the registration after verifying the UUID and existing layout at the new path.
+Initialization can adopt an existing directory without moving files. Existing skill bodies are indexed as pending metadata: initialization does not approve them, reveal their contents, or expose them to an agent. `library status` is read-only and reports identity, path, Git health, and an optional skill's working hash. If the registered path disappears, `working` and `doctor` report the library as degraded without blocking unrelated project discovery. Status returns structured relocation requirements without inventing a path; once the user supplies the moved root, `library relocate` changes only the registration after verifying the UUID and existing layout there.
 
 The no-Git form is useful for disposable environments and is also an opt-in,
 isolated runnable documentation example:
@@ -148,7 +148,7 @@ skillager import workflows/pr-review --json
 # Review the preview, then execute its next_command_argv exactly.
 ```
 
-The first command is a read-only preview. Import re-resolves and rehashes the origin after confirmation, copies only the canonical agent-visible tree, records attribution provenance, commits the skill and provenance paths when Git is enabled, and accepts only the resulting library hash. It never imports or executes the surrounding package and never modifies the origin. Its JSON contract is `skillager.import.v1`.
+The first command is a read-only preview. Import refuses an ID claimed by multiple discovered roots instead of choosing one representative. It re-resolves and rehashes the unambiguous origin after confirmation, copies only the canonical agent-visible tree, records attribution provenance, commits the skill and provenance paths when Git is enabled, and accepts only the resulting library hash. It never imports or executes the surrounding package and never modifies the origin. Its JSON contract is `skillager.import.v1`.
 
 Inspect and recover verified library versions by Skillager content hash:
 
@@ -164,7 +164,7 @@ History is path-specific, deduplicates commits with identical agent-visible cont
 
 ### Managed Exposure Edits
 
-The personal library is the source of truth for owned skills; exposed copies are managed projections. `working` reports live local edits as advisory metadata, and normal exposure refuses to overwrite them. When an exposure was edited intentionally, compare it with the canonical library skill, move the intended work into the library, accept that exact hash, and expose it again. Removal is also preview-first: `skillager expose --remove <exposure-id> --json` returns a bound confirmation command only for a current target; a locally edited target additionally requires a new preview with explicit `--force`. Use `--force` only when you explicitly choose to discard or replace the local copy. Skillager does not infer whether a project edit should become a library version, silently merge divergent trees, or update other projects.
+The personal library is the source of truth for owned skills; exposed copies are managed projections. `working` reports live local edits as advisory metadata, and normal exposure refuses to overwrite them. Exposure safety tracks every target entry, including cache, bytecode, editor, and other files excluded from canonical skill identity. When an exposure was edited intentionally, compare it with the canonical library skill, move the intended work into the library, accept that exact hash, and expose it again. Removal is also preview-first: `skillager expose --remove <exposure-id> --json` returns a confirmation bound to the complete target state; a locally edited target additionally requires a new preview with explicit `--force`. Use `--force` only when you explicitly choose to discard or replace the local copy. Skillager does not infer whether a project edit should become a library version, silently merge divergent trees, or update other projects.
 
 ## Collections
 

@@ -190,6 +190,31 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             self.assertEqual(approval["risk_override"]["reason"], "Reviewed local security documentation")
             self.assertTrue(target.is_dir())
 
+    def test_import_rejects_ambiguous_external_display_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            library = root / "library"
+            self.write_skill(
+                cli.project / ".skills" / "duplicate",
+                "First Duplicate",
+                "Use the first source guidance.",
+            )
+            self.write_skill(
+                cli.project / ".agents" / "skills" / "duplicate",
+                "Second Duplicate",
+                "Use the second source guidance.",
+            )
+            self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
+
+            refused = cli.run("import", "project/duplicate", "--json")
+
+            self.assert_code(refused, 2)
+            self.assertIn("external skill ID is ambiguous", refused.stderr)
+            self.assertIn(str((cli.project / ".skills" / "duplicate").resolve()), refused.stderr)
+            self.assertIn(str((cli.project / ".agents" / "skills" / "duplicate").resolve()), refused.stderr)
+            self.assertFalse((library / "skills" / "duplicate").exists())
+
     def test_import_discovers_collection_environment_packages_editable_and_native_sources(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

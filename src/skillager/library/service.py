@@ -339,7 +339,7 @@ def library_status(
             warnings.append(str(exc))
 
     git_mode = identity.git_mode if identity is not None else "disabled"
-    git = repository_status(layout.root, mode=git_mode) if layout.root.is_dir() else _missing_git_status(git_mode)
+    git = repository_status(layout.root, mode=git_mode) if layout.root.is_dir() else _missing_git_status()
     history = _history_availability(identity, git) if identity is not None else {"available": False, "reason": "identity-missing"}
     advisories: list[str] = []
     if git.get("error"):
@@ -383,13 +383,11 @@ def library_status(
         "advisories": advisories,
     }
     if not layout.root.is_dir():
-        result["next_command_argv"] = [
-            "skillager",
-            "library",
-            "relocate",
-            "--path",
-            "<moved-library-path>",
-        ]
+        result["recovery"] = {
+            "action": "relocate",
+            "required_arguments": ["--path"],
+            "path_requirement": "existing moved library root with the registered library identity",
+        }
     return result
 
 
@@ -556,9 +554,9 @@ def _history_availability(identity: LibraryIdentity, git: dict[str, Any]) -> dic
     return {"available": True, "reason": None}
 
 
-def _missing_git_status(mode: str) -> dict[str, Any]:
+def _missing_git_status() -> dict[str, Any]:
     return {
-        "mode": mode,
+        "mode": "unavailable",
         "available": git_available(),
         "repository": False,
         "clean": None,
@@ -571,6 +569,7 @@ def _missing_git_status(mode: str) -> dict[str, Any]:
         "untracked": [],
         "remote": None,
         "commit_identity": None,
+        "reason": "library-path-missing",
     }
 
 
@@ -644,7 +643,7 @@ def _compact_scan(scan: dict[str, Any] | None) -> dict[str, Any]:
         "risk": scan.get("risk", "unknown"),
         "finding_count": len(scan.get("findings", [])),
         "findings": [
-            {key: item.get(key) for key in ("code", "severity", "path", "line", "message") if item.get(key) is not None}
+            {key: item.get(key) for key in ("code", "severity", "path", "line") if item.get(key) is not None}
             for item in scan.get("findings", [])
             if isinstance(item, dict)
         ],

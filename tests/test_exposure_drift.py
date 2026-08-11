@@ -138,6 +138,19 @@ class ExposureDriftTests(unittest.TestCase):
             assert record is not None
             self.assertEqual(record["status"], "local_edit")
 
+    def test_legacy_sidecar_treats_excluded_target_entry_as_local_edit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "demo"
+            write_target(target)
+            sidecar = write_sidecar(target)
+            self.assertNotIn("materialized_target_hash", sidecar)
+            (target / "draft.tmp").write_bytes(b"LOCAL EXCLUDED CONTENT\n")
+
+            record = classify_exposure_target(target)
+
+            assert record is not None
+            self.assertEqual(record["status"], "local_edit")
+
     def test_target_missing_blocked_and_sidecar_error_states(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

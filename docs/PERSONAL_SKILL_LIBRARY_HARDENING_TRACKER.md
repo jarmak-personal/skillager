@@ -1,8 +1,9 @@
 # Personal Library Hardening Tracker
 
-Status: complete; retain through branch review, then archive or remove
-Source: agentic-power-user, senior-engineer, and skeptical-reader reviews of
-`d75e926..318d832`
+Status: active closure; fixes implemented and awaiting fresh persona verification
+Source: two rounds of agentic-power-user, senior-engineer/maintainer, and skeptical
+security-reader reviews of `d75e926..e072f07`, followed by the current corrective
+worktree
 Created: 2026-08-10
 
 This file prevents review findings from being lost during the hardening cycle. Remove
@@ -30,6 +31,18 @@ home in normal product documentation.
 - [x] Ensure native projections are valid host skills. New drafts must contain required
   `name` and `description` frontmatter; native exposure must refuse invalid source
   format rather than reporting success.
+- [x] Keep repository-controlled tag metadata from selecting the user catalog, reserved
+  library registration, or approval authority. Portable catalog hints require a
+  matching user-owned per-project binding; explicit CLI/environment configuration wins.
+- [x] Refuse import when distinct discovered roots claim the requested external display
+  ID. Preserve explicit access to unambiguous collision-suffixed IDs.
+- [x] Remove scanner-matched instruction excerpts from metadata-only status, accept,
+  import, and restore JSON. Findings may expose rule codes and locations only.
+- [x] Protect every managed exposure target entry, including files excluded from the
+  canonical skill hash. Refresh and removal require explicit force for any local entry,
+  and removal confirmation binds the complete target plus sidecar.
+- [x] Prompt for accept/import/restore only when both input and output are interactive;
+  captured-output commands and the prescribed suite must never hide a prompt.
 
 ## P1 — Readiness And Exposure Correctness
 
@@ -45,6 +58,9 @@ home in normal product documentation.
   once all required user input exists.
 - [x] Correct collection availability so `attached-tag` is present only when a skill is
   actually attached to a project tag.
+- [x] Keep a missing/moved optional library nonblocking while directing Working through
+  `library status` and structured relocation requirements, never an impossible accept
+  command or placeholder-bearing executable argv.
 
 ## P2 — CLI And Documentation Consistency
 
@@ -91,11 +107,22 @@ home in normal product documentation.
   optional library a global blocker.
 - [x] Global Codex exposure writes the current user-scope directory and legacy inventory
   remains discoverable.
-- [x] Normal suite, Python 3.13 release check, and fresh no-context setup workflow pass.
+- [ ] Normal suite, Python 3.13 release check, and fresh no-context setup workflow pass
+  against the final closure commit and isolated catalog state.
+- [x] A repository catalog pointer cannot substitute user-owned trust state.
+- [x] Duplicate external IDs refuse import without writing library content.
+- [x] Scanner-triggering body sentinels remain absent from status, accept, import, and
+  restore metadata.
+- [x] Captured-output preview commands do not prompt even when stdin reports a TTY;
+  behavior subprocesses close stdin and have a timeout.
+- [x] Moved-library Working output stays ready for unrelated work and gives only
+  resolving status/relocation guidance.
+- [x] Excluded files before refresh/removal are preserved without force, and files added
+  or changed after a removal preview invalidate its token.
 
 ## Fresh User Workflow Result
 
-The final fresh-worker run used Skillager 0.8.1 in an ordinary temporary directory,
+The prior fresh-worker run used Skillager 0.8.1 in an ordinary temporary directory,
 cloned `vibeSpatial` and `agent-workflows`, and completed interactive Codex setup without
 retries or environmental failures. Setup discovered 60 manifest-free skills in place,
 selected 49, approved all 49 after review, and collapsed them to 39 Codex-facing
@@ -110,3 +137,8 @@ and tag follow-up prose remain discovery-quality opportunities rather than reaso
 expand the personal-library lifecycle in this release. `--fresh-project` retention is
 already explicit in command help and setup output, so no additional flag or schema was
 added.
+
+That run proved the broad setup/working path but reused existing global exact-hash
+approvals and did not prove that the `skillager` executable came from the final branch
+checkout. Closure therefore requires another no-context run against the verified
+checkout with isolated user catalog/cache state after the fixes above are committed.

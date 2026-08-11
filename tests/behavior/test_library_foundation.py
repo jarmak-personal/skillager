@@ -168,16 +168,39 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             first = root / "first"
             moved = root / "moved"
             self.assertEqual(cli.run("library", "init", "--path", str(first), "--no-git").code, 0)
+            self.assertEqual(cli.run("library", "new", "portable").code, 0)
+            self.assertEqual(cli.run_confirmed("library", "accept", "portable", "--yes").code, 0)
             shutil.move(first, moved)
 
             status = cli.run("library", "status", "--json")
             self.assertEqual(status.code, 0, status.stderr)
             self.assertEqual(status.json()["status"], "degraded")
             self.assertIn("path is missing", status.json()["warnings"][0])
-            self.assertEqual(
-                status.json()["next_command_argv"][:4],
-                ["skillager", "library", "relocate", "--path"],
-            )
+            self.assertEqual(status.json()["git"]["mode"], "unavailable")
+            self.assertEqual(status.json()["git"]["reason"], "library-path-missing")
+            self.assertEqual(status.json()["recovery"]["action"], "relocate")
+            self.assertEqual(status.json()["recovery"]["required_arguments"], ["--path"])
+            self.assertNotIn("next_command_argv", status.json())
+            plain_status = cli.run("library", "status")
+            self.assertEqual(plain_status.code, 0, plain_status.stderr)
+            self.assertIn("Git: unavailable (library path missing)", plain_status.stdout)
+            self.assertNotIn("Git: disabled (--no-git)", plain_status.stdout)
+            working = cli.run("working", "--agent", "codex", "--json")
+            self.assertEqual(working.code, 0, working.stderr)
+            self.assertTrue(working.json()["can_proceed"])
+            self.assertEqual(working.json()["library"]["status"], "degraded")
+            self.assertEqual(working.json()["library"]["recovery"]["action"], "relocate")
+            self.assertEqual(working.json()["library"]["recovery"]["required_arguments"], ["--path"])
+            self.assertNotIn("next_command_argv", working.json()["library"])
+            owned = working.json()["pending_owned_changes"]
+            self.assertEqual(owned[0]["status"], "missing")
+            self.assertEqual(owned[0]["command"], "skillager library status")
+            self.assertNotIn("library accept", working.stdout)
+            plain_working = cli.run("working", "--agent", "codex")
+            self.assertEqual(plain_working.code, 0, plain_working.stderr)
+            self.assertIn("Personal library unavailable (does not block other work).", plain_working.stdout)
+            self.assertIn("skillager library status", plain_working.stdout)
+            self.assertNotIn("library accept", plain_working.stdout)
             doctor = cli.run("doctor", "--no-packages", "--json")
             self.assertEqual(doctor.code, 0, doctor.stderr)
             self.assertEqual(doctor.json()["status"], "ready")

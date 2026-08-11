@@ -101,12 +101,16 @@ copy.
 - Pending or changed library bodies cannot cross show-content, activation, exposure,
   stub, or router gates.
 - Display-ID collisions across distinct source identities fail closed.
+- Repository metadata cannot select the user catalog, library registration, or
+  approval authority without a matching user-owned project binding.
 - Fingerprints are advisory cache hints and never authorize trust, body emission, or
   mutation.
 - Every mutation rehashes authoritative source and candidate content under bounded
   canonical-path locks.
 - Symlinks, excluded files, unsafe paths, and noncanonical trees fail before trust or
   Git mutation.
+- Managed exposure replacement and removal account for every live target entry, even
+  when that entry is excluded from canonical skill identity.
 - Git conflict, in-progress operation, and unrelated staged-file checks fail closed.
 - Lint-blocking or high-risk content requires an audited reason.
 - No command fetches, pulls, pushes, rebases, resets, force-pushes, or contacts a

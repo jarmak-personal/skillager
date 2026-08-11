@@ -6,6 +6,7 @@ from typing import Any
 from ..simple_yaml import load_mapping
 from ..trust import content_hash
 from .impl import MATERIALIZED_SCHEMA, ROUTER_SCHEMA, WORKING_SKILL_ID
+from .target_state import matches_materialized_target
 
 EXPOSURE_CHANGES_SCHEMA = "skillager.exposure-changes.v1"
 ACTIONABLE_EXPOSURE_STATES = {
@@ -149,10 +150,11 @@ def classify_exposure_target(
 
     record["current_hash"] = current_hash
     record["sidecar_status"] = "readable"
+    target_matches = matches_materialized_target(target, data)
     blocked_hashes = {str(value) for value in data.get("exposure_blocked_hashes") or []}
     if current_hash in blocked_hashes:
         status = "blocked"
-    elif current_hash == data["materialized_hash"]:
+    elif target_matches and current_hash == data["materialized_hash"]:
         status = "current"
     else:
         status = "local_edit"
@@ -169,6 +171,8 @@ def _sidecar_validation_error(data: dict[str, Any]) -> str | None:
         return "sidecar is missing source type"
     if not isinstance(data.get("materialized_hash"), str):
         return "sidecar is missing materialized hash"
+    if data.get("materialized_target_hash") is not None and not isinstance(data.get("materialized_target_hash"), str):
+        return "sidecar materialized target hash must be a string"
     blocked = data.get("exposure_blocked_hashes")
     if blocked is not None and not isinstance(blocked, list):
         return "sidecar blocked hashes must be a list"

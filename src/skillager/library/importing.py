@@ -231,7 +231,7 @@ def _external_skill_candidates(project_state: Path, catalog_root: Path, skill_id
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for skill in [*local, *collections]:
-        if skill.get("id") != skill_id:
+        if skill.get("id") != skill_id and skill.get("_claimed_id") != skill_id:
             continue
         if (skill.get("source") or {}).get("ownership") == "library":
             continue

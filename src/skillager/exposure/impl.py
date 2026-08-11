@@ -14,6 +14,7 @@ from ..simple_yaml import dumps, load_mapping, loads
 from ..skills.tree import content_tree_fingerprint, iter_content_files
 from ..state.locking import resource_lock
 from ..trust import content_hash, content_hash_entries
+from .target_state import matches_materialized_target, target_has_entries, target_state_hash
 
 MATERIALIZED_SCHEMA = "skillager.materialized.v1"
 TRUSTED_STATES = {"reviewed", "trusted", "pinned"}
@@ -264,7 +265,7 @@ def materialize_working_skill_one(
         if target.exists():
             if _is_customized(sidecar, target) and not force:
                 return _result(skill, target, "skipped", WORKING_REASON_LOCAL_CUSTOMIZATION, agent=agent, scope=scope)
-            if not force and (target / "SKILL.md").exists() and not sidecar.exists():
+            if not force and not sidecar.exists() and target_has_entries(target):
                 return _result(skill, target, "skipped", WORKING_REASON_UNMANAGED, agent=agent, scope=scope)
             if not force and _source_hash_matches(sidecar, skill.get("content_hash")):
                 return _result(skill, target, "skipped", "already up to date", agent=agent, scope=scope)
@@ -275,6 +276,7 @@ def materialize_working_skill_one(
         target.mkdir(parents=True, exist_ok=True)
         (target / "SKILL.md").write_text(render_working_skill(agent), encoding="utf-8")
         materialized_hash = content_hash(target)
+        materialized_target_hash = target_state_hash(target, include_sidecar=False)
         sidecar.write_text(
             dumps(
                 _working_sidecar(
@@ -282,6 +284,7 @@ def materialize_working_skill_one(
                     scope=scope,
                     materialized_hash=materialized_hash,
                     materialized_fingerprint=content_tree_fingerprint(target),
+                    materialized_target_hash=materialized_target_hash,
                 )
             ),
             encoding="utf-8",
@@ -419,7 +422,7 @@ def materialize_router_one(
         if target.exists():
             if _is_customized(sidecar, target) and not force:
                 return _result(router_skill, target, "skipped", WORKING_REASON_LOCAL_CUSTOMIZATION, agent=agent, scope=scope)
-            if not force and (target / "SKILL.md").exists() and not sidecar.exists():
+            if not force and not sidecar.exists() and target_has_entries(target):
                 return _result(router_skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
         if dry_run:
             return _result(router_skill, target, "would_write", None, agent=agent, scope=scope)
@@ -428,6 +431,7 @@ def materialize_router_one(
         target.mkdir(parents=True, exist_ok=True)
         (target / "SKILL.md").write_text(rendered, encoding="utf-8")
         materialized_hash = content_hash(target)
+        materialized_target_hash = target_state_hash(target, include_sidecar=False)
         sidecar_data = _router_sidecar(
             tag,
             skills,
@@ -435,6 +439,7 @@ def materialize_router_one(
             scope=scope,
             materialized_hash=materialized_hash,
             materialized_fingerprint=content_tree_fingerprint(target),
+            materialized_target_hash=materialized_target_hash,
             router_slug=actual_router_slug,
             router_kind=router_kind,
         )
@@ -533,7 +538,7 @@ def materialize_stub_one(
         if target.exists():
             if _is_customized(sidecar, target) and not force:
                 return _result(skill, target, "skipped", WORKING_REASON_LOCAL_CUSTOMIZATION, agent=agent, scope=scope)
-            if not force and (target / "SKILL.md").exists() and not sidecar.exists():
+            if not force and not sidecar.exists() and target_has_entries(target):
                 return _result(skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
         if dry_run:
             return _result(skill, target, "would_write", None, agent=agent, scope=scope)
@@ -542,12 +547,14 @@ def materialize_stub_one(
         target.mkdir(parents=True, exist_ok=True)
         (target / "SKILL.md").write_text(rendered, encoding="utf-8")
         materialized_hash = content_hash(target)
+        materialized_target_hash = target_state_hash(target, include_sidecar=False)
         sidecar_data = _stub_sidecar(
             skill,
             agent=agent,
             scope=scope,
             materialized_hash=materialized_hash,
             materialized_fingerprint=content_tree_fingerprint(target),
+            materialized_target_hash=materialized_target_hash,
         )
         sidecar_data.update(decisions)
         sidecar.write_text(
@@ -625,7 +632,6 @@ def materialize_one(
         target = _collision_safe_target(target, skill["id"])
         if scope == "project" and target.resolve() == source_root and (target / "SKILL.md").exists() and not (target / "skillager.materialized.yaml").exists():
             return _result(skill, target, "already_native", "existing unmanaged native skill", agent=agent, scope=scope)
-        target_skill = target / "SKILL.md"
         sidecar = target / "skillager.materialized.yaml"
         decisions = _exposure_decisions(sidecar)
         if skill.get("content_hash") in decisions.get("exposure_blocked_hashes", []):
@@ -633,7 +639,7 @@ def materialize_one(
         if target.exists():
             if _is_customized(sidecar, target) and not force:
                 return _result(skill, target, "skipped", WORKING_REASON_LOCAL_CUSTOMIZATION, agent=agent, scope=scope)
-            if not force and target_skill.exists() and not sidecar.exists():
+            if not force and not sidecar.exists() and target_has_entries(target):
                 return _result(skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
         if dry_run:
             return _result(skill, target, "would_write", None, agent=agent, scope=scope)
@@ -655,6 +661,7 @@ def materialize_one(
                 scope=scope,
                 materialized_hash=materialized_hash,
                 materialized_fingerprint=content_tree_fingerprint(candidate),
+                materialized_target_hash=target_state_hash(candidate, include_sidecar=False),
             )
             sidecar_data.update(decisions)
             candidate_sidecar.write_text(dumps(sidecar_data), encoding="utf-8")
@@ -799,6 +806,7 @@ def _sidecar(
     scope: str,
     materialized_hash: str,
     materialized_fingerprint: str,
+    materialized_target_hash: str,
 ) -> dict[str, Any]:
     data = {
         "schema": MATERIALIZED_SCHEMA,
@@ -810,6 +818,7 @@ def _sidecar(
         "source_hash": skill.get("content_hash"),
         "materialized_hash": materialized_hash,
         "materialized_fingerprint": materialized_fingerprint,
+        "materialized_target_hash": materialized_target_hash,
         "source_trust": skill.get("trust"),
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
@@ -845,6 +854,7 @@ def _working_sidecar(
     scope: str,
     materialized_hash: str,
     materialized_fingerprint: str,
+    materialized_target_hash: str,
 ) -> dict[str, Any]:
     return {
         "schema": MATERIALIZED_SCHEMA,
@@ -856,6 +866,7 @@ def _working_sidecar(
         "source_hash": _working_source_hash(agent),
         "materialized_hash": materialized_hash,
         "materialized_fingerprint": materialized_fingerprint,
+        "materialized_target_hash": materialized_target_hash,
         "source_trust": "reviewed",
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
@@ -871,6 +882,7 @@ def _router_sidecar(
     scope: str,
     materialized_hash: str,
     materialized_fingerprint: str,
+    materialized_target_hash: str,
     router_slug: str,
     router_kind: str,
 ) -> dict[str, Any]:
@@ -887,6 +899,7 @@ def _router_sidecar(
         "source_hash": content_hashes(skills),
         "materialized_hash": materialized_hash,
         "materialized_fingerprint": materialized_fingerprint,
+        "materialized_target_hash": materialized_target_hash,
         "source_trust": "reviewed",
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
@@ -904,6 +917,7 @@ def _stub_sidecar(
     scope: str,
     materialized_hash: str,
     materialized_fingerprint: str,
+    materialized_target_hash: str,
 ) -> dict[str, Any]:
     data = {
         "schema": MATERIALIZED_SCHEMA,
@@ -915,6 +929,7 @@ def _stub_sidecar(
         "source_hash": skill.get("content_hash"),
         "materialized_hash": materialized_hash,
         "materialized_fingerprint": materialized_fingerprint,
+        "materialized_target_hash": materialized_target_hash,
         "source_trust": skill.get("trust"),
         "materialized_at": datetime.now(timezone.utc).isoformat(),
         "agent": agent,
@@ -957,7 +972,7 @@ def _collision_safe_target(target: Path, skill_id: str) -> Path:
 
 
 def _is_customized(sidecar: Path, target: Path) -> bool:
-    if not (target / "SKILL.md").exists() or not sidecar.exists():
+    if not sidecar.exists():
         return False
     try:
         data = load_mapping(sidecar)
@@ -965,10 +980,7 @@ def _is_customized(sidecar: Path, target: Path) -> bool:
         return True
     if data.get("customized") is True:
         return True
-    materialized_hash = data.get("materialized_hash")
-    if not isinstance(materialized_hash, str):
-        return True
-    return content_hash(target) != materialized_hash
+    return not matches_materialized_target(target, data)
 
 
 def _source_hash_matches(sidecar: Path, source_hash: object) -> bool:

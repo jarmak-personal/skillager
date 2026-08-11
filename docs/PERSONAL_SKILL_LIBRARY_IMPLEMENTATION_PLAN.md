@@ -33,6 +33,7 @@ safe use through existing discovery and exposure.
 - Filtered canonical candidate built outside the library.
 - Attribution-only provenance; no upstream synchronization promise.
 - External origin left unchanged.
+- Ambiguous display IDs claimed by distinct roots fail closed before preview.
 - Pending repair path if Git or trust recording fails after the copy boundary.
 
 ### Version Recovery
@@ -50,6 +51,8 @@ safe use through existing discovery and exposure.
 - Native materialization uses verified candidates and atomic replacement.
 - Working keeps the v1 schema and reports additive, metadata-only live drift.
 - Locally edited managed targets are never overwritten implicitly.
+- Full managed-target hashes protect canonically excluded entries during refresh and
+  make removal confirmations stale after any target change.
 - Sidecars retain exact hashes, agent/scope, materialized fingerprints, and stable
   `source_library_id` where applicable; redundant ownership/policy labels are not
   written.
@@ -79,6 +82,11 @@ Focused behavioral tests protect:
 - Git conflict and failure recovery;
 - native exposure source/candidate races;
 - drift metadata body boundaries;
+- scanner-finding body boundaries on every personal-library preview/status surface;
+- user-owned catalog authority despite repository-controlled portable tag hints;
+- ambiguous external-ID import refusal;
+- excluded-file exposure refresh/removal and stale-preview refusal;
+- non-hidden prompting and moved-library Working recovery;
 - optional degraded-library doctor behavior;
 - absence of deferred commands from top-level help.
 

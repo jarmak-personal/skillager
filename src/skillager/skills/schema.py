@@ -45,9 +45,10 @@ class Skill:
     package: str | None
     version: str | None
     inferred: bool = False
+    claimed_id: str | None = None
 
     def to_index(self, content_hash: str, scan: dict[str, _Any], trust: str) -> dict[str, _Any]:
-        return {
+        result = {
             "id": self.id,
             "name": self.name,
             "summary": self.summary,
@@ -66,6 +67,9 @@ class Skill:
             "trust": trust,
             "inferred": self.inferred,
         }
+        if self.claimed_id:
+            result["_claimed_id"] = self.claimed_id
+        return result
 
 
 @_dataclass(frozen=True)
@@ -76,9 +80,10 @@ class QuarantinedSkill:
     manifest_path: _Path | None
     source: dict[str, _Any]
     lint: dict[str, _Any]
+    claimed_id: str | None = None
 
     def to_index(self, content_hash: str, scan: dict[str, _Any], trust: str) -> dict[str, _Any]:
-        return {
+        result = {
             "id": self.id,
             "root": str(self.root),
             "entrypoint": str(self.entrypoint) if self.entrypoint else None,
@@ -91,6 +96,9 @@ class QuarantinedSkill:
             "quarantined": True,
             "inferred": False,
         }
+        if self.claimed_id:
+            result["_claimed_id"] = self.claimed_id
+        return result
 
 
 def load_skill_from_dir(root: _Path, source: dict[str, _Any]) -> Skill:
