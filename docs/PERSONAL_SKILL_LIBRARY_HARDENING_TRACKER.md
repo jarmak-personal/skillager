@@ -1,7 +1,7 @@
 # Personal Library Hardening Tracker
 
-Status: active final closure; clean repeat setup and final persona reviews completed,
-late integrity findings fixed, awaiting release checks and one final committed workflow
+Status: closure complete; final implementation and UX commits are release-check clean,
+fresh no-context workflows are ready, and independent closure personas returned SHIP
 Source: three review passes by agentic-power-user, senior-engineer/maintainer, and
 skeptical security-reader personas, followed by three corrective worktrees through the
 current branch
@@ -183,7 +183,7 @@ home in normal product documentation.
   optional library a global blocker.
 - [x] Global Codex exposure writes the current user-scope directory and legacy inventory
   remains discoverable.
-- [ ] Normal suite, Python 3.13 release check, and fresh no-context setup workflow pass
+- [x] Normal suite, Python 3.13 release check, and fresh no-context setup workflow pass
   against the final closure commit and isolated catalog state.
 - [x] A repository catalog pointer cannot substitute user-owned trust state.
 - [x] Duplicate external IDs refuse import without writing library content.
@@ -288,9 +288,36 @@ The final maintainer and skeptical-product reviews then found late integrity iss
 hash framing, project/library symlink boundaries, compact frontmatter summaries,
 sidecar edits, concurrent removal, and cross-agent router authorization. Those are now
 regression-covered along with the two strongest recovery follow-ups (atomic projection
-refresh and missing accepted-skill restore). Because these fixes postdate `7208f2b`,
-closure still requires the release checks and one isolated workflow pass against their
-final commit.
+refresh and missing accepted-skill restore).
+
+A fourth no-context worker ran committed integrity checkout `a5aa533`. It again found
+all 49 live manifest-free skills, fully resolved review, stayed ready, used metadata
+search to choose one narrow GIS stub, and completed repeat setup without losing or
+resuggesting current state. It also smoke-tested the version-2 personal-library path:
+`new` → exact-token `accept` → `status` → verified `history` completed with one accepted
+current version. Both the skeptical product review and the senior-maintainer/power-user
+review returned SHIP with no functional release blockers. They agreed the public
+surface is appropriately limited to ownership, exact acceptance, history/diff/restore,
+import, and deliberate exposure; deferred sync/fork/reconcile/pin expansion remains
+out of scope.
+
+Those reviews identified two remaining setup-output niggles rather than lifecycle
+gaps. Final UX commit `cac6f53` clarifies that an empty native suggestion set means no
+always-on project-native recommendation while approved skills remain usable through
+stub/router/on-demand paths. It also replaces the repeated twelve-item generic stub
+list with a compact on-demand count and search/list guidance once Working is already
+current. Focused setup coverage passed 55 tests; the normal suite passed 395; and the
+Python 3.13 release check passed Ruff, both mypy targets, 395 core tests, 13 linter
+tests, both builds/entrypoints, wheel smoke, and whitespace validation.
+
+A final no-context worker then ran `cac6f53` with isolated HOME/XDG state and both live
+repositories. It approved all 49 exact hashes, curated a four-member `gis-python`
+router from the required GIS/Python goal, and finished ready with 4 routed Codex choices
+and 35 on demand. Repeat setup preserved the current router and Working artifact and
+printed only the compact on-demand summary. The worker chose standalone `review approve`
+after leaving initial setup, so Working correctly diagnosed its still-missing artifact;
+the documented `doctor --agent codex --fix` recovery completed successfully. The fully
+interactive setup path had already completed without that detour on `a5aa533`.
 
 Search results still include some weak low-score matches. That remains a separate
 discovery-ranking opportunity, not evidence for adding lifecycle surface or weakening
