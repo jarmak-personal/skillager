@@ -12,6 +12,7 @@ from unittest.mock import patch
 from support import TtyStringIO, chdir
 from skillager.cli import main
 from skillager.commands.impl import content_hashes
+from skillager.commands.impl import _print_router_suggestions
 from skillager.commands.impl import _print_setup_completion_summary
 from skillager.commands.impl import _interactive_review_lint_blocked
 from skillager.index import build_index, load_index
@@ -1458,6 +1459,41 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("No narrow native project skill candidates found", text)
             self.assertIn("Router suggestions", text)
             self.assertIn("skillager expose --tag mapping --mode router --agent claude --scope project", text)
+
+            with (
+                redirect_stdout(StringIO()),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                self.assertEqual(main(["expose", "--tag", "mapping", "--mode", "router", "--agent", "claude", "--scope", "project"]), 0)
+
+            repeat_stdout = StringIO()
+            with (
+                redirect_stdout(repeat_stdout),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                _print_router_suggestions(state, catalog_root=state, agents=["claude"])
+            repeat_text = repeat_stdout.getvalue()
+            self.assertNotIn("Router suggestions", repeat_text)
+            self.assertNotIn("skillager expose --tag mapping", repeat_text)
+
+            router_skill = root / ".claude" / "skills" / "skillager-mapping" / "SKILL.md"
+            router_skill.write_text(router_skill.read_text(encoding="utf-8") + "\nLocal router edit.\n", encoding="utf-8")
+            drift_stdout = StringIO()
+            with (
+                redirect_stdout(drift_stdout),
+                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                _print_router_suggestions(state, catalog_root=state, agents=["claude"])
+            self.assertIn("skillager expose --tag mapping", drift_stdout.getvalue())
 
     def test_interactive_setup_splits_low_risk_approval_by_audience(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

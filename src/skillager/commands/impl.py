@@ -6926,23 +6926,52 @@ def _materialize_reviewed_for_project(
 
 def _print_router_suggestions(state_root: Path, *, catalog_root: Path | None, agents: list[str]) -> None:
     catalog_root = catalog_root or state_root
-    attached = _project_tag_names(_current_project_dir())
+    project_dir = _current_project_dir()
+    attached = _project_tag_names(project_dir)
     if not attached:
         return
+    agent = agents[0] if len(agents) == 1 else "codex"
     suggestions = []
     for tag in attached:
         reviewed = [skill for skill in _select_project_tag_skills(state_root, catalog_root, tag) if skill.get("trust") in {"reviewed", "trusted", "pinned"}]
-        if reviewed:
+        if reviewed and not _router_tag_is_current(project_dir, agent=agent, tag=tag, skills=reviewed):
             suggestions.append((tag, len(reviewed)))
     if not suggestions:
         return
-    agent = agents[0] if len(agents) == 1 else "codex"
     print()
     print(_style("Router suggestions", "bold"))
     print("  Broad project-local tags are best exposed as router skills when relevant to the task:")
     for tag, count in suggestions:
         print(f"  - {tag}: {_counted(count, 'approved skill')}")
         print(f"    skillager expose --tag {tag} --mode router --agent {agent} --scope project")
+
+
+def _router_tag_is_current(
+    project_dir: Path,
+    *,
+    agent: str,
+    tag: str,
+    skills: list[dict[str, Any]],
+) -> bool:
+    expected_ids = sorted(str(skill["id"]) for skill in skills)
+    expected_hash = content_hashes(skills)
+    for root_path in _project_skill_roots(project_dir).get(agent, []):
+        if not root_path.is_dir():
+            continue
+        for sidecar in root_path.glob("*/skillager.materialized.yaml"):
+            try:
+                data = load_mapping(sidecar)
+            except (OSError, UnicodeError, YamlError):
+                continue
+            if (
+                data.get("source_type") == "skillager-router"
+                and data.get("tag") == tag
+                and data.get("source_hash") == expected_hash
+                and sorted(str(value) for value in data.get("skill_ids") or []) == expected_ids
+                and matches_materialized_target(sidecar.parent, data)
+            ):
+                return True
+    return False
 
 
 def _print_setup_completion_summary(

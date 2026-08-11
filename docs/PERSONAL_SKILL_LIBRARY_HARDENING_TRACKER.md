@@ -1,7 +1,7 @@
 # Personal Library Hardening Tracker
 
-Status: active closure; fresh setup corrective cycle implemented, awaiting final
-integrated checks, repeat fresh setup, and closure verification
+Status: closure candidate; clean repeat setup completed, with its final redundant-router
+suggestion fixed and awaiting verification against the final committed candidate
 Source: three review passes by agentic-power-user, senior-engineer/maintainer, and
 skeptical security-reader personas, followed by three corrective worktrees through the
 current branch
@@ -107,6 +107,8 @@ home in normal product documentation.
 - [x] Make repeated setup summaries use full-scope manifest-free and prior-block counts,
   include existing verified router/native exposures, and avoid a redundant Working
   installation prompt when the selected artifact is already current.
+- [x] Suppress setup router suggestions when that tag's exact approved membership is
+  already exposed through a current, unmodified router for the selected agent.
 
 ## P2 — CLI And Documentation Consistency
 
@@ -197,6 +199,8 @@ home in normal product documentation.
 - [x] Repeated setup reports full-scope blocked/manifest-free counts, keeps its public
   selection/schema unchanged, counts an existing router, and skips reinstall prompting
   for current Working.
+- [x] A current router is not offered again by repeated setup; source, membership, or
+  local target drift keeps the explicit re-exposure path discoverable.
 
 ## Fresh User Workflow Result
 
@@ -213,10 +217,23 @@ search to a six-member `vibespatial-gis-dev` tag and one compact router at
 `skillager-vibespatial-gis-dev`. That exposed a real integration defect: the supported
 tag file's lock directory was misclassified as legacy in-tree state. The worker could
 recover and finish ready with 6 routed choices and 27 on demand, but only after an
-unacceptable manual tag-directory move. The corrective cycle above now exempts only the
-supported tag file and its exact lock, fixes the inconsistent repeated-setup summaries,
-and removes the redundant Working prompt. Closure requires the same isolated no-context
-workflow to pass once more against the new committed candidate.
+unacceptable manual tag-directory move.
+
+A second fresh no-context worker then ran committed checkout `6c931fd` with the same
+isolation and live repositories. It discovered all 49 manifest-free skills without
+retry, approved 42, explicitly blocked 7, skipped none, and produced 34 Codex-facing
+choices. Working guided the GIS/Python goal into a four-member `spatial-python` router.
+The supported `.skillager/tags.json` and lock remained in place, Working stayed ready,
+and repeated setup was fully non-interactive: it reused 42 approvals, reported all 7
+blocked skills and both complete manifest-free collection counts, counted the existing
+router's 4 exposed choices, and described Working as current without a prompt. Final
+Working remained ready with 4 routed choices and 30 on demand.
+
+That clean rerun revealed one smaller inconsistency: repeat setup printed an exposure
+suggestion for the already-current router. The final corrective change suppresses only
+an exact, target-current router; stale membership, source hashes, or local target drift
+remain actionable. Closure still requires the release checks and one isolated workflow
+pass against the final commit containing that correction.
 
 Search results still include some weak low-score matches. That remains a separate
 discovery-ranking opportunity, not evidence for adding lifecycle surface or weakening
