@@ -32,6 +32,10 @@ Highlights:
   and output mode, and never emit executable placeholder reasons.
 - Report paused or skipped interactive setup as incomplete; do not install Working,
   issue restart guidance, or publish a false completion while review remains.
+- Keep supported `.skillager/tags.json` plus its exact lock artifact out of the legacy
+  state gate while preserving that gate for old approval/session state. Repeated setup
+  retains full-scope block/discovery counts, includes existing verified routers in
+  exposure totals, and skips redundant Working-install confirmation.
 - Keep summary inventory bounded, retain curated-tag search matches, and make
   successful non-mutating previews exit zero.
 

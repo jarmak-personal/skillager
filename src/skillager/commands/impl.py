@@ -1237,7 +1237,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     )
     if fresh_project_reset is not None:
         report["fresh_project_reset"] = fresh_project_reset
-    report["no_manifest_skills"] = _no_manifest_skill_summary(report["selected"])
+    report["no_manifest_skills"] = _no_manifest_skill_summary(
+        report.get("_scope_inventory") or report["selected"]
+    )
     report["approval_provenance"] = _setup_approval_provenance(report)
     _remember_setup_paths(root(args), args.paths or None)
     _record_project_registry(args, project_dir)
@@ -1353,7 +1355,8 @@ def _print_setup_scan_report(report: dict[str, Any], *, project_dir: Path, agent
     )
     review_needed = [skill for skill in selected if skill.get("trust") == "discovered"]
     lint_blocked = [skill for skill in selected if skill.get("trust") == "lint_blocked"]
-    blocked = [skill for skill in selected if skill.get("trust") == "blocked"]
+    scope_inventory = list(report.get("_scope_inventory") or selected)
+    blocked = [skill for skill in scope_inventory if skill.get("trust") == "blocked"]
     provenance = report.get("approval_provenance") or {}
     newly_available = int(provenance.get("reviewed_this_run") or 0)
     prior_approvals = int(provenance.get("reused_global_exact_hash_approvals") or 0)
@@ -1566,6 +1569,7 @@ def _compact_setup_report(report: dict[str, Any]) -> dict[str, Any]:
 def _public_setup_report(report: dict[str, Any]) -> dict[str, Any]:
     public = dict(report)
     public.pop("_reused_global_approved_ids", None)
+    public.pop("_scope_inventory", None)
     if isinstance(public.get("selected"), list):
         public["selected"] = [_public_full_skill_metadata(skill) for skill in public["selected"] if isinstance(skill, dict)]
     if "bootstrap" in public:
@@ -6492,7 +6496,12 @@ def _interactive_setup(
             if results is not None:
                 result_agents = _setup_result_agents(results)
                 _save_status_scope(state_root, selected, audience=audience, include_global=include_global, agents=result_agents, paths=paths)
-                _print_setup_completion_summary(selected, results, agents=result_agents)
+                _print_setup_completion_summary(
+                    selected,
+                    results,
+                    agents=result_agents,
+                    project_dir=project_dir,
+                )
                 _print_agent_next_steps(results)
             else:
                 print("Setup complete; no skills exposed.")
@@ -6890,8 +6899,9 @@ def _materialize_reviewed_for_project(
         )
     else:
         target_label = " and ".join(agent.title() for agent in agents)
-        if not _confirm(f"{prompt_prefix}Install Skillager working skill for {target_label} project scope?"):
-            return None
+        if not _setup_handoff_ready(project_dir, agents=agents):
+            if not _confirm(f"{prompt_prefix}Install Skillager working skill for {target_label} project scope?"):
+                return None
         bootstrap = _perform_bootstrap(agents=agents, project_dir=project_dir, dry_run=False, force=False)
         results = list(bootstrap["artifacts"])
         for item in results:
@@ -6940,6 +6950,7 @@ def _print_setup_completion_summary(
     results: list[dict[str, Any]],
     *,
     agents: list[str],
+    project_dir: Path | None = None,
 ) -> None:
     approved = [skill for skill in skills if skill.get("trust") in TRUSTED_STATES]
     agent = agents[0] if len(agents) == 1 else "codex"
@@ -6953,19 +6964,41 @@ def _print_setup_completion_summary(
             and skill_id != "skillager/working"
         ):
             exposed_ids.add(skill_id)
-    hidden = [skill for skill in agent_visible if skill["id"] not in exposed_ids]
     if not approved:
         return
+    project_exposure = {skill_id: [{"kind": "native"}] for skill_id in exposed_ids}
+    if project_dir is not None:
+        project_exposure = _project_exposure(
+            project_dir,
+            current_source_hashes=_approved_source_hashes(approved),
+        )
+        _add_native_source_exposures(project_exposure, approved, project_dir=project_dir)
+        # Preserve an already-native result if the source is outside the standard
+        # project native roots and therefore cannot be rediscovered from a sidecar.
+        for skill_id in exposed_ids:
+            project_exposure.setdefault(skill_id, [{"kind": "native"}])
+    exposed_ids = set(
+        _project_exposure_breakdown(
+            project_exposure,
+            skill_ids={skill["id"] for skill in approved},
+        )["exposed_ids"]
+    )
+    hidden = [skill for skill in agent_visible if skill["id"] not in exposed_ids]
     inventory = _available_inventory_summary(
         skills,
         agent=agent,
-        project_exposure={skill_id: [{"kind": "native"}] for skill_id in exposed_ids},
+        project_exposure=project_exposure,
     )
     print()
     print(_style("Skillager setup complete", "bold"))
     print("Ready:")
     print("  - Owner review: no action needed")
-    print("  - Working skill: installed")
+    working_installed = any(
+        item.get("skill_id") == "skillager/working"
+        and item.get("status") == "materialized"
+        for item in results
+    )
+    print(f"  - Working skill: {'installed' if working_installed else 'current'}")
     print()
     print("What you have:")
     source_entries = int(inventory.get("available_source_entries") or 0)

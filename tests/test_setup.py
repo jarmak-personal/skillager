@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from support import TtyStringIO, chdir
 from skillager.cli import main
+from skillager.commands.impl import content_hashes
 from skillager.commands.impl import _print_setup_completion_summary
 from skillager.commands.impl import _interactive_review_lint_blocked
 from skillager.index import build_index, load_index
@@ -777,6 +778,110 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("skillager list --summary-json", text)
             self.assertNotIn("Needs review", text)
 
+    def test_setup_scan_counts_blocked_and_manifest_free_skills_in_full_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            approved_dir = root / ".skills" / "approved"
+            blocked_dir = root / ".skills" / "blocked"
+            approved_dir.mkdir(parents=True)
+            blocked_dir.mkdir(parents=True)
+            (approved_dir / "SKILL.md").write_text("# Approved\n\nUse approved guidance.\n", encoding="utf-8")
+            (blocked_dir / "SKILL.md").write_text("# Blocked\n\nUse blocked guidance.\n", encoding="utf-8")
+            with (
+                patch.dict(
+                    os.environ,
+                    {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"},
+                ),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                build_index(state, include_packages=False)
+                indexed = {skill["id"]: skill for skill in load_index(state)["skills"]}
+                set_trust(
+                    state,
+                    "project/approved",
+                    "reviewed",
+                    indexed["project/approved"]["content_hash"],
+                    indexed["project/approved"]["source"],
+                )
+                set_trust(
+                    state,
+                    "project/blocked",
+                    "blocked",
+                    indexed["project/blocked"]["content_hash"],
+                    indexed["project/blocked"]["source"],
+                )
+                output = StringIO()
+                with redirect_stdout(output):
+                    self.assertEqual(main(["setup", "--no-packages", "--non-interactive"]), 0)
+            text = output.getvalue()
+            self.assertIn("Indexed 2 skills", text)
+            self.assertIn("Blocked skills: 1", text)
+            self.assertIn("no-manifest skills discovered: project=2", text)
+            self.assertIn("1 approved source entry", text)
+
+            json_output = StringIO()
+            with (
+                redirect_stdout(json_output),
+                patch.dict(
+                    os.environ,
+                    {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"},
+                ),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                self.assertEqual(main(["setup", "--no-packages", "--non-interactive", "--json"]), 0)
+            payload = json.loads(json_output.getvalue())
+            self.assertNotIn("_scope_inventory", payload)
+            self.assertEqual(payload["no_manifest_skills"]["count"], 2)
+            self.assertEqual([skill["id"] for skill in payload["selected"]], ["project/approved"])
+
+    def test_interactive_setup_does_not_offer_to_reinstall_current_working_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = root / ".skillager"
+            skill_dir = root / ".skills" / "gis-domain"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                native_skill_text("gis-domain", "GIS Domain", "Use GIS domain concepts."),
+                encoding="utf-8",
+            )
+            common_patches = (
+                patch.dict(
+                    os.environ,
+                    {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"},
+                ),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            )
+            with common_patches[0], common_patches[1], common_patches[2], common_patches[3]:
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(main(["setup", "--no-packages", "--accept-low", "--agent", "codex"]), 0)
+
+            stdin = TtyStringIO("n\n")
+            stdout = TtyStringIO()
+            with (
+                patch("sys.stdin", stdin),
+                patch("sys.stdout", stdout),
+                patch.dict(
+                    os.environ,
+                    {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"},
+                ),
+                patch("skillager.discovery.find_project_root", return_value=root),
+                patch("pathlib.Path.home", return_value=root),
+                chdir(root),
+            ):
+                self.assertEqual(main(["setup", "--no-packages", "--agent", "codex"]), 0)
+            text = stdout.getvalue()
+            self.assertNotIn("Install Skillager working skill", text)
+            self.assertIn("skillager/working: skipped", text)
+            self.assertIn("Skillager setup complete", text)
+            self.assertIn("Working skill: current", text)
+
     def test_interactive_setup_hides_skills_after_approval(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -905,6 +1010,58 @@ class SkillagerSetupTests(unittest.TestCase):
         self.assertIn("1 Codex-ready choice: 0 exposed, 1 on demand; 1 alternate-agent variant collapsed", text)
         self.assertIn("1. project/gis-domain", text)
         self.assertNotIn("project/gis-domain-vibespatial-claude", text)
+
+    def test_setup_completion_includes_existing_router_exposure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            skills = [
+                {
+                    "id": "project/first",
+                    "name": "First",
+                    "summary": "Use first guidance.",
+                    "entrypoint": str(root / ".skills" / "first" / "SKILL.md"),
+                    "content_hash": "first-hash",
+                    "trust": "reviewed",
+                    "source": {"type": "project"},
+                },
+                {
+                    "id": "project/second",
+                    "name": "Second",
+                    "summary": "Use second guidance.",
+                    "entrypoint": str(root / ".skills" / "second" / "SKILL.md"),
+                    "content_hash": "second-hash",
+                    "trust": "reviewed",
+                    "source": {"type": "project"},
+                },
+            ]
+            router = root / ".agents" / "skills" / "skillager-group"
+            router.mkdir(parents=True)
+            router.joinpath("skillager.materialized.yaml").write_text(
+                "schema: skillager.router.v1\n"
+                "id: skillager/group\n"
+                "source_type: skillager-router\n"
+                "router_kind: tag\n"
+                "tag: group\n"
+                "skill_ids:\n"
+                "- project/first\n"
+                "- project/second\n"
+                f"source_hash: {content_hashes(skills)}\n"
+                "agent: codex\n"
+                "scope: project\n",
+                encoding="utf-8",
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                _print_setup_completion_summary(
+                    skills,
+                    [{"skill_id": "skillager/working", "status": "skipped"}],
+                    agents=["codex"],
+                    project_dir=root,
+                )
+            text = output.getvalue()
+            self.assertIn("2 approved source entries: 2 exposed, 0 on demand", text)
+            self.assertIn("2 Codex-ready choices: 2 exposed, 0 on demand", text)
+            self.assertNotIn("Stub candidates", text)
 
     def test_interactive_review_can_block_medium_risk_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

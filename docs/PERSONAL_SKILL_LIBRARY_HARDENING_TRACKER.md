@@ -1,7 +1,7 @@
 # Personal Library Hardening Tracker
 
-Status: active closure; third corrective cycle implemented, awaiting final integrated
-checks, fresh setup, and closure verification
+Status: active closure; fresh setup corrective cycle implemented, awaiting final
+integrated checks, repeat fresh setup, and closure verification
 Source: three review passes by agentic-power-user, senior-engineer/maintainer, and
 skeptical security-reader personas, followed by three corrective worktrees through the
 current branch
@@ -68,6 +68,9 @@ home in normal product documentation.
   mutations locked and atomic.
 - [x] Treat skipped or paused interactive setup as incomplete: no Working install,
   restart handoff, or completion claim while selected review remains unresolved.
+- [x] Do not classify supported `.skillager/tags.json` and its exact regular lock
+  artifact as obsolete in-tree state. Preserve the readiness gate for true legacy or
+  unexpected entries.
 
 ## P1 — Readiness And Exposure Correctness
 
@@ -101,6 +104,9 @@ home in normal product documentation.
   rather than relabeling the selected historical commit.
 - [x] Require an actual managed router exposure for `--from-router`; a similarly named
   attached tag alone does not authorize activation.
+- [x] Make repeated setup summaries use full-scope manifest-free and prior-block counts,
+  include existing verified router/native exposures, and avoid a redundant Working
+  installation prompt when the selected artifact is already current.
 
 ## P2 — CLI And Documentation Consistency
 
@@ -185,28 +191,33 @@ home in normal product documentation.
   and produces only the resolving setup command.
 - [x] Router activation before exposure refuses, while activation through an allocated
   alternate router slug succeeds.
+- [x] With default XDG project state, setup → tag add → tag show → router exposure →
+  Working stays ready while `.skillager/tags.json` and its real lock exist; adding a
+  true legacy `.skillager/trust.json` still makes Working non-ready.
+- [x] Repeated setup reports full-scope blocked/manifest-free counts, keeps its public
+  selection/schema unchanged, counts an existing router, and skips reinstall prompting
+  for current Working.
 
 ## Fresh User Workflow Result
 
-The prior fresh-worker run used Skillager 0.8.1 in an ordinary temporary directory,
-cloned `vibeSpatial` and `agent-workflows`, and completed interactive Codex setup without
-retries or environmental failures. Setup discovered 60 manifest-free skills in place,
-selected 49, approved all 49 after review, and collapsed them to 39 Codex-facing
-choices. Generated Working guidance led the agent from the user's GIS/Python goal to
-focused search, a four-skill project tag, one compact router, and a clean final working
-result with 35 choices left on demand.
+A fresh no-context worker ran committed checkout `8a9c11b` through its branch-local
+Skillager 0.8.1 executable in an ordinary temporary directory with isolated HOME and
+XDG config/cache/data/state. Both live repositories from the bundled workflow cloned
+without retry. Setup discovered 49 manifest-free skills in place (`agent-workflows=28`,
+`vibespatial=21`), approved 41 exact hashes, explicitly blocked 8 warned skills, skipped
+none, and collapsed the available set to 33 Codex-facing choices. Initial Working was
+ready with an empty required `next` block.
 
-The pass also confirmed the intended product boundary: `next` remains reserved for
-required readiness repair, while optional search and exposure live under `curation`.
-Overlapping inventory facets, scanner-family grouping, inferred-name/search ranking,
-and tag follow-up prose remain discovery-quality opportunities rather than reasons to
-expand the personal-library lifecycle in this release. `--fresh-project` retention is
-already explicit in command help and setup output, so no additional flag or schema was
-added.
+Generated Working guidance led from the user's GIS/Python goal through focused metadata
+search to a six-member `vibespatial-gis-dev` tag and one compact router at
+`skillager-vibespatial-gis-dev`. That exposed a real integration defect: the supported
+tag file's lock directory was misclassified as legacy in-tree state. The worker could
+recover and finish ready with 6 routed choices and 27 on demand, but only after an
+unacceptable manual tag-directory move. The corrective cycle above now exempts only the
+supported tag file and its exact lock, fixes the inconsistent repeated-setup summaries,
+and removes the redundant Working prompt. Closure requires the same isolated no-context
+workflow to pass once more against the new committed candidate.
 
-That run proved the broad setup/working path but reused existing global exact-hash
-approvals and did not prove that the `skillager` executable came from the final branch
-checkout. A later worker was accidentally given stale repository URLs and is excluded
-from product evidence. Closure therefore requires another no-context run against the
-verified checkout, the live repositories named by the bundled skill, and isolated user
-catalog/cache state after the fixes above are committed.
+Search results still include some weak low-score matches. That remains a separate
+discovery-ranking opportunity, not evidence for adding lifecycle surface or weakening
+the exact-hash gate.

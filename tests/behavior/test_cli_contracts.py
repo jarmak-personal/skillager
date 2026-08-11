@@ -347,6 +347,8 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
     def test_working_prefers_existing_router_over_repeated_curation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             project, cli = self.make_workspace(Path(tmp_name))
+            cli.env.pop("SKILLAGER_STATE_DIR")
+            cli.env["XDG_STATE_HOME"] = str(Path(tmp_name) / "user-state")
             self.write_skill(project)
             setup = cli.run(
                 "setup",
@@ -364,11 +366,20 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assertIn("gis: 1 skill (1 added)", tagged.stdout)
             self.assertIn("Added:\n  - project/gis-domain", tagged.stdout)
             self.assertIn("Inspect: skillager tag show gis", tagged.stdout)
+            self.assertNotIn("legacy in-tree state", tagged.stderr)
+            shown = cli.run("tag", "show", "gis", "--json")
+            self.assert_code(shown, 0)
+            self.assertEqual(shown.json()["tag"], "gis")
+            self.assertEqual([skill["id"] for skill in shown.json()["skills"]], ["project/gis-domain"])
+            self.assertNotIn("legacy in-tree state", shown.stderr)
+            lock_artifacts = list((project / ".skillager" / ".skillager-locks").glob("*.lock"))
+            self.assertEqual(len(lock_artifacts), 1)
             unchanged = cli.run("tag", "add", "GIS", "project/gis-domain")
             self.assert_code(unchanged, 0)
             self.assertIn("gis: 1 skill (unchanged)", unchanged.stdout)
             exposed = cli.run("expose", "--tag", "gis", "--mode", "router", "--agent", "codex", "--scope", "project")
             self.assert_code(exposed, 0)
+            self.assertNotIn("legacy in-tree state", exposed.stderr)
             self.assertIn(
                 "skillager activate <skill-id> --from-router skillager-gis",
                 exposed.stdout,
@@ -383,6 +394,9 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
 
             working = cli.run("working", "--agent", "codex", "--json")
             self.assert_code(working, 0)
+            self.assertTrue(working.json()["can_proceed"])
+            self.assertEqual(working.json()["status"], "ready")
+            self.assertNotIn("legacy in-tree state", working.stderr)
             self.assertFalse(working.json()["curation"]["recommended"])
             self.assertEqual(working.json()["curation"]["existing_router_tags"], ["gis"])
             self.assertEqual(working.json()["inventory"]["routed"], 1)
@@ -392,6 +406,34 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assert_code(removed, 0)
             self.assertIn("gis: 0 skills (1 removed)", removed.stdout)
             self.assertIn("Removed:\n  - project/gis-domain", removed.stdout)
+
+    def test_working_still_blocks_true_legacy_in_tree_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_name:
+            project, cli = self.make_workspace(Path(tmp_name))
+            cli.env.pop("SKILLAGER_STATE_DIR")
+            cli.env["XDG_STATE_HOME"] = str(Path(tmp_name) / "user-state")
+            self.write_skill(project)
+            setup = cli.run(
+                "setup",
+                "--source",
+                "project",
+                "--accept-low",
+                "--agent",
+                "codex",
+                "--no-packages",
+                "--summary-json",
+            )
+            self.assert_code(setup, 0)
+            legacy = project / ".skillager"
+            legacy.mkdir()
+            (legacy / "trust.json").write_text('{"skills": {}}\n', encoding="utf-8")
+
+            working = cli.run("working", "--agent", "codex", "--json")
+
+            self.assert_code(working, 0)
+            self.assertFalse(working.json()["can_proceed"])
+            self.assertEqual(working.json()["status"], "legacy-state-detected")
+            self.assertIn("ignoring legacy in-tree state", working.stderr)
 
 
 if __name__ == "__main__":

@@ -53,7 +53,9 @@ Exposed copies are managed projections, not independent canonical sources. Ordin
 Project tags are repository-local curation, not approval authority. Tag reads and
 mutations reject symlinked/non-file state paths; writes are locked and atomically
 replace the regular `<project>/.skillager/tags.json` file. Catalog selection remains
-bound in user-owned state rather than trusting a repository-controlled pointer.
+bound in user-owned state rather than trusting a repository-controlled pointer. The
+legacy-state detector exempts only that supported tag file and its exact regular lock
+artifact; unexpected in-tree state continues to fail the Working readiness check.
 
 For an intentional edit to an owned skill, the safe workflow is to compare the exposure with the canonical library tree, move the intended work into the library, accept that exact hash, then explicitly re-expose it. For an accidental edit, preserve anything needed before choosing forced re-exposure. Removal is preview-first and bound to the complete live target, including sidecar and canonically excluded entries; any change after preview invalidates confirmation. Non-current targets do not receive a removal command until the user explicitly previews with `--force`. Skillager performs no automatic merge, promotion, upstream update, or cross-project rollout.
 

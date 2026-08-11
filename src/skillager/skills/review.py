@@ -517,6 +517,18 @@ def setup_environment(
         include_global=include_global,
     )
     selected = annotate_duplicate_content(selected)
+    scope_inventory = select_visible_skills(
+        refreshed.get("skills", []),
+        skill_ids=skill_ids,
+        source=source,
+        collection=collection,
+        audience=audience,
+        package=package,
+        activation=activation,
+        include_blocked=True,
+        include_lint_blocked=review_include_lint_blocked,
+        include_global=include_global,
+    )
     return {
         "indexed": len(data.get("skills", [])),
         "skipped_global": skipped_global,
@@ -527,6 +539,10 @@ def setup_environment(
         "_reused_global_approved_ids": reused_global_approved_ids,
         "errors": data.get("errors", []),
         "selected": selected,
+        # Setup's actionable selection intentionally omits previously blocked skills.
+        # Keep the full matching inventory private so human summaries can still report
+        # discovery and block counts truthfully without changing the public selection.
+        "_scope_inventory": scope_inventory,
         "summary": review_summary(selected),
         "action": action,
     }

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import project_tags
+from ..state.locking import lock_path_for
 from ..state.paths import catalog_state_root, find_project_root, legacy_project_state_root, state_root
 from ..state.statefiles import mutate_user_json, read_user_json
 
@@ -137,6 +138,25 @@ def legacy_project_state_report(new_state_root: Path, *, project_dir: Path | Non
 
 def _legacy_project_state_entries(legacy: Path) -> list[str]:
     try:
-        return sorted(entry.name for entry in legacy.iterdir() if entry.name != "tags.json")
+        if legacy.is_symlink() or not legacy.is_dir():
+            return [legacy.name]
+        return sorted(
+            entry.name
+            for entry in legacy.iterdir()
+            if entry.name != "tags.json" and not _is_project_tag_lock_artifact(legacy, entry)
+        )
     except OSError:
         return [legacy.name]
+
+
+def _is_project_tag_lock_artifact(project_metadata: Path, entry: Path) -> bool:
+    """Recognize only locks created for the supported project-local tags file."""
+
+    if entry.name != ".skillager-locks" or entry.is_symlink() or not entry.is_dir():
+        return False
+    expected = lock_path_for(project_metadata / "tags.json")
+    try:
+        children = list(entry.iterdir())
+    except OSError:
+        return False
+    return all(child == expected and not child.is_symlink() and child.is_file() for child in children)

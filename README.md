@@ -46,6 +46,10 @@ command when you are ready to finish review.
 
 `setup` discovers local/project skills, package-provided skills, collections, and native agent skills. Skillager makes discovered bodies available through its own activation and exposure commands only after review. Agent hosts can independently load directly installed native skills, so Skillager is a cooperative workflow layer rather than a sandbox. Register an external personal/team repository with `skillager collection add ~/skills/workflows --name workflows` when you want it in reusable inventory. Skillager is installed once as a user tool; it does not need to live inside every project environment.
 
+Project tags use the supported repository-local `.skillager/tags.json` file. That file
+and its exact lock artifact are curation metadata, not obsolete in-tree approval state;
+true legacy files such as an old `.skillager/trust.json` still require explicit review.
+
 `working --json` keeps the `skillager.working.v1` contract. Its additive advisory `exposure_changes` block reports live current-project managed copies that are locally edited, behind newly approved source content, partially missing, blocked, malformed, or unmanaged. A stale projection is excluded from current exposure counts and receives an explicit re-expose command; it is never refreshed automatically. `inventory` and `curation` distinguish source entries from agent-collapsed choices and suggest goal search without turning it into a required readiness action. `next` is empty when readiness is satisfied. Drift does not change readiness or the command's exit code, and Skillager never overwrites a locally edited exposure implicitly.
 
 ## Core Model
@@ -194,6 +198,10 @@ skillager setup --collection workflows --yolo --agent codex
 ```
 
 After review, collection skills are searchable from any project on your machine.
+Repeated setup reports discovery and prior blocks across the full selected scope, while
+keeping blocked skills out of its actionable approval selection. Existing verified
+routers remain visible in completion exposure totals, and an already-current Working
+artifact is not offered for redundant reinstallation.
 
 ## Package Authors
 
