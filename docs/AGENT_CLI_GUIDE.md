@@ -1,223 +1,286 @@
 # Agent CLI Guide
 
-This document is for coding agents reading a project that uses Skillager. Skillager's
-personal library is the canonical source for user-owned `lib/<name>` skills; project,
-package, environment, collection, and native-agent skills remain external inventory
-unless the user explicitly imports one.
+Use Skillager to find and apply reviewed skills without loading every available skill
+into the session. Handle routine selection and project curation yourself. Ask the
+user for approval, destructive choices, and personal-library version changes.
 
-Projects may expose a first-party `skillager-working` skill. Treat `skillager working --agent <agent> --json` as the readiness contract for Skillager-managed projects: run it after context resets, keep no-action readiness out of the user conversation, then curate available skills only when the user's task calls for a narrow router, stub, or native skill.
+## Start Or Resume Work
 
-The working contract remains `skillager.working.v1`. Additive `exposure_changes` is advisory current-project state and does not change readiness or exit status. Actionable items identify accepted-source updates, temporarily unavailable sources, local edits, partial missing targets, exposure-scoped blocks, malformed sidecars, and unmanaged native skills. Source updates are excluded from current exposure inventory and carry explicit re-expose commands; they are not synchronized automatically. A `source_unavailable` projection stays non-current and has no re-expose command until its exact source is approved and available again. `inventory` distinguishes source entries from agent-collapsed choices. `curation` is optional goal-search guidance and lists `existing_router_tags` when they should be considered first; only `next` contains readiness-required actions, and it is empty when readiness is satisfied.
-
-Availability is the eligibility gate. Agent-facing Skillager commands only surface skills the owner has made available. Choose among them by task relevance; do not ask for or reason about scanner, review, or trust diagnostics unless the user is explicitly doing Skillager administration.
-
-## Rules
-
-- Start resumed work with `skillager working --agent <agent> --json`; only mention it when readiness requires user action or the task calls for Skillager curation. A readiness review gate blocks managed-body use and exposure, but does not block an explicitly requested personal-library draft from being created or edited while unrelated review waits. The draft remains pending and unavailable until its own acceptance and project gates are satisfied.
-- Treat `exposure_changes` as advisory. When it reports `source_update`, follow its exact re-expose guidance only with user authorization; never call an old projection current. When it reports `source_unavailable`, resolve source approval or library availability before attempting exposure. Mention other drift only when it is relevant to the user's task or they ask about exposure/version state; do not treat it as approval or a readiness failure.
-- If Skillager state seems off mid-session, ask the user to run `skillager doctor --agent <agent>` before guessing. Re-run working after repairs if readiness changes.
-- If `working.library` is degraded because the registered root is missing, keep unrelated
-  work moving and direct the user to `skillager library status`; do not try to accept a
-  cached missing skill. Relocation requires the user to supply the existing moved root.
-- Do not run `skillager setup` or `skillager review ...` unless the user asked for setup or approval changes.
-- Treat `library init`, `library relocate ... --yes`, `library new`, and confirmation-bearing `library accept`, `library restore`, `import`, or exposure-removal commands as user-authorized mutations. `library new` may initialize the default library as part of the requested creation. Do not run these commands merely because a pending, historical, moved, or useful skill is discovered.
-- Do not run `skillager expose` until you have asked what the user plans to do and can justify the narrow router, stub, or native exposure.
-- You may add available skills to project-local tags and create scoped router/stub/native exposure after the user states their task. Report what changed.
-- Do not run `skillager activate` or `skillager show --content` for unavailable skills. Ask the user to run setup when Skillager says a skill is unavailable.
-- Do not use `--force` unless the user explicitly instructs you to override Skillager's gate.
-- Prefer `--json` when parsing output.
-- Do not search Skillager on every user message. Search only when the task/domain changes, specialized help is likely useful, you are unsure how to proceed and an available skill may contain the right workflow, working state changed, or the user asks about skills.
-- Once you choose a native skill or router path for a task, keep using it until the task changes.
-
-## Safe Metadata Commands
-
-These commands do not expose full skill bodies. In a project, normal `list`, `search`, and `show` use effective project inventory: project skills, package/environment skills, and reviewed collection skills that are available to the current project. `list` hides global native skills by default; pass `--include-global` only when the user is asking about global inventory. Plain human `list` and `review` output may include a trailing hint such as `N lint-blocked skills hidden; add --include-lint-blocked to see them.` Treat that as owner-diagnostic guidance, not as available skill inventory.
+Run this after a context reset or resumed session:
 
 ```bash
 skillager working --agent codex --json
-skillager library status --json
-skillager library status lib/<name> --json
-skillager library history lib/<name> --json
-skillager library diff lib/<name> --from <hash> --to <hash> --stat --json
+```
+
+Use `--agent claude` for Claude.
+
+Read the result this way:
+
+- If `can_proceed` is true, continue quietly.
+- If `next` contains an action, ask the user to run its exact command.
+- Treat `curation` as optional guidance, not required work.
+- Treat `exposure_changes` as advisory. Mention it only when it affects the task or
+  the user asks about Skillager state.
+
+Do not run setup or review commands just because Skillager found unavailable skills.
+Those commands change what the owner allows. Ask the user to run the command that
+`working` provides.
+
+If Skillager looks inconsistent or the suggested action fails, ask the user to run:
+
+```bash
+skillager doctor --agent codex
+```
+
+Re-run `working` after the user completes a readiness repair.
+
+## Decide Whether To Search
+
+Search when:
+
+- the task enters a specialized domain;
+- the workflow or technology changes;
+- a reviewed skill could materially improve the work;
+- you are unsure how to proceed; or
+- the user asks what skills are available.
+
+Do not search on every message. Keep using the selected skill path until the task
+changes.
+
+Start with the user’s actual goal:
+
+```bash
+skillager search "<user goal>" --agent codex --json
+```
+
+Use a few focused searches when the task has distinct parts. Use the summary list
+only when you need orientation before searching:
+
+```bash
 skillager list --summary-json --agent codex
 skillager show <skill-id> --json
-skillager search "<user goal>" --json
-skillager tag show <tag> --json
 skillager tag list --json
+skillager tag show <tag> --json
 ```
 
-Use `review --collection <name> --summary` or `review --collection <name> --json` only for owner-directed collection review/diagnostics. For project work, prefer the normal project-aware commands above.
-`library status`, a bare `library relocate --path ...` preview, `library history`, and `library diff --stat` are metadata-only and read-only. Plain `library diff` is content-bearing and should be used only for explicit human/admin content review. `library init`, `library relocate ... --yes`, `library new`, and a preview-returned confirmation command write user-level state and must reflect explicit user intent. Initialization and creation never approve or expose bodies, and generic `--force` or `--include-unreviewed` flags cannot bypass a pending library hash. `library new` initializes the default library when needed and returns the canonical `SKILL.md` path. Run `library init` first only when the user requests a custom path or no Git history. Ask the user to review `skillager library accept lib/<name> --json`, then execute the returned `next_command_argv` exactly when they authorize that preview.
+These commands return metadata. Normal selection should not require scanner details,
+approval internals, source paths, or `--full-json`.
 
-A normal `skillager import <external-id> --json` is a read-only owner preview, even when no library exists. The confirmed command initializes the default library when needed. Import review includes scanner/lint administration and should be run only for a user-directed adoption workflow. Never invent a confirmation token or modify its returned command; execute `next_command_argv` only after the user's explicit decision to adopt that exact source and destination. Stale tokens are refused.
+## Select Skills
 
-When `exposure_changes` reports a local edit, do not infer whether it should be kept or discarded. Exposed copies are managed projections. Compare an intentional edit with the canonical path from `library status`, move intended work into the library, accept the new exact hash, and re-expose only with user authorization. Local-edit detection covers all target entries, including cache/editor files excluded from canonical source identity. Removal is preview-first and refuses local edits unless the user explicitly authorizes a `--force` preview bound to the complete target and sidecar. `expose --force` is appropriate only when the user explicitly chooses to replace or discard the local target.
-`working --agent <agent> --json`, `list --json`, `show --json`, `tag show --json`, `tag list --json`, and `search --json` are intentionally compact for agent use. Do not use `--full-json` during normal project work; reserve it for explicit user-directed Skillager diagnostics.
-Project-aware JSON includes:
+Availability is the eligibility gate. Use only skills returned as available by normal
+`search`, `list`, `show`, or tag commands.
 
-- `availability`: where the skill comes from in this project context.
-- `available`: whether this metadata entry is eligible for agent use.
-- `exposure`: `hidden`, `native`, `stub`, `router`, or `multiple`.
-- `exposed_via`: compact router/stub/native exposure hints in search results.
-- `tagging`: available untagged collection skills that may be useful to curate for the current project.
-- `authored_pending_owner_review`: status count for user-local authored skills that are not available yet.
-- `agent_variant`: duplicate native-variant hints. Matching-agent variants are ranked first when the active agent is known, but alternatives remain visible and usable.
-- `compatibility`: negative-only compatibility metadata. Missing metadata means "assume usable." `problem` is set only when the skill explicitly excludes the requested `--agent`.
-- `exposure_changes`: metadata-only current-project drift counts and actionable items. It never contains skill bodies; it compares sidecar source hashes with current approved hashes so stale projections are explicit.
+Choose by relevance to the user’s goal. Do not rank available skills by trust labels,
+scanner results, native-agent origin, or whether they already have a project shortcut.
 
-Pending owner review means Skillager found skills outside the available set. Treat them as unavailable and ask the user to run setup when they want to make more skills available. If `show <id>` returns quarantined lint-blocked metadata, do not activate or request content; ask the user to fix the source or run the audited override command shown by Skillager.
+Compatibility defaults to usable. If metadata has no explicit compatibility problem,
+continue. If it reports `compatibility.problem`, do not activate or expose the skill
+for that agent unless the user explicitly authorizes `--allow-incompatible`.
 
-## Compatibility
+When a skill is unavailable, do not request its body or bypass the gate. Tell the user
+that it needs review and provide the setup command Skillager returned.
 
-Skillager defaults to compatibility. Do not hide a skill just because it was written in another agent's style.
+## Use Skills On Demand
 
-Use compatibility metadata this way:
+Prefer on-demand use for one-off work. A managed router or stub gives the exact guarded
+activation command.
 
-- Use `skillager list --summary-json --agent <agent>` for orientation before targeted searches. It reports compact counts, all listed skill IDs, and duplicate-variant hints.
-- If `skillager search --agent codex --json` reports `compatibility.problem`, do not activate or expose that skill for Codex unless the user explicitly approves `--allow-incompatible`.
-- If `activation_warnings` are present without `problem`, the skill is still available. Treat the warning as adaptation guidance.
-- Prefer `--compatible-only --agent <agent>` only when the user asks for skills that can be used without adaptation.
-- Do not infer incompatibility from advisory warnings alone.
-
-Activation and native/stub exposure refuse explicit incompatibility by default:
+From a router:
 
 ```bash
-skillager activate <skill-id> --agent codex
-skillager expose <skill-id> --agent codex
+skillager activate <skill-id> --from-router <router-slug> --agent codex
 ```
 
-The explicit override is:
+From a stub:
 
 ```bash
-skillager activate <skill-id> --agent codex --allow-incompatible
-skillager expose <skill-id> --agent codex --allow-incompatible
+skillager activate <skill-id> --from-stub <stub-slug> --agent codex
 ```
 
-## Agentic Setup Flow
+Use the actual slug in the managed skill. Do not substitute a tag name or guessed
+slug. Activation fails if the skill is not available or not listed by that router or
+stub.
 
-After setup, Skillager installs or refreshes the `skillager-working` readiness skill for the chosen agent without modifying `AGENTS.md`, `agents.md`, or `CLAUDE.md`. That one skill covers both quiet agent operation and explicit user-directed personal-library work. The user may also have exposed a small always-relevant native set during setup. In the next agent session, run `skillager working --agent <agent> --json`; then use available metadata and the user's goal to curate tags and decide whether to expose:
+You may activate an available skill when it is relevant to the task. Availability
+already records the owner’s review; activation does not change approval.
 
-- a narrow native skill for a specific recurring workflow
-- a stub for an available command the user wants easy access to by name
-- a router skill for a broad project-local tag or explicit short skill set
-- nothing, if the existing project exposure is enough
+## Create Focused Project Shortcuts
 
-Before changing tags or exposure, search available metadata using the user's actual goal. Run a few focused searches only when the goal has distinct facets, such as domain terms, package/project names, and workflow terms. Search JSON is ranked monotonically by its displayed floating-point `score` and includes match `reasons`; generic natural-language terms do not create body-only results, while distinctive reviewed-body terms remain searchable. Use `--limit <n>` to widen or narrow results. Search `--full-json` implies JSON and is only for explicit diagnostics such as `score_detail`, source paths, and full exposure records. Use `skillager list --summary-json --agent codex` only when you need orientation before a targeted search. Prefer an existing matching router, choose the narrowest directly useful path, and keep the long tail on demand; do not manufacture a candidate-count or confidence-scoring ritual.
+After the user states the task, decide whether future sessions need a project
+shortcut. Prefer the smallest useful choice:
 
-Do not use review diagnostics as curation criteria for available skills. Availability is the gate; relevance to the user's stated task decides selection and exposure.
+| Need | Action |
+| --- | --- |
+| One-off help | Keep the skill on demand. |
+| One recurring skill | Expose a stub, or native when its full instructions should always load. |
+| A recurring group | Add a focused tag and expose one router. |
+| A short temporary group | Expose explicit skill IDs as one router without creating a tag. |
 
-Add relevant available skills to a focused tag when a project or session theme emerges. `tag add` can use registered collection skill IDs or available IDs from the current project inventory, including auto-discovered child repositories:
-
-```bash
-skillager tag add gis vibespatial/gis-domain vibespatial/dispatch-wiring
-skillager tag add workflows --from-collection community --sync
-```
-
-Prefer router exposure for broad tags:
-
-```bash
-skillager expose --tag workflows --mode router --agent codex --scope project
-```
-
-For a short ad-hoc set that does not need a reusable tag, expose explicit skill IDs. This creates a deterministic explicit router:
-
-```bash
-skillager expose workflows/release-check workflows/pr-review --mode router --agent codex --scope project
-```
-
-Prefer native exposure for narrow, high-signal project skills:
-
-```bash
-skillager expose project/gis-domain --agent codex --scope project
-```
-
-Prefer stub exposure for available commands the user wants discoverable without loading full instructions:
-
-```bash
-skillager expose personal/deploy-preview --mode stub --agent codex --scope project
-```
-
-When a stub tells you to activate a skill, use the exact guarded command from the stub:
-
-```bash
-skillager activate <skill-id> --from-stub <stub-slug>
-```
-
-Do not expose every available skill just because it is available. Availability means a skill is allowed to be considered; exposure should still be scoped to the user's stated work. User naming, the stated task, and clear relevance decide exposure. Static metadata hints such as `user-invokable`, native agent provenance, clear workflow names, and focused summaries are weak evidence unless they agree with each other.
-
-## User-Gated Commands
-
-These commands change approval state or expose full instructions:
-
-```bash
-skillager setup --agent codex
-skillager setup --agent claude
-skillager setup --collection <name> --agent codex
-skillager setup --collection <name> --bulk-approve --agent codex
-skillager setup --collection <name> --yolo --agent codex
-skillager setup --collection <name> --bulk-approve --project-only --agent codex
-skillager review approve <skill-id>
-skillager review approve <skill-id> --project-only
-skillager review approve <skill-id> --override-lint --reason "<why this is acceptable>"
-skillager review pin <skill-id>
-skillager review pin <skill-id> --project-only
-skillager review block <skill-id>
-skillager review unblock <skill-id>
-skillager activate <skill-id>
-skillager show <skill-id> --content
-```
-
-These commands curate or expose available skills. They are agent-managed after the user states the task; report what changed:
+Build a reusable group:
 
 ```bash
 skillager tag add <tag> <skill-id> [<skill-id> ...]
-skillager tag add <tag> --from-collection <collection> --sync
-skillager tag show <tag>
-skillager tag list
-skillager tag delete <tag>
-skillager tag sync --from <project> --to <project>
 skillager expose --tag <tag> --mode router --agent codex --scope project
+```
+
+Build an ad-hoc router:
+
+```bash
 skillager expose <skill-id> <skill-id> --mode router --agent codex --scope project
+```
+
+Expose one recurring skill:
+
+```bash
 skillager expose <skill-id> --mode stub --agent codex --scope project
-skillager expose <skill-id> --agent codex --scope project
+skillager expose <skill-id> --mode native --agent codex --scope project
 ```
 
-## Router Skills
+Do not expose everything available. Report the tag or project files you changed and
+why they fit the stated work.
 
-A Skillager router skill is a compact project skill that lists available skill IDs and author summaries for a tag or explicit selection. It does not contain the hidden skill bodies. Unavailable or incompatible members are skipped.
+## Respect Owner Boundaries
 
-Tag router:
+Do not change approval state unless the user asked for setup or review. Do not use
+`--force`, `--override-lint`, or `--allow-incompatible` without explicit permission
+for that action.
+
+The following decisions belong to the user:
+
+- making new or changed skill content available;
+- accepting a personal-library edit;
+- importing or restoring a personal skill;
+- approving flagged or explicitly incompatible instructions;
+- discarding edits from a managed project copy; and
+- relocating the personal library.
+
+Preview commands are not approval. Show the result, explain the change in plain
+language, and wait. When the user approves, execute the returned
+`next_command_argv` exactly. Never invent a confirmation token or edit the generated
+command. If it goes stale, show the new preview and ask again.
+
+## Manage A User-Requested Personal Skill
+
+A request to create or edit a named personal skill authorizes that draft workflow. It
+does not authorize acceptance, exposure, or a lint override.
+
+### Create
+
+Create the draft:
 
 ```bash
-skillager expose --tag gis --mode router --agent codex --scope project
+skillager library new <name> --json
 ```
 
-Ad-hoc explicit router:
+This initializes the default library when needed. Run `skillager library init` first
+only when the user requests a custom path or no Git history.
+
+Edit the returned canonical `SKILL.md` with normal file tools. Use an applicable
+skill-authoring workflow for content guidance, but do not run another scaffold over
+the draft. Do not turn an external skill into an owned one unless the user asked to
+import it.
+
+Preview acceptance:
 
 ```bash
-skillager expose <skill-id> <skill-id> --mode router --agent codex --scope project
+skillager library accept lib/<name> --json
 ```
 
-The expose output and JSON include the router exposure id/slug. When a router tells you to activate a skill, use that slug:
+Summarize what changed and ask the user to approve the preview. Run its exact next
+command only after approval.
+
+### Edit
+
+Find the canonical path before editing:
 
 ```bash
-skillager activate <skill-id> --from-router <router-slug>
+skillager library status lib/<name> --json
 ```
 
-This command refuses skills outside the router and skills that are not available. The
-named managed router must actually be exposed in the current project; a project tag
-with a matching name is not an activation credential. Use the actual slug returned by
-`expose`, which may have a deterministic suffix when another managed projection owns
-the natural host slug.
+Edit that path, then follow the same acceptance preview. Authorship does not make the
+new content available automatically.
 
-## If Working Reports New Skills
+### Import
 
-Tell the user exactly what happened and ask them to run setup:
+When the user asks to adopt an external skill, preview it:
+
+```bash
+skillager import <external-id> --json
+```
+
+Report the source, destination, and warnings. The preview is read-only, including on
+first use. Confirmation may initialize the default library and copy the reviewed
+skill; it leaves the external source unchanged.
+
+### Compare Or Restore
+
+Use metadata-only history and diff summaries first:
+
+```bash
+skillager library history lib/<name> --json
+skillager library diff lib/<name> --from <hash> --to <hash> --stat --json
+```
+
+Use a content-bearing diff only when the user asked to inspect the content. Preview a
+restore with:
+
+```bash
+skillager library restore lib/<name> --to <hash> --json
+```
+
+Explain the selected version and ask before running the returned command.
+
+## Handle Exposure Changes
+
+`exposure_changes` does not block otherwise ready work.
+
+- `source_update`: the managed copy is behind accepted source content. Do not call it
+  current. Re-expose only when the user authorizes the suggested refresh.
+- `source_unavailable`: do not use or refresh the copy until its exact source becomes
+  available again.
+- `local_edit`: do not overwrite or remove it. Ask whether the edit should be kept.
+- malformed, partial, blocked, or unmanaged target: explain the issue when relevant
+  and use Doctor if the repair is unclear.
+
+For an intentional edit to an owned projection:
+
+1. Compare it with the canonical path from `skillager library status`.
+2. Move the intended change into the library.
+3. Preview and accept the library edit with the user.
+4. Re-expose only after the user authorizes the refresh.
+
+Use `--force` only when the user explicitly chooses to discard the project copy.
+
+## Recover Common Problems
+
+| Working reports | Action |
+| --- | --- |
+| Owner review required | Ask the user to run the exact setup command in `next`. |
+| Working helper missing or stale | Ask the user to run the Doctor repair command. |
+| Personal library missing | Keep unrelated work moving; ask the user to run `skillager library status`. |
+| Personal skill pending | Keep it unavailable; preview `skillager library accept` only for the requested ownership workflow. |
+| Skill explicitly incompatible | Choose another skill or ask before using `--allow-incompatible`. |
+| Local exposure edit | Preserve it until the user decides whether to keep or discard it. |
+
+Do not guess repair flags. Run the relevant command with `--help` when the generated
+guidance is insufficient.
+
+## Command Boundary
+
+Routine agent commands:
 
 ```text
-Skillager reports new or changed skills. Please run `skillager setup` from this project directory before I use Skillager-managed skills.
+working, list, search, show without --content, tag list/show/add,
+activate available skills, and focused expose after the user states the task
 ```
 
-When you know your agent target, prefer `skillager setup --agent codex` or `skillager setup --agent claude` so setup can refresh that agent's first-party working skill after review.
+Owner-directed commands:
 
-If working reports skills pending owner review, tell the user that Skillager has additional skills which are not available yet and ask them to run setup. If readiness looks broken or stale, ask them to run `skillager doctor --agent <agent> --fix`.
+```text
+setup, review, library acceptance/restore/relocation, import confirmation,
+show --content outside guarded activation, force, lint override, and compatibility override
+```
+
+Prefer `--json` when reading output. Keep successful readiness checks and routine
+metadata search out of the conversation; report decisions, changes, and blockers.
