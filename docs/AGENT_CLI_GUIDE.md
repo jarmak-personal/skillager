@@ -1,8 +1,12 @@
 # Agent CLI Guide
 
-Use Skillager to find and apply reviewed skills without loading every available skill
-into the session. Handle routine selection and project curation yourself. Ask the
-user for approval, destructive choices, and personal-library version changes.
+This guide is a reference for people who maintain or review Skillager's agent
+workflow. Agents do not need access to it. The installed `skillager-working` skill,
+`skillager working --json`, and command-specific help provide the runtime contract.
+
+Use Skillager to find and apply reviewed skills. Handle routine selection and
+project curation yourself. Ask the user for approval, destructive choices, and
+personal-library version changes.
 
 ## Start Or Resume Work
 

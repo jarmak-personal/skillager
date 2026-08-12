@@ -167,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
             Important rules:
               - Library ownership never bypasses exact-hash acceptance.
               - External skills remain at their source unless explicitly imported.
-              - Do not activate or expose unavailable skills unless the user explicitly asks.
+              - Never activate or expose unavailable skills; ask the user to complete setup or review.
               - Agents should run `skillager working --json` after context resets and continue quietly when it reports ready.
               - Agents should ask the user to run `skillager setup` when external skills need owner review.
               - Prefer project scope inside repos so users can inspect managed copies; edit owned skills in the library.
