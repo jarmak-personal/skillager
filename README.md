@@ -29,11 +29,13 @@ uv tool install skillager
 skillager setup --agent codex
 ```
 
-Then restart your agent in the project and have it run:
+Then restart your agent in the project and tell it what you want to accomplish:
 
-```bash
-skillager working --agent codex --json
-```
+> Check Skillager readiness, then help me with `<goal>`. Use an available skill only
+> if it materially helps, and keep any project exposure focused.
+
+The installed Working skill teaches the agent to run the readiness command, search
+approved metadata, and continue quietly when Skillager needs no attention.
 
 Once setup has approved inventory, it installs one first-party `skillager-working`
 skill. It covers quiet agent-owned selection/exposure and explicit user-directed
@@ -87,29 +89,49 @@ preserved at deterministic alternate slugs rather than silently replacing each o
 
 Metadata commands stay metadata-only: `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, `doctor`, `library status`, `library history`, `library diff --stat`, and summary or full metadata JSON do not print full skill bodies. Scanner summaries on those surfaces contain rule codes and locations, never matched instruction excerpts.
 
-## Common Commands
+## Work With Your Agent
+
+Describe the outcome you want rather than translating it into Skillager commands.
+These prompts cover the common workflows:
+
+- **Use the right skills for this task:** “Check Skillager, then help me `<goal>`. Use
+  available skills if useful, but don't expose anything we won't reuse.”
+- **See choices before curation:** “What available skills best match `<goal>`? Show me
+  the short list before changing tags or exposure.”
+- **Curate recurring project work:** “We will repeatedly do `<workflow>` here. Create
+  the smallest useful Skillager tag or router and leave everything else on demand.”
+- **Create an owned skill:** “Create a personal skill named `<name>` for `<purpose>`.
+  Work in the canonical library copy and show me the exact acceptance preview; don't
+  accept it until I approve.”
+- **Adopt an external skill:** “Import `<skill-id>` into my personal library. Show me
+  the source, destination, and exact preview before confirming anything.”
+- **Inspect or recover a version:** “Show me the verified history for `lib/<name>`,
+  explain the relevant diff, and prepare a restore preview without applying it.”
+- **Handle drift safely:** “Check Skillager health. If a managed copy is stale or
+  locally edited, explain what would change before repairing or removing anything.”
+
+## Commands You Run
 
 | Task | Command |
 | --- | --- |
 | Review or refresh a project | `skillager setup --agent codex` |
-| Check readiness and get a compact next hint | `skillager working --agent codex` |
-| Diagnose state | `skillager doctor --agent codex` |
+| Diagnose state or follow a reported repair | `skillager doctor --agent codex` |
+| Register an external skill repository | `skillager collection add ~/skills/workflows --name workflows` |
 | Initialize your personal library | `skillager library init` |
-| Inspect personal library and Git state | `skillager library status --json` |
+| Inspect personal library and Git state | `skillager library status` |
 | Create a pending personal skill | `skillager library new my-skill` |
-| Locate a personal skill | `skillager library status lib/my-skill` |
-| Preview acceptance of the exact current personal-skill hash | `skillager library accept lib/my-skill --json` |
-| Preview adoption of a discovered external skill | `skillager import workflows/pr-review --json` |
-| Inspect verified personal-skill versions | `skillager library history lib/pr-review --json` |
+| Review and accept the exact current personal-skill hash | `skillager library accept lib/my-skill` |
+| Review and adopt a discovered external skill | `skillager import workflows/pr-review` |
+| Inspect verified personal-skill versions | `skillager library history lib/pr-review` |
 | Compare personal-skill versions | `skillager library diff lib/pr-review --from <hash> --to <hash>` |
-| Preview restoring a verified version as a new commit | `skillager library restore lib/pr-review --to <content-hash> --json` |
-| Repair the Skillager working skill | `skillager doctor --agent codex --fix` |
-| Approve a skill | `skillager review approve workflows/pr-review` |
-| Expose a tag as a router | `skillager expose --tag workflows --mode router --agent codex --scope project` |
-| Expose explicit skills as one router | `skillager expose workflows/pr-review workflows/release-check --mode router --agent codex --scope project` |
-| Expose one skill as a stub | `skillager expose workflows/pr-review --mode stub --agent codex --scope project` |
+| Review restoring a verified version as a new commit | `skillager library restore lib/pr-review --to <content-hash>` |
 
-Read-only allowlist examples for agent permission prompts: [`codex`](examples/codex-allowlist.json), [`claude`](examples/claude-allowlist.json). Keep mutating commands user-run unless you intentionally delegate them.
+The agent normally owns `working`, metadata search/list/show, project tags, guarded
+activation, and narrow exposure. You can still run those commands directly, but they
+are not the primary user workflow. Confirmation-bearing acceptance, import, restore,
+removal, force, and override actions always require an explicit user decision.
+
+Read-only allowlist examples for agent permission prompts: [`codex`](examples/codex-allowlist.json), [`claude`](examples/claude-allowlist.json).
 
 ## Personal Library
 
