@@ -1,161 +1,187 @@
 # Skill Repositories
 
-Many users have repositories full of skills. Skillager distinguishes a repository the
-user owns as their canonical personal library from repositories they consume as
-external collections.
+Use a skill repository when another person or team maintains skills you want to use.
+Skillager reviews those skills where they are; it does not move them into your
+personal library. Skillager calls a repository registered across projects a
+collection.
 
-Collections are user-global source inventory for administration, review, refresh, and catalog debugging. Project-local tags are the project curation surface for routers, stubs, and task-specific grouping.
+## Choose How To Use The Repository
 
-| Intent | Skillager path |
+| What you want | What to do |
 | --- | --- |
-| Create and maintain skills you own | `skillager library new <name>` |
-| Preview taking ownership of one external skill | `skillager import <external-id> --json` |
-| Search/review a repository without copying it | `skillager collection add ...` |
-| Use a repository cloned inside one project | Run project `setup`; child repositories are discovered automatically |
+| Use a repository in one project | Clone it inside that project, then run setup. |
+| Use a repository across projects | Register it as a collection, then review it. |
+| Maintain your own copy of one skill | Import that skill into your personal library. |
+| Create skills you own | Use `skillager library new <name>`. |
 
-The personal library is plain files and optional Git history; it is not a hosted
-registry. Collections remain the right model for company, community, and upstream
-repositories whose canonical copies live elsewhere.
+Keep a skill external when you want to follow its upstream changes. Import it only
+when you intend to maintain an independent copy.
 
-## Own Or Adopt A Skill
+## Use A Repository In One Project
 
-Create your first owned skill; Skillager initializes the default personal library
-when needed:
+Clone the repository inside your project, then run normal setup:
 
 ```bash
-skillager library new release-check
-# Edit the SKILL.md path returned above.
-skillager library accept lib/release-check --json
-# Review the preview, then execute its next_command_argv exactly.
+cd my-project
+git clone <repo-url> agent-workflows
+skillager setup --agent codex
 ```
 
-Run `skillager library init --path <path>` first only to choose another location, or
-use `skillager library init --no-git` to disable history.
+Use `--agent claude` for Claude.
 
-To adopt one reviewed skill from an external repository without changing that
-repository:
+Skillager discovers repositories cloned directly inside a project when their skills
+use common directories such as `skills/` and `.agents/skills/`. Each skill needs a
+`SKILL.md`; `skillager.yaml` is optional. You do not need to register the repository
+separately.
 
-```bash
-skillager import community/release-check --json
-skillager import community/release-check --as release-check --json
-# Review the preview, then execute its next_command_argv exactly.
-```
+After review, tell your agent what you want to accomplish:
 
-Import copies only that skill's canonical agent-visible tree, records exact upstream
-provenance, and makes the accepted library copy independently maintainable. Keep the
-skill external when you only want to search, activate, or expose the upstream copy.
+> Check Skillager for any reviewed skills in `agent-workflows` that help with
+> `<goal>`. Keep one-off help on demand.
 
-## Add A Skill Repository
+## Use A Repository Across Projects
+
+Clone the repository once, then register it from a project that will use it:
 
 ```bash
 git clone <repo-url> ~/skills/community
+
+cd my-project
 skillager collection add ~/skills/community --name community
-skillager review --collection community --summary
-```
-
-Adding a collection does not expose skills to agents. It registers inventory only. Run setup once to review the collection; after approval, unchanged collection skills are searchable from any project that uses the same Skillager catalog.
-
-If you clone a skill repository directly inside a project directory, `skillager setup` also discovers immediate child repositories with common Skillager or agent-native skill roots such as `.skills/`, `skills/`, `.agents/skills/`, `.agents/<agent>/skills/`, `.codex/skills/`, and `.claude/skills/`. A repository like `./agent-workflows/skills/bisect/SKILL.md` works even when the skills do not have `skillager.yaml`; Skillager infers metadata from `SKILL.md`. After review, those project-inventory skills can be added to tags by ID without registering the child repository first.
-
-To review only collection skills:
-
-```bash
 skillager setup --collection community --agent codex
 ```
 
-Ordinary `skillager setup --agent <agent>` also includes registered collections. For fully trusted personal or company repositories, `skillager setup --collection community --bulk-approve --agent codex` is the fast path; `--yolo` is the fun alias for the same bulk approval path. Bulk approval reviews selected lint-blocked skills with an audited shortcut override. For untrusted repositories, use the normal review flow.
+Registration makes the repository discoverable across projects. It does not approve
+skills, copy files, or add skills to every agent session.
 
-`setup --collection <name> --agent <agent>` reviews that registered collection and refreshes that agent's first-party working skill after approval. If review is complete but `working --agent <agent> --json` still reports a missing or stale working skill, run `skillager doctor --agent <agent> --fix`.
+Normal project setup includes registered collections. Use `--collection community`
+when you want to review only this repository.
 
-Collection skills use the same manifest hardening as project skills. Invalid `skillager.yaml` files become lint-blocked quarantine records with safe finding summaries. Use `skillager review --collection <name> --include-lint-blocked --json` to inspect them without printing hostile manifest contents. Repository authors can run `uvx --from skillager-linter skillager-lint .` in CI before publishing.
-
-## Curate With Tags
-
-After review, collection skills are already part of effective project inventory. Tags are useful when a large collection should be split into smaller project-relevant groups or exposed through a compact router:
+Skillager can reuse your review of an unchanged collection skill in other projects.
+Keep a decision local to the current project with:
 
 ```bash
-skillager tag add gis community/gis-domain community/topology community/projections
-skillager tag add gis vibespatial/gis-domain
-skillager tag add all-community --from-collection community --sync
-skillager tag show all-community
-skillager tag list
-skillager tag delete old-community
-skillager tag show gis
-skillager tag sync --from ../other-project --to .
+skillager setup --collection community --agent codex --project-only
 ```
 
-`tag add <tag> --from-collection <collection> --sync` creates or updates a project-local tag from that collection's available reviewed skills. Blocked, unreviewed, and lint-blocked skills are not added to the synced tag.
-
-Tags live in `<project>/.skillager/tags.json`. `tag add` accepts available registered collection skill IDs and available current project inventory IDs. Use `tag show`, `tag list`, `tag delete`, and `tag sync` for project curation. This lets agents maintain useful project tags after setup while user-authority review stays in the global trust/catalog state.
-Tag show/search commands hide lint-blocked skills unless you pass `--include-lint-blocked` for diagnostics. That flag only changes read-only visibility; it never approves or exposes a skill.
-
-Project tags do not broadcast live across repositories. Use `tag sync --from <project> --to <project>` for an explicit copy, or `--to-all` to copy to known projects recorded by setup or doctor repair.
-
-## Project Tags
-
-From the project directory:
+If you control every skill in the repository, setup also offers a bulk approval path.
+Use it only when you intend to approve flagged skills as well as ordinary ones:
 
 ```bash
-skillager tag add gis community/gis-domain
-skillager tag add workflows --from-collection community --sync
-skillager tag list
+skillager setup --collection community --agent codex --bulk-approve
 ```
 
-A tag belongs to a project by existing in that project's tag file. Create or update tags directly with `skillager tag add`, inspect them with `skillager tag list` and `skillager tag show`, remove them with `skillager tag delete`, and copy reviewed curation explicitly with `skillager tag sync`. When a project tag is created while using an external catalog location, Skillager records that catalog path in the tag file so later `search`, `show`, and guarded `activate` commands work without repeating `--catalog-state-dir`.
+Use the normal setup flow for repositories you do not fully control.
 
-For older global-tag installs, review any curation you still want, recreate it with `skillager tag add` or copy from another reviewed project with `skillager tag sync`, then remove obsolete legacy state.
+## Ask Your Agent To Use Repository Skills
 
-After review, keep most large-repository skills searchable behind Skillager. Expose only a small native set that is always relevant to the project, use stub mode for approved commands that should be visible by name, or use router mode for a curated tag when the agent needs broad access without loading every skill. Agents may update tags and scoped exposure after you tell them what you are working on; they should report the changes they made.
+Reviewed collection skills stay available without entering every conversation. Give
+your agent the goal and how often you expect to repeat the work:
 
-After review, available collection skills are part of effective project inventory whether or not they are in a project tag. Agents can use normal project commands instead of collection-specific commands:
+- “Find the best reviewed `community` skills for `<goal>`. Show me the shortlist
+  before changing the project.”
+- “Use any relevant `community` skill for this one-off task, but keep it on demand.”
+- “We will repeat `<workflow>`. Create the smallest useful project shortcut to the
+  reviewed `community` skills and report what you add.”
+
+The agent handles skill search and focused project shortcuts. You retain approval of
+new or changed skill content.
+
+## Adopt One Skill
+
+Import one repository skill when you want to edit, version, or maintain your own copy:
 
 ```bash
-skillager search "mapping workflow" --json
-skillager show community/gis-domain --json
-skillager list --summary-json --agent codex
+skillager import community/release-check
 ```
 
-Use `skillager review --collection <name> --summary` or `--json` for collection review and diagnostics. Use `--include-lint-blocked` only when diagnosing rejected collection entries.
-
-## Router Mode
-
-For large tags, prefer router mode:
+Choose a different personal name when needed:
 
 ```bash
-skillager expose --tag gis --mode router --agent codex --scope project
+skillager import community/release-check --as team-release-check
 ```
 
-For a one-off set, pass explicit available skill IDs instead of creating a tag:
+The preview shows the source and personal-library destination without copying files.
+Confirmation copies only that skill and leaves the repository unchanged. Your copy
+then follows the personal-library review and version workflow.
+
+Ask your agent to handle the same workflow with:
+
+> Show me the `community/release-check` source and proposed personal copy. Ask before
+> importing anything.
+
+See the [user guide](USER_GUIDE.md) for editing and restoring personal skills.
+
+## Update A Registered Repository
+
+Skillager never runs `git pull`. Update the checkout yourself, then refresh and review
+it from the project:
 
 ```bash
-skillager expose vibespatial/gis-domain vibespatial/dispatch-wiring --mode router --agent codex --scope project
-```
-
-This writes one compact native router skill. The router includes available skill IDs and author summaries, not full skill bodies, then tells the agent to activate a specific skill through Skillager when needed. Unavailable or incompatible members are skipped. The expose output and JSON give the router exposure id/slug for activation:
-
-```bash
-skillager activate <skill-id> --from-router <router-slug>
-```
-
-For personal command collections where the names themselves are useful, expose selected commands as stubs:
-
-```bash
-skillager expose personal/deploy-preview --mode stub --agent codex --scope project
-```
-
-A stub is a tiny native skill containing the author summary and activation command. It does not include the full skill body.
-
-Router and stub skills include compatibility notes when Skillager sees strong harness-specific assumptions. Those notes are advisory unless the source skill explicitly declares `exclusive_to` or `incompatible_with`.
-
-## Updating A Collection
-
-`refresh` re-walks and re-scans the local directory. It does not run `git pull`.
-
-```bash
-cd ~/skills/community
-git pull
+git -C ~/skills/community pull
 skillager collection refresh community
-skillager doctor --include-global
+skillager setup --collection community --agent codex
 ```
 
-Reviewed git-backed collection skills are approved by logical source and content hash, so the same unchanged skill can appear in another clone or project without another approval prompt. Changed skill content gets a new content hash and must be reviewed again before activation. Use `--project-only` with `setup`, `review approve`, or `review pin` when a decision should not be reusable.
+Unchanged skills keep their existing review. Changed skills wait for approval before
+your agent can use the new content.
+
+List or remove registrations with:
+
+```bash
+skillager collection list
+skillager collection remove community
+```
+
+Removing a collection does not delete its repository or any skill you previously
+imported into your personal library.
+
+## Publish A Skill Repository
+
+Put each skill in its own directory with a `SKILL.md`:
+
+```text
+my-skills/
+  skills/
+    release-check/
+      SKILL.md
+      references/
+      scripts/
+```
+
+Give `SKILL.md` a clear name and description so agents can select it from metadata:
+
+```markdown
+---
+name: release-check
+description: Check release readiness, changelog coverage, and rollback steps.
+---
+
+# Release Check
+
+Follow the repository's release checklist.
+```
+
+Validate the repository before sharing it:
+
+```bash
+uvx --from skillager-linter skillager-lint .
+```
+
+See the [author guide](LIBRARY_AUTHORS.md) for package layouts, optional metadata,
+compatibility, and CI examples.
+
+## Collection Commands
+
+| Goal | Command |
+| --- | --- |
+| Register a repository | `skillager collection add <path> --name <name>` |
+| List registrations | `skillager collection list` |
+| Rescan local files | `skillager collection refresh <name>` |
+| Review one collection | `skillager setup --collection <name> --agent codex` |
+| Remove a registration | `skillager collection remove <name>` |
+| Adopt one skill | `skillager import <collection>/<skill>` |
+
+Your agent normally handles searches and project curation after review. See the
+[agent CLI guide](AGENT_CLI_GUIDE.md) for those commands and
+`skillager collection --help` for the full collection interface.
