@@ -399,14 +399,15 @@ skillager library history <lib-skill> --json
 When the user asks to manage owned skills, inspect the relevant command's `--help`
 before mutating state and follow generated preview/next-command output. Never guess
 flags. A request to create or edit a named skill authorizes that narrow draft workflow
-and any required library initialization, but not acceptance or an override. A request
+and default first-use library initialization, but not acceptance or an override. A request
 to expose a named skill to a named agent and scope authorizes that narrow exposure once
 the skill is available; it does not waive the acceptance gate.
 
-1. For a new owned skill, inspect library status, initialize only when required, create
-   it with `skillager library new <name> --json`, then edit the returned canonical
-   `SKILL.md` path with normal agent tools. Use an available skill-authoring workflow
-   for content and validation guidance, but do not run a second scaffold initializer.
+1. For a new owned skill, run `skillager library new <name> --json`; it initializes
+   the default library when needed. Run `library init` first only when the user asks
+   for a custom path or no Git history. Edit the returned canonical `SKILL.md` path
+   with normal agent tools. Use an available skill-authoring workflow for content and
+   validation guidance, but do not run a second scaffold initializer.
    Do not convert external inventory implicitly.
 2. Preview acceptance, restore, and import before any version-changing action.
    Preserve and show the exact generated next command.

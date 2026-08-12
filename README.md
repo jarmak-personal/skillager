@@ -5,279 +5,150 @@
 [![Packages](https://img.shields.io/badge/packages-Python%20%7C%20npm%20%7C%20Cargo-c2410c)](docs/LIBRARY_AUTHORS.md)
 [![License](https://img.shields.io/badge/license-MIT-7c3aed)](LICENSE)
 
-Skillager is a local personal library and approval/exposure layer for agent skills. It
-gives skills you own a canonical, versioned home while keeping external skills
-discoverable without loading every skill into every chat.
+Skillager is a local skill library and approval layer. It discovers skills, records
+the exact content you review, and helps your agent use the smallest relevant set for
+each project.
+
+- Create and maintain personal skills in one versioned library.
+- Use project, package, and shared skills without moving them.
+- Keep reviewed skills on demand until your agent needs them.
 
 ```text
-own or discover -> accept an exact hash -> search metadata -> expose only what the task needs
+discover or create → review exact content → let the agent find what helps
 ```
 
-Owned skills live as plain files in one personal Git-backed library. External skills
-remain in project folders, Python environments, npm packages, Cargo crates, native
-agent skill directories, or shared collections until you explicitly import one.
-Skillager keeps accepted skills searchable, then writes native, stub, or router
-exposures only when you choose.
-
 ## Quickstart
+
+Install Skillager once, then set it up in a project:
 
 ```bash
 uv tool install skillager
 # or: pipx install skillager
 
-# Run per project. A personal library is optional until you create or adopt a skill.
+cd my-project
 skillager setup --agent codex
 ```
 
-Then restart your agent in the project and tell it what you want to accomplish:
+Use `--agent claude` for Claude.
 
-> Check Skillager readiness, then help me with `<goal>`. Use an available skill only
-> if it materially helps, and keep any project exposure focused.
+Setup finds skills for the current project and asks which ones you trust. It then
+installs a small project skill that teaches your agent how to use Skillager. It does
+not modify `AGENTS.md` or `CLAUDE.md`.
 
-The installed Working skill teaches the agent to run the readiness command, search
-approved metadata, and continue quietly when Skillager needs no attention.
+Restart your agent in the project, then describe your goal:
 
-Once setup has approved inventory, it installs one first-party `skillager-working`
-skill. It covers quiet agent-owned selection/exposure and explicit user-directed
-personal-library work; Skillager does not inject instructions into `AGENTS.md`,
-`agents.md`, or `CLAUDE.md`. A genuinely empty project can be ready without that
-artifact because there is no managed inventory for the agent to curate yet. If you
-pause or skip while selected skills remain unresolved, setup reports that partial
-outcome and does not install Working or claim completion; rerun the printed setup
-command when you are ready to finish review.
+> Check Skillager, then help me build a Python GIS service. Use reviewed skills where
+> they help, and keep one-off skills on demand.
 
-`setup` discovers local/project skills, package-provided skills, collections, and native agent skills. Skillager makes discovered bodies available through its own activation and exposure commands only after review. Agent hosts can independently load directly installed native skills, so Skillager is a cooperative workflow layer rather than a sandbox. Register an external personal/team repository with `skillager collection add ~/skills/workflows --name workflows` when you want it in reusable inventory. Skillager is installed once as a user tool; it does not need to live inside every project environment.
+Your agent checks readiness, searches reviewed skills when useful, and avoids adding
+one-off skills to every session. If Skillager needs your help, the agent gives you the
+exact command to run.
 
-Project tags use the supported repository-local `.skillager/tags.json` file. That file
-and its exact lock artifact are curation metadata, not obsolete in-tree approval state;
-true legacy files such as an old `.skillager/trust.json` still require explicit review.
+## You Decide; Your Agent Operates
 
-`working --json` keeps the `skillager.working.v1` contract. Its additive advisory `exposure_changes` block reports live current-project managed copies that are locally edited, behind newly approved source content, partially missing, blocked, malformed, or unmanaged. A stale projection is excluded from current exposure counts and receives an explicit re-expose command; it is never refreshed automatically. `inventory` and `curation` distinguish source entries from agent-collapsed choices and suggest goal search without turning it into a required readiness action. `next` is empty when readiness is satisfied. Drift does not change readiness or the command's exit code, and Skillager never overwrites a locally edited exposure implicitly.
-
-## Core Model
-
-Skillager keeps these choices separate:
-
-| Choice | Meaning |
+| You control | Your agent handles |
 | --- | --- |
-| Approval | You reviewed this skill at its current content hash. |
-| Curation | A project groups approved skills into tags like `gis`, `workflows`, or `release`. |
-| Exposure | Skillager writes native, stub, or router skills for an agent and project. |
+| Deciding which new or changed skills may run | Checking Skillager after restarts |
+| Approving imports and restored versions | Finding reviewed skills that match your goal |
+| Approving risky instructions or discarded edits | Keeping one-off skills out of every session |
+| Deciding what recurring help the project needs | Organizing a small reusable project set |
 
-> [!TIP]
-> Approval is not exposure. Approved skills are searchable; expose only what a project or task needs.
-
-## Exposure Modes
-
-| Mode | Best For | What The Agent Sees |
-| --- | --- | --- |
-| `native` | Normal agent skills, as if Skillager were not involved | Full reviewed skill body |
-| `stub` | Named skills you want available without loading the body | Tiny activation handle |
-| `router` | Larger tags or one-off skill sets | One compact multi-skill router with supporting metadata |
-
-Routers do not load full skill bodies. They list reviewed members and activate one on demand:
-
-```bash
-skillager expose --tag workflows --mode router --agent codex --scope project
-skillager activate workflows/pr-review --from-router skillager-workflows --agent codex
-```
-
-Router activation requires the named managed router to exist in the current project;
-a similarly named tag is not enough. Native, stub, router, and first-party Working
-artifacts share one collision-safe host namespace. Different managed identities are
-preserved at deterministic alternate slugs rather than silently replacing each other.
-
-Metadata commands stay metadata-only: `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, `doctor`, `library status`, `library history`, `library diff --stat`, and summary or full metadata JSON do not print full skill bodies. Scanner summaries on those surfaces contain rule codes and locations, never matched instruction excerpts.
+Reviewing a skill does not add it to every chat. Tell your agent whether the work is
+one-off or recurring; it will keep the skill on demand or make a small recurring set
+easy to reach.
 
 ## Work With Your Agent
 
-Describe the outcome you want rather than translating it into Skillager commands.
-These prompts cover the common workflows:
+Use prompts like these:
 
-- **Use the right skills for this task:** “Check Skillager, then help me `<goal>`. Use
-  available skills if useful, but don't expose anything we won't reuse.”
-- **See choices before curation:** “What available skills best match `<goal>`? Show me
-  the short list before changing tags or exposure.”
-- **Curate recurring project work:** “We will repeatedly do `<workflow>` here. Create
-  the smallest useful Skillager tag or router and leave everything else on demand.”
-- **Create an owned skill:** “Create a personal skill named `<name>` for `<purpose>`.
-  Work in the canonical library copy and show me the exact acceptance preview; don't
-  accept it until I approve.”
-- **Adopt an external skill:** “Import `<skill-id>` into my personal library. Show me
-  the source, destination, and exact preview before confirming anything.”
-- **Inspect or recover a version:** “Show me the verified history for `lib/<name>`,
-  explain the relevant diff, and prepare a restore preview without applying it.”
-- **Handle drift safely:** “Check Skillager health. If a managed copy is stale or
-  locally edited, explain what would change before repairing or removing anything.”
+- **Find help for a task:** “Find the best available skills for `<goal>`. Show me the
+  shortlist before changing the project.”
+- **Prepare recurring work:** “We will do `<workflow>` repeatedly in this project.
+  Create the smallest useful Skillager setup and leave everything else on demand.”
+- **Create a skill you own:** “Create a personal skill for `<purpose>`. Show me the
+  draft, then ask before approving it for use.”
+- **Adopt an external skill:** “Find the external skill called `<name>` and prepare to
+  add it to my personal library. Show me what you found and ask before importing it.”
+- **Recover an older version:** “Show me the saved versions of my `<name>` skill,
+  explain what changed, and ask before restoring anything.”
 
-## Commands You Run
+## Your Personal Library
 
-| Task | Command |
-| --- | --- |
-| Review or refresh a project | `skillager setup --agent codex` |
-| Diagnose state or follow a reported repair | `skillager doctor --agent codex` |
-| Register an external skill repository | `skillager collection add ~/skills/workflows --name workflows` |
-| Initialize your personal library | `skillager library init` |
-| Inspect personal library and Git state | `skillager library status` |
-| Create a pending personal skill | `skillager library new my-skill` |
-| Review and accept the exact current personal-skill hash | `skillager library accept lib/my-skill` |
-| Review and adopt a discovered external skill | `skillager import workflows/pr-review` |
-| Inspect verified personal-skill versions | `skillager library history lib/pr-review` |
-| Compare personal-skill versions | `skillager library diff lib/pr-review --from <hash> --to <hash>` |
-| Review restoring a verified version as a new commit | `skillager library restore lib/pr-review --to <content-hash>` |
+When you create your first personal skill or confirm your first import, Skillager
+creates `~/.skillager/library` and starts Git history. You do not need to initialize
+it first.
 
-The agent normally owns `working`, metadata search/list/show, project tags, guarded
-activation, and narrow exposure. You can still run those commands directly, but they
-are not the primary user workflow. Confirmation-bearing acceptance, import, restore,
-removal, force, and override actions always require an explicit user decision.
-
-Read-only allowlist examples for agent permission prompts: [`codex`](examples/codex-allowlist.json), [`claude`](examples/claude-allowlist.json).
-
-## Personal Library
-
-The personal library is the canonical home for skills you own. By default it lives at `~/.skillager/library`, uses an ordinary Git repository for history, and is registered internally as the protected `lib` collection.
+Run `library init` before your first skill only to choose a different location or
+skip Git history:
 
 ```bash
-skillager library init
-skillager library status
-
-# Choose the location once, or explicitly operate without Git history.
 skillager library init --path ~/skills/personal
 skillager library init --no-git
-
-# If the same library directory is moved later, preview and confirm re-registration.
-skillager library relocate --path ~/skills/moved-personal
-skillager library relocate --path ~/skills/moved-personal --yes
 ```
 
-Initialization can adopt an existing directory without moving files. Existing skill bodies are indexed as pending metadata: initialization does not approve them, reveal their contents, or expose them to an agent. Git-backed initialization preflights required metadata against ignore rules and rolls back files and staging if its first commit fails, so retrying does not enter a partial-initialization trap. `library status` is read-only and reports identity, path, Git health, and an optional skill's working hash. If the registered path disappears, `working` and `doctor` report the library as degraded without blocking unrelated project discovery. Status returns structured relocation requirements without inventing a path; once the user supplies the moved root, `library relocate` changes only the registration after verifying the UUID and existing layout there.
+Run `skillager library status` to see the library location and health.
 
-The no-Git form is useful for disposable environments and is also an opt-in,
-isolated runnable documentation example:
+After you or your agent edits a personal skill, Skillager asks you to review the
+change before the skill can run.
 
-<!-- skillager-test fixture=empty_project -->
-```bash
-skillager library init --no-git --json
-skillager library status --json
-```
+Importing copies one external skill into your library and leaves the original where
+it is.
 
-Create, edit, and accept an owned skill with an exact-hash workflow:
+Edit personal skills at the library path Skillager shows you. If you edit a project
+copy instead, Skillager stops before replacing it; it does not merge that edit back
+into your library.
 
-```bash
-skillager library new orbital-review
-# Edit the SKILL.md path printed by library new.
-skillager library accept lib/orbital-review --json
-# Review the preview, then execute its next_command_argv exactly.
-skillager expose lib/orbital-review --mode stub --agent codex --scope project
-```
+## Add Existing Skill Repositories
 
-`library new` never overwrites an existing skill, refuses symlink aliases before writing, and leaves its generated draft uncommitted. A new or directly edited body remains pending and unavailable to `show --content`, activation, exposure, stubs, and routers until `library accept` records its current hash. The version-2 hash uses unambiguous length framing for canonical paths, bytes, and executable state. Acceptance runs lint and static scanning, rejects symlinks and excluded files, requires `--override-lint --reason "..."` for blocking or high-risk findings, and creates the first meaningful path-scoped Git commit when Git is enabled. Shared import provenance is confirmation-bound and unrelated staged provenance edits are refused. In non-interactive use, omitting `--yes` prints a body-safe hash/risk/lint preview, exits successfully, and gives an exact confirmation command containing an opaque token. The token binds the command to the previewed hash, relevant provenance state, and any audited reason; a direct or stale `--yes` command is refused. Doctor keeps pending owned edits nonblocking but reports their exact `library accept` preview commands.
-
-The machine-readable contracts are versioned as `skillager.library-init.v1`, `skillager.library-relocate.v1`, `skillager.library-status.v1`, `skillager.library-new.v1`, `skillager.library-accept.v1`, `skillager.library-history.v1`, `skillager.library-diff.v1`, and `skillager.library-restore.v1`.
-
-Adopt one project, collection, environment, package, editable-source, or native skill through the explicit import boundary:
-
-```bash
-skillager import workflows/pr-review --json
-# Review the preview, then execute its next_command_argv exactly.
-```
-
-The first command is a read-only preview. Import refuses an ID claimed by multiple discovered roots instead of choosing one representative. It re-resolves and rehashes the unambiguous origin after confirmation, copies only the canonical agent-visible tree, records attribution provenance, commits the skill and provenance paths when Git is enabled, and accepts only the resulting library hash. Mode-only source changes invalidate cached previews. Destination JSON keeps the canonical `id`, stable `slug`/`name`, and retained frontmatter `display_name` separate. Import never executes the surrounding package and never modifies the origin. Its JSON contract is `skillager.import.v1`.
-
-Inspect and recover verified library versions by Skillager content hash:
-
-```bash
-skillager library history lib/pr-review --json
-skillager library diff lib/pr-review --from <hash> --to <hash> --stat
-skillager library diff lib/pr-review --from <hash> --to <hash>
-skillager library restore lib/pr-review --to <hash> --json
-# Review the preview, then execute its next_command_argv exactly.
-```
-
-History is path-specific, deduplicates commits with identical agent-visible content, and never prints bodies. It remains usable when an accepted Git-backed skill's live directory was accidentally deleted. `diff --stat` is also metadata-only; plain `diff` is deliberately content-bearing. Restore accepts a unique content-hash prefix, reconstructs and verifies that exact historical tree outside the library, re-runs lint/static checks, and creates a new descendant commit before recording acceptance when the selected tree differs from Git HEAD; recovering the existing HEAD tree does not manufacture an empty commit. It never resets, checks out over the worktree, rewrites history, or contacts remotes. No-Git libraries report history as unavailable while remaining otherwise usable. History and restore JSON use `skillager.library-history.v1` and `skillager.library-restore.v1`.
-
-### Managed Exposure Edits
-
-The personal library is the source of truth for owned skills; exposed copies are managed projections. `working` reports live local edits as advisory metadata, and normal exposure refuses to overwrite them. Exposure safety tracks every target entry, including the authenticated sidecar plus cache, bytecode, editor, and other files excluded from canonical skill identity. All projection families are candidate-built and rollback-safe on ordinary refresh failure, and project scope refuses symlinked agent-skill bases. When an exposure was edited intentionally, compare it with the canonical library skill, move the intended work into the library, accept that exact hash, and expose it again. Removal is also preview-first: `skillager expose --remove <exposure-id> --json` returns a confirmation bound to the complete target state; after confirmation Skillager atomically detaches and re-hashes the directory before deletion. A locally edited target additionally requires a new preview with explicit `--force`. Use `--force` only when you explicitly choose to discard or replace the local copy. Skillager does not infer whether a project edit should become a library version, silently merge divergent trees, or update other projects.
-
-## Collections
-
-Collections are external user-global skill sources. A collection can be a company-maintained repo or a public skill repo like [Superpowers](https://github.com/obra/superpowers). Use the personal library for canonical skills you own. Tags are project-local curation, usually maintained by the agent after setup.
+Setup discovers skills in the current project and installed environments. Register a
+separate skill repository when you want its reviewed skills available across projects:
 
 ```bash
 skillager collection add ~/skills/workflows --name workflows
 skillager setup --collection workflows --agent codex
-skillager tag add workflows --from-collection workflows --sync
-skillager expose --tag workflows --mode router --agent codex --scope project
 ```
 
-For fully trusted personal or company collections:
+Registering a repository does not copy it into your personal library. Import an
+individual skill only when you want to maintain your own copy.
+
+## Before Skillager Changes Anything
+
+Skillager asks you before it:
+
+- lets a new or changed skill run;
+- imports or restores a personal skill;
+- discards an edit made to a project copy;
+- approves content that its checks flag as risky; or
+- uses a skill that explicitly excludes your agent.
+
+Skillager never silently moves an external skill, replaces a locally edited copy, or
+pulls from and pushes to Git remotes.
+
+Codex and Claude can also load skills installed directly in their own folders.
+Skillager cannot review or block those skills.
+
+Run this when something looks wrong:
 
 ```bash
-skillager setup --collection workflows --bulk-approve --agent codex
-# same path, more fun:
-skillager setup --collection workflows --yolo --agent codex
+skillager doctor --agent codex
 ```
 
-After review, collection skills are searchable from any project on your machine.
-Repeated setup reports discovery and prior blocks across the full selected scope, while
-keeping blocked skills out of its actionable approval selection. Existing verified
-routers remain visible in completion exposure totals, and an already-current Working
-artifact is not offered for redundant reinstallation.
+## Learn More
 
-## Package Authors
-
-Python libraries, npm packages, and Cargo crates can ship skills in `.agents/skills/`:
-
-```text
-your-package/
-  .agents/skills/
-    fastapi-usage/
-      SKILL.md
-      skillager.yaml
-      references/
-      scripts/
-```
-
-Skillager discovers installed package skills from project Python environments, `node_modules`, and `Cargo.lock`-selected crates without importing packages, running package scripts, or invoking Cargo. Users still review skills before activation or exposure.
-
-`skillager.yaml` is optional and structured-only. Put searchable prose in `SKILL.md`; use the manifest for audience, activation, compatibility, and package-target metadata. For CI:
-
-```bash
-uvx --from skillager-linter skillager-lint .
-```
-
-See the [package author guide](docs/LIBRARY_AUTHORS.md) for details.
-
-## Safety
-
-Skillager's scanner is deterministic, local, and imperfect. It flags common agent-risk patterns such as instruction overrides, hidden prompt requests, credential paths, download-and-execute flows, secret exfiltration language, encoded blobs, and oversized content.
-
-Setup reports how many current hashes were scanned, newly reviewed, or matched reusable global approvals. Scanner finding totals and per-skill risk distribution are labeled separately; medium/high skill IDs and rule codes are listed without bodies. `--fresh-project` clears project-local decisions and curation, not reusable approvals; an approval is reused only when both its logical source identity and exact content hash still match.
-
-Human review decides availability. Signatures are provenance evidence, not safety signals: a verified signed skill still needs normal review before activation or exposure.
-
-## Docs
-
-- [User guide](docs/USER_GUIDE.md)
-- [Agent CLI guide](docs/AGENT_CLI_GUIDE.md)
-- [Skill repositories](docs/SKILL_REPOSITORIES.md)
-- [Package author guide](docs/LIBRARY_AUTHORS.md)
-- [Safety model](docs/SAFETY_MODEL.md)
-- [Release notes](docs/RELEASE_NOTES.md)
-- [Release runbook](docs/RELEASE.md)
-- [Security policy](SECURITY.md)
-
-External contributions are not being accepted yet while the early API and workflow settle.
+- [Use Skillager](docs/USER_GUIDE.md)
+- [Understand how agents operate Skillager](docs/AGENT_CLI_GUIDE.md)
+- [Publish skills in packages and repositories](docs/LIBRARY_AUTHORS.md)
+- [Review the trust and safety model](docs/SAFETY_MODEL.md)
+- [See command and behavior changes](docs/RELEASE_NOTES.md)
 
 ## Development
 
+Run the full local check:
+
 ```bash
-uv run python -m unittest discover -s tests
-uv run python -m unittest discover -s packages/skillager-linter/tests
 uv run --python 3.13 python scripts/check.py
-uv build packages/skillager-linter
-uv build
 ```
+
+External contributions are not being accepted yet while the API and workflow settle.
 
 Skillager is released under the [MIT License](LICENSE).

@@ -4,10 +4,12 @@ import argparse
 import json
 import shlex
 import textwrap
+from pathlib import Path
 from typing import Any
 
 from ..library.confirmation import confirmation_token, require_confirmation_token
 from ..library.importing import import_library_skill, import_preview
+from ..library.service import initialize_library
 from .context import catalog_root, current_project_dir, root, terminal_can_prompt
 
 
@@ -18,7 +20,8 @@ def add_import_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Preview and import one discovered external skill into the canonical personal library. "
-            "The origin is never modified, and no candidate content enters the library before review."
+            "The origin is never modified, and no candidate content enters the library before review. "
+            "A confirmed first import initializes the default library."
         ),
         epilog=textwrap.dedent(
             """\
@@ -69,6 +72,7 @@ def cmd_import(args: argparse.Namespace) -> int:
         source_key=preview["_source_key"],
         source_hash=preview["source_hash"],
         destination_name=preview["destination"]["name"],
+        library_binding=preview["_library_binding"],
         override_lint=args.override_lint,
         reason=(args.reason or "").strip() or None,
     )
@@ -113,6 +117,9 @@ def cmd_import(args: argparse.Namespace) -> int:
         raise ValueError("this source requires --override-lint --reason with an audited explanation")
     if args.yes:
         require_confirmation_token(args.confirmation_token, token, operation="library import")
+    initialization = None
+    if preview["library"]["status"] == "will-initialize":
+        initialization = initialize_library(catalog_root(args), path=Path(preview["library"]["root"]))
     result = import_library_skill(
         root(args),
         catalog_root(args),
@@ -125,9 +132,17 @@ def cmd_import(args: argparse.Namespace) -> int:
         project_dir=current_project_dir(),
     )
     if args.json:
+        if initialization is not None:
+            result["library"] = {
+                "status": "initialized",
+                "root": initialization["library"]["root"],
+                "git_mode": initialization["git"]["mode"],
+            }
         print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
         return 0
     destination = result["destination"]
+    if initialization is not None:
+        print(f"Initialized personal library: {initialization['library']['root']}")
     print(f"Imported: {result['source']['id']} -> {destination['id']}")
     print(f"Path: {destination['path']}")
     print(f"Content hash: {destination['working_hash']}")
@@ -142,6 +157,8 @@ def _print_preview(preview: dict[str, Any]) -> None:
     print(f"Source: {source['type']} at {source['path']}")
     print(f"Exact source hash: {preview['source_hash']}")
     print(f"Destination: {destination['id']} at {destination['path']}")
+    if preview["library"]["status"] == "will-initialize":
+        print(f"Personal library: will initialize at {preview['library']['root']} after confirmation")
     print(f"Owner review required: {'yes' if preview['owner_review_required'] else 'no'}")
     print(f"Scanner risk: {preview['scan']['risk']}")
     print(f"Lint: {preview['lint']['status']} ({preview['lint']['blocking_count']} blocking)")

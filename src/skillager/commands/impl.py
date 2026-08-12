@@ -152,9 +152,9 @@ def build_parser() -> argparse.ArgumentParser:
             tool for agent skills.
 
             When you own or adopt a skill:
-              1. Initialize the optional personal library with `skillager library init`
-              2. Create with `skillager library new` or adopt one external skill with `skillager import`
-              3. Edit and accept the exact reviewed hash
+              1. Create with `skillager library new` or preview an adoption with `skillager import`
+              2. Skillager initializes the default library on the first confirmed write
+              3. Edit and accept the reviewed skill
               4. Expose only what a project needs
 
             Project agent workflow:

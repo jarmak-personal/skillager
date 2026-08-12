@@ -20,6 +20,7 @@ from .service import (
     _acceptance_overrides,
     _compact_lint,
     _compact_scan,
+    _library_first_use_plan,
     _require_library_identity,
     _require_safe_git_mutation,
     _safe_metadata_summary,
@@ -38,11 +39,11 @@ def import_preview(
     destination_name: str | None = None,
     project_dir: Path | None = None,
 ) -> dict[str, Any]:
-    registration, _identity = _require_library_identity(catalog_root)
+    layout, library, library_binding = _library_first_use_plan(catalog_root)
     source = _resolve_external_skill(project_state, catalog_root, source_skill_id)
     name = normalize_skill_name(destination_name or source_skill_id.rsplit("/", 1)[-1])
-    target = registration.layout.skill_root(name)
-    _require_import_destination(registration.layout.skills, target, source)
+    target = layout.skill_root(name)
+    _require_import_destination(layout.skills, target, source)
     source_key = _source_key(source)
     blocked = source.get("trust") == "blocked"
     lint = _compact_lint(source.get("lint"))
@@ -69,6 +70,8 @@ def import_preview(
         },
         "source_hash": source["content_hash"],
         "_source_key": source_key,
+        "_library_binding": library_binding,
+        "library": library,
         "provenance": prospective_provenance,
         "owner_review_required": source.get("trust") not in APPROVED_TRUST_STATES,
         "blocked": blocked,

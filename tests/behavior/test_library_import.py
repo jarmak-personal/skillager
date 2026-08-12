@@ -23,6 +23,63 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
         self.assertNotIn(BODY_SENTINEL, result.stdout)
         self.assertNotIn(BODY_SENTINEL, result.stderr)
 
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_first_import_initializes_only_after_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            cli.env["GIT_CONFIG_GLOBAL"] = str(root / "missing-global-gitconfig")
+            cli.env["GIT_CONFIG_NOSYSTEM"] = "1"
+            source = cli.project / ".skills" / "adopt-me"
+            self.write_skill(source, "Adopt Me", "Use the adopted workflow.")
+            library = root / "home" / ".skillager" / "library"
+            catalog = root / "state" / "catalog"
+
+            preview = cli.run("import", "project/adopt-me", "--json")
+
+            self.assert_code(preview, 0)
+            self.assertEqual(preview.json()["library"]["status"], "will-initialize")
+            self.assertEqual(Path(preview.json()["library"]["root"]), library.resolve())
+            self.assertFalse(library.exists())
+            self.assertFalse(catalog.exists())
+
+            missing_token = cli.run("import", "project/adopt-me", "--yes", "--json")
+            self.assert_code(missing_token, 2)
+            self.assertIn("requires the confirmation token", missing_token.stderr)
+            self.assertFalse(library.exists())
+
+            imported = cli.run(*preview.json()["next_command_argv"][1:])
+
+            self.assert_code(imported, 0)
+            self.assertEqual(imported.json()["status"], "imported")
+            self.assertEqual(imported.json()["library"]["status"], "initialized")
+            self.assertEqual(Path(imported.json()["library"]["root"]), library.resolve())
+            self.assertTrue((library / ".git").is_dir())
+            self.assertTrue((library / "skills" / "adopt-me" / "SKILL.md").is_file())
+
+    def test_first_import_preview_stales_if_a_different_library_is_registered(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            source = cli.project / ".skills" / "destination-bound"
+            self.write_skill(source, "Destination Bound", "Use the destination-bound workflow.")
+            default_library = root / "home" / ".skillager" / "library"
+            custom_library = root / "custom-library"
+
+            preview = cli.run("import", "project/destination-bound", "--json")
+            self.assert_code(preview, 0)
+            self.assert_code(
+                cli.run("library", "init", "--path", str(custom_library), "--no-git"),
+                0,
+            )
+
+            stale = cli.run(*preview.json()["next_command_argv"][1:])
+
+            self.assert_code(stale, 2)
+            self.assertIn("preview is stale", stale.stderr)
+            self.assertFalse(default_library.exists())
+            self.assertFalse((custom_library / "skills" / "destination-bound").exists())
+
     def test_preview_then_import_reviews_filtered_tree_without_changing_origin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

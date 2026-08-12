@@ -105,6 +105,12 @@ class MutationPromptTests(unittest.TestCase):
             "destination": {"id": "lib/demo", "name": "demo", "path": "/library/skills/demo"},
             "source_hash": "b" * 64,
             "_source_key": "source-key",
+            "_library_binding": {
+                "status": "ready",
+                "root": "/library",
+                "library_id": "00000000-0000-0000-0000-000000000000",
+            },
+            "library": {"status": "ready", "root": "/library", "git_mode": "disabled"},
             "owner_review_required": True,
             "blocked": False,
             "lint": {"status": "ok", "blocking_count": 0, "findings": []},

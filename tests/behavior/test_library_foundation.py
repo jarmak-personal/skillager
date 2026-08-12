@@ -129,6 +129,31 @@ class PersonalLibraryFoundationBehaviorTests(unittest.TestCase):
             )
             self.assertNotEqual(local_name.returncode, 0)
 
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_first_new_skill_initializes_the_default_library(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli = make_basic_workspace(root)
+            cli.env["GIT_CONFIG_GLOBAL"] = str(root / "missing-global-gitconfig")
+            cli.env["GIT_CONFIG_NOSYSTEM"] = "1"
+            library = root / "home" / ".skillager" / "library"
+
+            invalid = cli.run("library", "new", "/", "--json")
+            self.assertEqual(invalid.code, 2)
+            self.assertFalse(library.exists())
+
+            created = cli.run("library", "new", "first-owned", "--json")
+
+            self.assertEqual(created.code, 0, created.stderr)
+            self.assertEqual(created.json()["status"], "pending")
+            self.assertEqual(created.json()["skill"]["id"], "lib/first-owned")
+            self.assertNotIn("library_initialized", created.json())
+            self.assertTrue((library / ".git").is_dir())
+            self.assertTrue((library / "skills" / "first-owned" / "SKILL.md").is_file())
+            status = cli.run("library", "status", "--json")
+            self.assertEqual(status.json()["status"], "ready")
+            self.assertEqual(Path(status.json()["library"]["root"]), library.resolve())
+
     def test_existing_skill_is_indexed_pending_and_status_stays_metadata_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

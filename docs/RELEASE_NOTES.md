@@ -8,8 +8,9 @@ package, native-agent, and collection skills.
 
 Highlights:
 
-- Initialize one plain-file, optionally Git-backed personal library with the reserved
-  `lib/<name>` namespace, diagnose a missing registered path, and explicitly
+- Initialize the default Git-backed personal library on the first owned draft or
+  confirmed import, while keeping import previews read-only. Explicit initialization
+  still selects a custom path or disables Git. Diagnose a missing registered path and
   re-register the same UUID after the directory moves.
 - Create or explicitly import one skill, then accept only its exact scanned and linted
   content hash. The version-2 hash is domain-separated and length-framed over canonical

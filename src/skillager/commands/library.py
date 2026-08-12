@@ -67,7 +67,10 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     status.add_argument("skill", nargs="?", help="Optional library skill name or lib/<name> ID.")
     status.add_argument("--json", action="store_true", help="Emit versioned status metadata as JSON.")
     status.set_defaults(func=cmd_library_status)
-    new = library_sub.add_parser("new", help="Create a collision-free pending library skill draft.")
+    new = library_sub.add_parser(
+        "new",
+        help="Create a pending draft, initializing the default library when needed.",
+    )
     new.add_argument("name", help="Flat skill name or lib/<name> ID.")
     new.add_argument("--json", action="store_true", help="Emit versioned draft metadata as JSON.")
     new.set_defaults(func=cmd_library_new)
@@ -207,10 +210,11 @@ def cmd_library_new(args: argparse.Namespace) -> int:
         print(json.dumps(_public_payload(result), indent=2, sort_keys=True))
         return 0
     skill = result["skill"]
+    if result.get("_library_initialized"):
+        print(f"Initialized personal library: {Path(skill['path']).parents[1]}")
     print(f"Created pending library skill: {skill['id']}")
     print(f"SKILL.md: {skill['skill_file']}")
-    print(f"Working hash: {skill['working_hash']}")
-    print("Edit the file above, then review and accept its exact hash.")
+    print("Edit the file above, then review and accept the skill.")
     print(f"Then: {shlex.join(result['next_command_argv'])}")
     return 0
 

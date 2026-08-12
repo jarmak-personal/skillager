@@ -8,7 +8,7 @@ Collections are user-global source inventory for administration, review, refresh
 
 | Intent | Skillager path |
 | --- | --- |
-| Create and maintain skills you own | `skillager library init`, then use `lib/<name>` |
+| Create and maintain skills you own | `skillager library new <name>` |
 | Preview taking ownership of one external skill | `skillager import <external-id> --json` |
 | Search/review a repository without copying it | `skillager collection add ...` |
 | Use a repository cloned inside one project | Run project `setup`; child repositories are discovered automatically |
@@ -19,15 +19,18 @@ repositories whose canonical copies live elsewhere.
 
 ## Own Or Adopt A Skill
 
-Initialize the one personal library registered in the selected user catalog:
+Create your first owned skill; Skillager initializes the default personal library
+when needed:
 
 ```bash
-skillager library init
 skillager library new release-check
 # Edit the SKILL.md path returned above.
 skillager library accept lib/release-check --json
 # Review the preview, then execute its next_command_argv exactly.
 ```
+
+Run `skillager library init --path <path>` first only to choose another location, or
+use `skillager library init --no-git` to disable history.
 
 To adopt one reviewed skill from an external repository without changing that
 repository:

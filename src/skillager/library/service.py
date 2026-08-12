@@ -192,6 +192,13 @@ def relocate_library(catalog_root: Path, path: Path) -> dict[str, Any]:
 
 def new_library_skill(catalog_root: Path, name: str) -> dict[str, Any]:
     normalized = normalize_skill_name(name)
+    library_plan = _library_first_use_plan(catalog_root)
+    planned_target = library_plan[0].skill_root(normalized)
+    if planned_target.exists() or planned_target.is_symlink():
+        raise ValueError(f"library skill already exists: {LIBRARY_NAMESPACE}/{normalized}")
+    initialization = None
+    if library_plan[1]["status"] == "will-initialize":
+        initialization = initialize_library(catalog_root, path=library_plan[0].root)
     with resource_locks([catalog_root / "library-mutation", catalog_root / f"library-skill-{normalized}"]):
         registration, identity = _require_library_identity(catalog_root)
         layout = registration.layout
@@ -214,6 +221,7 @@ def new_library_skill(catalog_root: Path, name: str) -> dict[str, Any]:
             "skill": _compact_library_skill(skill),
             "indexed": len(index.get("skills", [])),
             "next_command_argv": ["skillager", "library", "accept", f"{LIBRARY_NAMESPACE}/{normalized}"],
+            "_library_initialized": initialization is not None,
         }
 
 
@@ -470,6 +478,49 @@ def _require_library_identity(catalog_root: Path) -> tuple[LibraryRegistration, 
     return registration, identity
 
 
+def _library_first_use_plan(catalog_root: Path) -> tuple[LibraryLayout, dict[str, Any], dict[str, Any]]:
+    """Describe the ownership library without creating or registering it."""
+    registration = _registered_library_or_conflict(catalog_root)
+    if registration is not None:
+        registration, identity = _require_library_identity(catalog_root)
+        public: dict[str, Any] = {
+            "status": "ready",
+            "root": str(registration.layout.root),
+            "git_mode": identity.git_mode,
+        }
+        binding: dict[str, Any] = {
+            "status": "ready",
+            "root": str(registration.layout.root),
+            "library_id": identity.library_id,
+        }
+        return registration.layout, public, binding
+
+    layout = LibraryLayout.from_root(default_library_root())
+    existing_identity = load_library_identity(layout)
+    if existing_identity is None:
+        _preflight_new_library(layout, no_git=False)
+        git_mode = "system"
+        library_id = None
+    else:
+        _require_library_layout(layout)
+        if load_library_provenance(layout) is None:
+            raise ValueError(f"library provenance metadata is missing: {layout.provenance_path}")
+        _validate_identity_git(existing_identity, layout)
+        git_mode = existing_identity.git_mode
+        library_id = existing_identity.library_id
+    public = {
+        "status": "will-initialize",
+        "root": str(layout.root),
+        "git_mode": git_mode,
+    }
+    binding = {
+        "status": "unregistered",
+        "root": str(layout.root),
+        "library_id": library_id,
+    }
+    return layout, public, binding
+
+
 def _validate_registered_library(registration: LibraryRegistration, identity: LibraryIdentity | None) -> None:
     _require_library_layout(registration.layout)
     if identity is None:
@@ -539,7 +590,7 @@ def _preflight_new_library(layout: LibraryLayout, *, no_git: bool) -> None:
         if layout.skills.is_symlink() or (layout.skills.exists() and not layout.skills.is_dir()):
             raise ValueError(f"library skills path must be a non-symlinked directory: {layout.skills}")
     if not no_git and not git_available():
-        raise ValueError("git executable is unavailable; install Git or rerun with --no-git")
+        raise ValueError("git executable is unavailable; install Git or run `skillager library init --no-git`")
 
 
 def _acceptance_commit_targets(layout: LibraryLayout, normalized: str, target: Path) -> list[Path]:

@@ -58,14 +58,13 @@ Direct native skills are not automatically approved. If you place a skill in a p
 
 ## Personal Library
 
-The personal library is the canonical home for skills you own. It defaults to `~/.skillager/library`, uses an ordinary Git repository unless you choose `--no-git`, and stays usable as plain skill directories without Skillager.
+The personal library is the canonical home for skills you own. `library new` and a confirmed first import initialize it at `~/.skillager/library` when needed. Skillager uses an ordinary Git repository unless you initialize with `--no-git`, and the skills remain usable as plain directories without Skillager.
 
 External discovery remains independent: project, child-repository, environment,
 package, collection, and native-agent skills continue to be indexed and reviewed in
 place. Import only when you want to take ownership of a particular external skill.
 
 ```bash
-skillager library init
 skillager library relocate --path <moved-library-path>
 skillager library new orbital-review
 # Edit the SKILL.md path returned by library new.
@@ -74,6 +73,9 @@ skillager library accept lib/orbital-review --json
 skillager library status lib/orbital-review --json
 skillager expose lib/orbital-review --mode stub --agent codex --scope project
 ```
+
+Run `skillager library init --path <path>` before the first skill to choose another
+location. Run `skillager library init --no-git` to disable history.
 
 Creation and direct edits produce a pending exact hash. Pending library content is visible through path and diagnostic metadata, but Skillager will not emit or copy its body through `show --content`, activation, native/stub exposure, or routers—even with generic unreviewed or force flags. Run `library accept` after reviewing the current files. A non-interactive call without `--yes` prints a body-safe scanner/lint/hash preview, exits zero like other successful previews, and gives the exact confirmed command without changing state. That command contains an opaque confirmation token bound to the previewed state; direct or stale `--yes` commands are refused. Symlinks and excluded files refuse before Git or trust changes. Lint-blocking or high-risk findings require a real `--override-lint --reason "..."` before Skillager emits a confirmation command. When Git is enabled, Skillager commits only the selected skill path before recording acceptance and refuses conflicts, in-progress repository operations, or unrelated staged files.
 
@@ -90,7 +92,7 @@ skillager import workflows/pr-review --json
 # Review the preview, then execute its next_command_argv exactly.
 ```
 
-The preview identifies the source, exact hash, destination, scanner/lint state, and whether owner review is required without writing library files. If multiple distinct discovered roots claim the requested external ID, import refuses the ambiguity instead of selecting a representative. Its returned token-bound command confirms an unambiguous reviewed state for a non-interactive import; a direct or stale `--yes` command is refused. Blocking lint or high scanner risk requires `--override-lint --reason "..."`; blocked sources must be unblocked separately. Destination-name collisions refuse unless you choose a free `--as` name.
+The preview identifies the source, exact hash, destination, scanner/lint state, and whether owner review is required without writing library files. If the personal library does not exist, the preview shows where confirmation will initialize it. If multiple distinct discovered roots claim the requested external ID, import refuses the ambiguity instead of selecting a representative. Its returned token-bound command confirms an unambiguous reviewed state for a non-interactive import; a direct or stale `--yes` command is refused. Blocking lint or high scanner risk requires `--override-lint --reason "..."`; blocked sources must be unblocked separately. Destination-name collisions refuse unless you choose a free `--as` name.
 
 After confirmation, Skillager discovers and rehashes the source again under the library mutation lock. It copies only the selected skill directory—not its surrounding Python/npm/Cargo package—and excludes evidence, generated sidecars, caches, symlinks, and transient editor files using the same rules as content hashing and exposure. The origin remains unchanged. The library copy records the source skill ID, imported hash, source type, and timestamp in `.skillager/provenance.json` for attribution and audit.
 
