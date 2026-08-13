@@ -565,7 +565,7 @@ assert MINIMAL_MANIFEST_YAML.strip()
         self.assertIn("schema: skillager.skill.v1", manifest)
         self.assertIn("  - dev", manifest)
 
-    def test_wheel_bundles_user_docs_and_excludes_planning_docs(self) -> None:
+    def test_wheel_bundles_user_docs_and_examples(self) -> None:
         with zipfile.ZipFile(self.wheel_path) as wheel:
             names = set(wheel.namelist())
         self.assertIn("skillager/docs/USER_GUIDE.md", names)
@@ -573,18 +573,14 @@ assert MINIMAL_MANIFEST_YAML.strip()
         self.assertIn("skillager/examples/codex-allowlist.json", names)
         self.assertIn("skillager/examples/claude-allowlist.json", names)
         self.assertNotIn("skillager/docs/MANIFEST_HARDENING_PLAN.md", names)
-        self.assertNotIn("skillager/docs/PERSONAL_SKILL_LIBRARY_PLAN.md", names)
-        self.assertNotIn("skillager/docs/PERSONAL_SKILL_LIBRARY_IMPLEMENTATION_PLAN.md", names)
 
-    def test_sdist_includes_repo_skill_and_excludes_planning_doc(self) -> None:
+    def test_sdist_includes_repo_skill_and_excludes_manifest_plan(self) -> None:
         with tarfile.open(self.sdist_path, "r:gz") as sdist:
             names = set(sdist.getnames())
         prefix = sorted(names)[0].split("/", 1)[0]
         self.assertIn(f"{prefix}/.agents/skills/simulate-skillager-setup/SKILL.md", names)
         self.assertIn(f"{prefix}/.agents/skills/simulate-skillager-setup/skillager.yaml", names)
         self.assertNotIn(f"{prefix}/docs/MANIFEST_HARDENING_PLAN.md", names)
-        self.assertNotIn(f"{prefix}/docs/PERSONAL_SKILL_LIBRARY_PLAN.md", names)
-        self.assertNotIn(f"{prefix}/docs/PERSONAL_SKILL_LIBRARY_IMPLEMENTATION_PLAN.md", names)
         self.assertNotIn(f"{prefix}/packages/skillager-linter/src/skillager_linter/cli.py", names)
 
     def test_linter_sdist_contains_linter_source_only(self) -> None:

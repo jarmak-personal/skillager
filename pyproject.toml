@@ -63,8 +63,6 @@ exclude = [
   "**/*.pyc",
   "**/*.pyo",
   "docs/MANIFEST_HARDENING_PLAN.md",
-  "docs/PERSONAL_SKILL_LIBRARY_IMPLEMENTATION_PLAN.md",
-  "docs/PERSONAL_SKILL_LIBRARY_PLAN.md",
 ]
 
 [tool.uv]
