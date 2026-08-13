@@ -338,29 +338,49 @@ jobs:
             echo "$TAG already exists on origin at release HEAD; skipping tag push"
           fi
 
-      - name: Build release notes from commit subjects
+      - name: Build release notes
         env:
           PACKAGE: ${{ steps.version.outputs.package }}
           NEXT: ${{ steps.version.outputs.next }}
           TAG_PATTERN: ${{ steps.version.outputs.tag_pattern }}
         run: |
-          PREV_TAG=$(git describe --tags --match "$TAG_PATTERN" --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          if [ -n "$PREV_TAG" ]; then
-            RANGE="${PREV_TAG}..HEAD"
+          if [ "$PACKAGE" = "skillager" ]; then
+            python3 - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          source = pathlib.Path("docs/RELEASE_NOTES.md")
+          destination = pathlib.Path("RELEASE_NOTES.md")
+          version = os.environ["NEXT"]
+          text = source.read_text(encoding="utf-8")
+          heading = re.compile(rf"^## skillager {re.escape(version)}(?: \(planned\))?$", re.MULTILINE)
+          if not heading.search(text):
+              raise SystemExit(f"{source} does not contain release notes for skillager {version}")
+          text = heading.sub(f"## skillager {version}", text, count=1)
+          if text.startswith("# Release Notes\n\n"):
+              text = text.removeprefix("# Release Notes\n\n")
+          destination.write_text(text, encoding="utf-8")
+          PY
           else
-            RANGE="HEAD"
+            PREV_TAG=$(git describe --tags --match "$TAG_PATTERN" --abbrev=0 HEAD^ 2>/dev/null || echo "")
+            if [ -n "$PREV_TAG" ]; then
+              RANGE="${PREV_TAG}..HEAD"
+            else
+              RANGE="HEAD"
+            fi
+            NOTES=$(git log --pretty=format:'- %s' "$RANGE" | grep -v "^- Bump $PACKAGE to" || true)
+            if [ -z "$NOTES" ]; then
+              NOTES="- Initial release"
+            fi
+            {
+              echo "Packages:"
+              echo "- $PACKAGE $NEXT"
+              echo
+              echo "Changes:"
+              printf '%s\n' "$NOTES"
+            } > RELEASE_NOTES.md
           fi
-          NOTES=$(git log --pretty=format:'- %s' "$RANGE" | grep -v "^- Bump $PACKAGE to" || true)
-          if [ -z "$NOTES" ]; then
-            NOTES="- Initial release"
-          fi
-          {
-            echo "Packages:"
-            echo "- $PACKAGE $NEXT"
-            echo
-            echo "Changes:"
-            printf '%s\n' "$NOTES"
-          } > RELEASE_NOTES.md
 
       - name: Create or update draft GitHub Release
         env:

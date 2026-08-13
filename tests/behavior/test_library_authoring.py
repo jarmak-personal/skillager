@@ -48,7 +48,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertIn("skillager library accept lib/pending-draft", shown.stderr)
             self.assertNotIn("skillager setup", shown.stderr)
 
-    def test_pending_library_skill_cannot_be_overwritten_or_force_exposed(self) -> None:
+    def test_pending_library_skill_cannot_be_overwritten_or_exposed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             project, cli = make_basic_workspace(root)
@@ -90,7 +90,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
 
             for blocked in (
                 cli.run("show", "lib/orbital-review", "--content"),
-                cli.run("activate", "lib/orbital-review", "--force", "--no-session-record"),
+                cli.run("activate", "lib/orbital-review", "--no-session-record"),
             ):
                 self.assert_code(blocked, 2)
                 self.assert_body_not_exposed(blocked)
@@ -102,7 +102,6 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
                 "native",
                 "--agent",
                 "codex",
-                "--include-unreviewed",
                 "--json",
             )
             self.assert_code(expose, 0)
@@ -288,7 +287,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
 
             for blocked in (
                 cli.run("show", "lib/mutable-skill", "--content"),
-                cli.run("activate", "lib/mutable-skill", "--force", "--no-session-record"),
+                cli.run("activate", "lib/mutable-skill", "--no-session-record"),
             ):
                 self.assert_code(blocked, 2)
                 self.assert_body_not_exposed(blocked)

@@ -22,6 +22,9 @@ Highlights:
   edits or remove them unless the user explicitly confirms a bound force preview.
 - Keep metadata commands body-safe and keep ownership separate from approval and
   exposure.
+- Remove the public activation and exposure review-bypass flags. Availability now
+  gates every skill body and projection; exposure `--force` remains limited to an
+  explicitly confirmed overwrite or removal of local target edits.
 - Fail closed on display-ID and projection-slug collisions, source/exposure races,
   same-size timestamp spoofing, mode-only cache changes, invalid native host format,
   ignored initialization metadata, and noncanonical acceptance trees.

@@ -206,21 +206,6 @@ class SkillagerMaterializeTests(unittest.TestCase):
                 self.assertEqual(main(["expose", "--all-reviewed", "--mode", "native", "--agent", "codex"]), 2)
             self.assertIn("--all-reviewed cannot be used with --mode native", stderr.getvalue())
 
-    def test_materialize_rejects_all_reviewed_include_unreviewed_conflict(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            state = root / ".skillager"
-            stderr = StringIO()
-            with (
-                redirect_stderr(stderr),
-                patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
-                patch("skillager.discovery.find_project_root", return_value=root),
-                patch("pathlib.Path.home", return_value=root),
-                chdir(root),
-            ):
-                self.assertEqual(main(["expose", "--all-reviewed", "--mode", "native", "--include-unreviewed", "--agent", "codex"]), 2)
-            self.assertIn("--all-reviewed cannot be combined with --include-unreviewed", stderr.getvalue())
-
     def test_expose_without_agent_uses_saved_setup_agent_for_write_list_and_remove(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -446,7 +431,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
                 self.assertEqual(main(["expose", "path/missing", "--mode", "stub", "--agent", "codex"]), 2)
             self.assertIn("skill not found: path/missing", stderr.getvalue())
 
-    def test_activate_refuses_unreviewed_skill_without_force(self) -> None:
+    def test_activate_refuses_unreviewed_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / ".skillager"
@@ -457,7 +442,6 @@ class SkillagerMaterializeTests(unittest.TestCase):
                 with patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root):
                     build_index(state, include_packages=False)
                     self.assertEqual(main(["activate", "project/demo"]), 2)
-                    self.assertEqual(main(["activate", "project/demo", "--force", "--no-session-record"]), 0)
 
     def test_materialize_copies_reviewed_skill_to_project_agent_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -358,6 +358,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             self.assertEqual(summary["source_entry_count"], 2)
             self.assertEqual(summary["variant_collapse"]["before"], 2)
             self.assertEqual(summary["variant_collapse"]["after"], 1)
+            self.assertEqual(summary["search_command"], 'skillager search "<query>" --agent codex --json')
             self.assertEqual({skill["id"] for skill in summary["skills"]}, {"project/gis-domain"})
             self.assertEqual(summary["skills"][0]["agent_variant"]["preferred_id"], "project/gis-domain")
             self.assertEqual(

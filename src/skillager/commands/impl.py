@@ -258,12 +258,11 @@ def build_parser() -> argparse.ArgumentParser:
         "activate",
         help="Emit full skill content.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Emit full skill content to stdout. Activation requires an available skill unless an explicit owner override is used.",
+        description="Emit full skill content to stdout. Activation requires an available skill.",
         epilog="Examples:\n  skillager activate fastapi/fastapi\n  skillager activate fastapi/fastapi --from-stub fastapi-fastapi\n  skillager activate fastapi/fastapi --format codex",
     )
     p.add_argument("skill_id")
     p.add_argument("--format", choices=["markdown", "codex", "claude", "json"], default="markdown")
-    p.add_argument("--force", action="store_true", help="Allow activation despite review state. Use only with explicit user approval.")
     p.add_argument("--allow-incompatible", action="store_true", help="Allow activation even when skill metadata explicitly excludes this agent.")
     p.add_argument("--from-router", help="Exposed router skill slug, e.g. skillager-gis or skillager-router-<hash>. Refuses skills not listed by that managed router.")
     p.add_argument("--from-stub", help="Stub skill slug, e.g. fastapi-fastapi. Refuses activation unless that stub is exposed in this project.")
@@ -615,7 +614,6 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     )
     p.add_argument("--all-agents", action="store_true", help="Target both codex and claude.")
     p.add_argument("--scope", choices=["project", "global"], default="project", help="Expose into project .agents or global agent skill directory.")
-    p.add_argument("--include-unreviewed", action="store_true", help="Allow discovered skills to be exposed.")
     p.add_argument("--all-reviewed", action="store_true", help="Expose every available skill selected by filters for supported non-native modes. Owner/admin only; prefer explicit IDs, tags, or routers.")
     p.add_argument("--allow-incompatible", action="store_true", help="Allow native/stub exposure even when skill metadata explicitly excludes the selected agent.")
     p.add_argument("--list", action="store_true", dest="list_exposures", help="List Skillager-managed exposed targets for the selected agent/scope.")
@@ -4128,7 +4126,7 @@ def _public_full_skill_metadata(skill: dict[str, Any]) -> dict[str, Any]:
 def _public_scan_metadata(scan: dict[str, Any]) -> dict[str, Any]:
     """Return scanner diagnostics without matched skill-body excerpts."""
 
-    payload = {
+    payload: dict[str, Any] = {
         key: scan[key]
         for key in ("risk", "ok", "scanned_files", "skipped_files")
         if key in scan
@@ -4176,6 +4174,7 @@ def _inventory_summary(
     source_entry_count: int | None = None,
 ) -> dict[str, Any]:
     annotated = _annotate_agent_variants(skills, agent)
+    search_command = f'skillager search "<query>" --agent {agent} --json' if agent else 'skillager search "<query>" --json'
     source_counts = Counter((skill.get("source") or {}).get("type") or "unknown" for skill in annotated)
     exposure_counts = Counter(skill.get("exposure") or "hidden" for skill in annotated)
     availability_counts: Counter[str] = Counter()
@@ -4207,7 +4206,7 @@ def _inventory_summary(
         "sources": _inventory_source_groups(annotated),
         "duplicate_families": _agent_variant_families(annotated, agent=agent),
         "skills": [_compact_inventory_item(skill) for skill in annotated],
-        "search_command": "skillager search \"<query>\" --json",
+        "search_command": search_command,
     }
 
 
@@ -4453,8 +4452,6 @@ def cmd_show(args: argparse.Namespace) -> int:
 def cmd_activate(args: argparse.Namespace) -> int:
     if args.from_router and args.from_stub:
         raise ValueError("--from-router and --from-stub cannot be combined")
-    if (args.from_router or args.from_stub) and args.force:
-        raise ValueError("--from-router/--from-stub cannot be combined with --force")
     skill = _find_project_skill(
         root(args),
         args.skill_id,
@@ -4481,9 +4478,9 @@ def cmd_activate(args: argparse.Namespace) -> int:
         )
     if args.from_stub:
         _validate_stub_activation(skill, args.from_stub)
-    if skill.get("trust") == "blocked" and not args.force:
+    if skill.get("trust") == "blocked":
         raise ValueError(f"skill is blocked: {args.skill_id}")
-    if skill.get("trust") == "discovered" and not args.force:
+    if skill.get("trust") == "discovered":
         raise ValueError(f"skill is not available: {args.skill_id}; {_approval_hint(skill)}")
     _require_authoritative_skill_body(skill)
     problem = compatibility_problem(skill, activation_agent)
@@ -5489,7 +5486,7 @@ def cmd_expose(args: argparse.Namespace) -> int:
             mode=mode,
             dry_run=args.dry_run,
             force=args.force,
-            reviewed_only=not args.include_unreviewed,
+            reviewed_only=True,
             project_dir=Path.cwd(),
             allow_incompatible=args.allow_incompatible,
         )
@@ -5519,7 +5516,7 @@ def cmd_expose(args: argparse.Namespace) -> int:
             mode=mode,
             dry_run=args.dry_run,
             force=args.force,
-            reviewed_only=not args.include_unreviewed,
+            reviewed_only=True,
             project_dir=Path.cwd(),
             allow_incompatible=args.allow_incompatible,
         )
@@ -5561,7 +5558,6 @@ def _require_expose_management_only(args: argparse.Namespace, flag: str) -> None
     for attr, option in (
         ("tag", "--tag"),
         ("all_reviewed", "--all-reviewed"),
-        ("include_unreviewed", "--include-unreviewed"),
         ("allow_incompatible", "--allow-incompatible"),
         ("include_blocked", "--include-blocked"),
         ("source", "--source"),
@@ -5867,8 +5863,6 @@ def _exposure_record(sidecar: Path, data: dict[str, Any], *, fallback_agent: str
 
 def _require_expose_selection(args: argparse.Namespace) -> None:
     if args.tag or args.skill_ids or args.all_reviewed:
-        if args.all_reviewed and args.include_unreviewed:
-            raise ValueError("--all-reviewed cannot be combined with --include-unreviewed")
         if args.all_reviewed and args.mode is None:
             raise ValueError("--all-reviewed requires explicit --mode")
         if args.all_reviewed and args.mode == "native":

@@ -81,6 +81,24 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assert_body_not_exposed(activate)
             self.assertIn("not available", activate.stderr)
 
+            forced_activation = cli.run("activate", "project/gis-domain", "--force")
+            self.assert_code(forced_activation, 2)
+            self.assert_body_not_exposed(forced_activation)
+            self.assertIn("unrecognized arguments: --force", forced_activation.stderr)
+
+            unreviewed_exposure = cli.run(
+                "expose",
+                "project/gis-domain",
+                "--include-unreviewed",
+                "--agent",
+                "codex",
+                "--json",
+            )
+            self.assert_code(unreviewed_exposure, 2)
+            self.assert_body_not_exposed(unreviewed_exposure)
+            self.assertIn("unrecognized arguments: --include-unreviewed", unreviewed_exposure.stderr)
+            self.assertFalse((project / ".agents" / "skills" / "project-gis-domain").exists())
+
     def test_metadata_readiness_rehashes_same_size_source_edits_with_restored_mtime(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
             project, cli = self.make_workspace(Path(tmp_name))
