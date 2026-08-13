@@ -1,14 +1,15 @@
-# Package Author Guide
+# Publish Skills In Packages
 
-Packages can ship skills alongside package code. Skillager discovers package-provided `.skills`, `skills`, and `.agents/skills` directories in project Python environments, including virtualenv and conda environments, in project `node_modules`, and in `Cargo.lock`-selected Cargo crates without importing packages, running package scripts, or invoking Cargo.
+Ship skills with a Python, npm, or Cargo package when they help users work with that
+package. Skillager discovers the installed files without importing the package,
+running package scripts, or invoking Cargo.
 
-## Recommended Layout
+## Add A Skill
 
-Python package:
+Use `.agents/skills` inside the published package:
 
 ```text
-your_package/
-  __init__.py
+your-package/
   .agents/skills/
     fastapi-usage/
       SKILL.md
@@ -17,45 +18,42 @@ your_package/
       scripts/
 ```
 
-npm package:
+Python packages may place this directory inside an import package. npm and Cargo
+packages should place it at the package root. Skillager also discovers `.skills` and
+`skills`, but `.agents/skills` works directly with current agent conventions.
 
-```text
-your-npm-package/
-  package.json
-  .agents/skills/
-    react-query-usage/
-      SKILL.md
-      skillager.yaml
-      references/
-      scripts/
+Always verify that the built wheel, npm tarball, or Cargo package contains the full
+skill directory. A source-tree test will not catch missing package data.
+
+Give each skill a focused `SKILL.md`:
+
+```markdown
+---
+name: fastapi-usage
+description: Build and review FastAPI endpoints with this package.
+---
+
+# FastAPI Usage
+
+Use this workflow when adding or changing an endpoint.
 ```
 
-Cargo crate:
+Write a description that tells an agent when to select the skill. Keep instructions
+and supporting files inside the skill directory, and use relative paths between
+them. Include non-empty `name` and `description` frontmatter so Skillager can expose
+the skill natively to Codex or Claude.
 
-```text
-your-crate/
-  Cargo.toml
-  .agents/skills/
-    tokio-usage/
-      SKILL.md
-      skillager.yaml
-      references/
-      scripts/
-```
+## Add Metadata Only When It Helps Selection
 
-`SKILL.md` contains the agent-facing instructions. Supporting files may live beside it.
-
-Optional release evidence files such as `skill.oms.sig` and `skill-card.md` may live at the skill root for published/shared skills. They are not Skillager metadata, and they are not exposed to agents during normal activation or exposure.
-
-## Minimal Metadata
-
-Print the current canonical minimal manifest with:
+`skillager.yaml` is optional. Add it when consumers need audience, activation,
+package-target, or compatibility metadata. Print the current minimal manifest
+instead of copying one from an older package:
 
 ```bash
 uvx --from skillager-linter skillager-lint --print-minimal-manifest
 ```
 
-The minimal manifest currently contains:
+The current minimal manifest is:
 
 ```yaml
 schema: skillager.skill.v1
@@ -65,7 +63,12 @@ activation:
   default: manual
 ```
 
-Add package targets when the skill is only relevant for specific package ranges:
+Use `audience: user` for skills that help consumers use the package. Use
+`audience: dev` for release, maintenance, and contributor workflows. Setup presents
+undeclared audiences as “everything else,” so declare one when that distinction
+matters.
+
+Add a package target when the skill applies only to a dependency or version range:
 
 ```yaml
 schema: skillager.skill.v1
@@ -79,51 +82,60 @@ targets:
       versions: ">=1,<2"
 ```
 
-For npm packages, use npm package names and semver ranges:
+Use the target key and version syntax for the package ecosystem:
+
+| Ecosystem | Target key | Version value |
+| --- | --- | --- |
+| Python | `python_packages` | PEP 440 specifier |
+| npm | `npm_packages` | npm semver range string |
+| Cargo | `cargo_packages` | Cargo semver requirement string |
+
+Skillager stores npm and Cargo version ranges as selection metadata; it does not run
+their package managers or resolve those ranges during linting.
+
+Keep searchable prose in `SKILL.md`. `skillager.yaml` accepts only `schema`,
+`audience`, `activation`, `targets`, and `compatibility`; unknown fields block the
+skill.
+
+## Declare Real Compatibility Limits
+
+Omit compatibility metadata when the skill works across agents. Missing metadata
+means usable by default.
+
+Declare an exclusive agent only when the workflow cannot run elsewhere:
 
 ```yaml
-schema: skillager.skill.v1
-audience:
-  - user
-activation:
-  default: suggested
-targets:
-  npm_packages:
-    - name: "@scope/your-package"
-      versions: "^1.0.0 || >=2 <3"
+compatibility:
+  exclusive_to: claude
 ```
 
-Npm `versions` values are normalized as compact non-empty strings for targeting and search; Skillager does not run npm or resolve semver ranges during lint or discovery. V1 discovery scans the current project's top-level `node_modules` only, so package-manager root hoisting is covered but nested workspace-local `node_modules` directories are not crawled.
-
-For Cargo crates, use crate names and Cargo semver requirement strings:
+Or exclude one agent and explain the known limitation:
 
 ```yaml
-schema: skillager.skill.v1
-audience:
-  - user
-activation:
-  default: suggested
-targets:
-  cargo_packages:
-    - name: tokio
-      versions: ">=1,<2"
+compatibility:
+  incompatible_with:
+    - codex
+  warnings:
+    codex: claude_only_paths
 ```
 
-Cargo `versions` values are normalized as compact non-empty strings for targeting and search; Skillager does not invoke Cargo or resolve version requirements during lint or discovery. V1 discovery reads the current project's `Cargo.lock`, then looks for matching crate sources in the local Cargo registry/git cache and matching local crate roots under the project tree.
+Skillager may infer advisory warnings from agent-specific paths, environment
+variables, shell commands, file writes, or subagent language. Fix accidental
+assumptions in `SKILL.md`; inferred warnings do not block a skill by themselves.
 
-The manifest is intentionally structured-only. It cannot declare `id`, `name`, `summary`, `source`, `entrypoint`, `safety`, `triggers`, `domains`, `tools`, or `references`. Skillager derives identity from the package/path and from the reviewed `SKILL.md` body: simple `name`/`description` frontmatter when present, then a concise top-level heading, the path-derived name, and the first prose sentence. Clearly fragmentary headings—such as templates, code fragments, versioned contract labels, or long sentence-like instructions—fall back to the stable directory name. Use frontmatter when a deliberately different display name is required.
+## Lint The Published Files
 
-`skillager.yaml` uses a strict loader: one document, string keys, no duplicate keys, no anchors, no aliases, no merge keys, no custom tags, and a small file-size cap. Unknown keys lint-block the skill.
+Run the standalone linter before release:
 
-## Validate In CI
+```bash
+uvx --from skillager-linter skillager-lint .
+```
 
-Use the standalone linter before publishing package skills:
+The linter checks `SKILL.md`, strict `skillager.yaml` parsing, compatibility hints,
+and description quality. It does not read approval state, activate skills, write
+agent files, or emit skill bodies.
 
-`uvx --from skillager-linter skillager-lint .`
-
-It uses the same strict manifest loader and validator as Skillager's runtime review path, but stays dependency-light and does not read trust state, activate skills, write exposure artifacts, or emit skill bodies. V1 validates the existing skill root contract: strict `skillager.yaml`, canonical `SKILL.md`, body-derived compatibility warnings, and current description-quality warnings.
-
-GitHub Actions example:
+Add the same check to CI:
 
 ```yaml
 name: skillager-lint
@@ -137,94 +149,43 @@ jobs:
       - run: uvx --from skillager-linter skillager-lint .
 ```
 
-## Release Evidence
+## Test The Consumer Workflow
 
-For published skill collections, a detached OMS signature at the skill root can provide provenance and integrity evidence:
-
-```text
-fastapi-usage/
-  SKILL.md
-  skillager.yaml
-  references/
-  skill.oms.sig
-  skill-card.md
-```
-
-Skillager treats signatures and skill cards as release evidence, separate from approval and risk:
-
-- A verified signature means the current skill root matches what a signer published. It does not mean the skill is safe or approved.
-- In full review metadata this evidence appears under `review_gates.signature`; it does not change `approval` or `review_gates.availability`.
-- `skill-card.md` is for curious reviewers and auditors. Skillager does not parse card prose, index it for search, or show it in normal agent-facing commands.
-- Signature and card files are excluded from Skillager's review content hash, static instruction scan, and native exposed copies.
-- Missing cards are not reported in normal `skillager-lint` output. The linter only keeps a debug-level release-evidence note so this can be promoted later if cards become useful publisher hygiene.
-
-Skillager recognizes root-level card files named `skill-card.md`, `Skill Card.md`, `card.yaml`, `card.yml`, `SKILLCARD.yaml`, or `SKILLCARD.yml`. `SKILL.md` is never treated as a card because it is the reviewed instruction entrypoint.
-
-Use external signing tooling when you want to verify a signed skill locally. Verification is read-only from Skillager's perspective, does not cache `review_gates.signature`, and users still approve the skill through the normal setup/review flow.
-
-## Compatibility Metadata
-
-Omit compatibility metadata unless there is a real exception. Skillager assumes skills are usable by any agent by default.
-
-Use negative metadata only when the skill truly cannot run in a given harness:
-
-```yaml
-compatibility:
-  exclusive_to: claude
-```
-
-or:
-
-```yaml
-compatibility:
-  incompatible_with:
-    - codex
-  warnings:
-    codex: claude_only_paths
-```
-
-For softer assumptions, prefer advisory metadata:
-
-```yaml
-compatibility:
-  assumptions:
-    parallel_subagents:
-      required: false
-      preferred: 4
-    writes_files: true
-    env:
-      - CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
-  warnings:
-    codex: parallel_subagents_unsupported
-```
-
-Skillager may also infer compatibility warnings from inert text, such as Claude skill paths, Codex skill paths, agent-team language, file-writing workflows, shell command language, or agent-specific environment variables. Inferred warnings do not block approval, search, router exposure, or stub exposure.
-
-## Audience
-
-Use `audience: user` for skills that help consumers use your library.
-
-Use `audience: dev` for maintainer workflows, release processes, internal development rules, review gates, or commit workflows.
-
-This distinction matters because setup asks the user what audience they want before approval. If a skill omits audience metadata, Skillager does not guess from its path or wording; setup groups it under "everything else."
-
-## Safety Notes
-
-- Do not request hidden prompts, developer messages, or system instructions.
-- Do not ask agents to read or reveal secrets.
-- Avoid shell execution unless the skill explicitly needs it.
-- Shell-command guidance is always scanned. Authors cannot suppress scanner findings from `skillager.yaml`.
-- Keep the `SKILL.md` heading and first paragraph accurate; Skillager uses them for reviewed metadata.
-- Validate manifests with `skillager-lint` before publishing.
-
-## Test Locally
-
-From a fresh project with your package installed:
+Install the built artifact in a fresh project, then run:
 
 ```bash
-skillager setup --fresh
+skillager setup --package your-package --agent codex
 skillager review --package your-package --summary
-skillager expose <your-package-skill-id> --agent codex --scope project
+skillager expose <skill-id> --mode native --agent codex --scope project
 ```
 
-Interactive setup installs Skillager's working readiness skill and may optionally expose a narrow native set. Use the explicit `expose` command when testing that a package-provided skill copies correctly with its supporting files.
+Use the skill ID shown during setup. Confirm that setup finds the installed skill,
+review shows the expected package and audience, and native exposure copies every
+required supporting file.
+
+Discovery differs by ecosystem:
+
+- Python discovery reads installed distribution files and editable package roots in
+  the project's virtualenv or conda environment.
+- npm discovery scans packages in the project's top-level `node_modules`; it does not
+  crawl nested workspace-local `node_modules` directories.
+- Cargo discovery reads the project's `Cargo.lock`, then checks selected local,
+  registry, and Git crate sources already present on disk.
+
+## Add Release Evidence Only If You Use It
+
+A publishing workflow may place `skill.oms.sig` and `skill-card.md` beside
+`SKILL.md`. Skillager reports this evidence to reviewers but does not treat a valid
+signature as approval or proof of safety. It excludes signature and card files from
+the reviewed instruction hash, search text, activation output, and native copies.
+
+Create and verify signatures with external signing tools. Consumers still approve
+the exact skill content through Skillager.
+
+## Before Publishing
+
+- Keep the name, description, and activation guidance specific.
+- Do not request hidden prompts, system instructions, or secrets.
+- Include shell commands only when the workflow needs them.
+- Lint the files inside the built artifact.
+- Test discovery and native exposure from a fresh consumer project.
