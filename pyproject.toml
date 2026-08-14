@@ -86,6 +86,6 @@ target-version = "py310"
 [dependency-groups]
 dev = [
     "mypy>=1.20.2",
-    "ruff>=0.15.12",
+    "ruff>=0.16.2",
     "types-pyyaml>=6.0.12.20260408",
 ]
