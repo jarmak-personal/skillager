@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "Skillager Contributors" }]
 dependencies = [
-    "packaging>=26.2",
+    "packaging>=26.3",
     "pyyaml>=6.0.3",
 ]
 
