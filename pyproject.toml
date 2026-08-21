@@ -87,5 +87,5 @@ target-version = "py310"
 dev = [
     "mypy>=1.20.2",
     "ruff>=0.15.12",
-    "types-pyyaml>=6.0.12.20260408",
+    "types-pyyaml>=6.0.12.20260815",
 ]
