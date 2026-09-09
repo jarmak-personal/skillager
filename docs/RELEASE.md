@@ -72,6 +72,7 @@ version bump, use `patch`, `minor`, or `major`.
 
 The workflow:
 
+- validates release notes for the selected version before changing version files or pushing a commit/tag
 - builds the selected distribution
 - runs package checks before publishing
 - runs the local wheelhouse smoke check for Skillager releases

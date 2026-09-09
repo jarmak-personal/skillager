@@ -273,6 +273,7 @@ def materialize_working_skill_one(
         scope=scope,
         require_exact=True,
     ):
+        previous_target_hash = _projection_target_state(target)
         sidecar = target / "skillager.materialized.yaml"
         if target.exists():
             if _is_customized(sidecar, target) and not force:
@@ -306,6 +307,7 @@ def materialize_working_skill_one(
                 target,
                 temp_root=temp_root,
                 expected_hash=materialized_hash,
+                previous_target_hash=previous_target_hash,
             )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
@@ -447,6 +449,7 @@ def materialize_router_one(
         dry_run=dry_run,
         scope=scope,
     ) as target:
+        previous_target_hash = _projection_target_state(target)
         sidecar = target / "skillager.materialized.yaml"
         actual_router_slug = target.name
         rendered = render_router_skill(tag, skills, agent=agent, router_slug=actual_router_slug, router_kind=router_kind)
@@ -487,6 +490,7 @@ def materialize_router_one(
                 target,
                 temp_root=temp_root,
                 expected_hash=materialized_hash,
+                previous_target_hash=previous_target_hash,
             )
         return _result(router_skill, target, "materialized", None, agent=agent, scope=scope)
 
@@ -576,6 +580,7 @@ def materialize_stub_one(
         scope=scope,
         fallback_key=str(skill["id"]),
     ) as target:
+        previous_target_hash = _projection_target_state(target)
         sidecar = target / "skillager.materialized.yaml"
         rendered = render_stub_skill(skill, stub_slug=target.name)
         prospective_hash = _single_file_content_hash(rendered)
@@ -610,6 +615,7 @@ def materialize_stub_one(
                 target,
                 temp_root=temp_root,
                 expected_hash=materialized_hash,
+                previous_target_hash=previous_target_hash,
             )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
@@ -687,6 +693,7 @@ def materialize_one(
     ) as target:
         if scope == "project" and target.resolve() == source_root and (target / "SKILL.md").exists() and not (target / "skillager.materialized.yaml").exists():
             return _result(skill, target, "already_native", "existing unmanaged native skill", agent=agent, scope=scope)
+        previous_target_hash = _projection_target_state(target)
         sidecar = target / "skillager.materialized.yaml"
         decisions = _exposure_decisions(sidecar)
         if skill.get("content_hash") in decisions.get("exposure_blocked_hashes", []):
@@ -720,24 +727,78 @@ def materialize_one(
             )
             sidecar_data.update(decisions)
             write_materialized_sidecar(candidate_sidecar, sidecar_data)
-            _install_verified_candidate(candidate, target, temp_root=temp_root, expected_hash=expected_hash)
+            _install_verified_candidate(
+                candidate, target, temp_root=temp_root, expected_hash=expected_hash,
+                previous_target_hash=previous_target_hash,
+            )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
-def _install_verified_candidate(candidate: Path, target: Path, *, temp_root: Path, expected_hash: str) -> None:
+def _projection_target_state(target: Path) -> str | None:
+    if not target.exists() and not target.is_symlink():
+        return None
+    return target_state_hash(target)
+
+
+def _restore_previous_projection(backup: Path, target: Path) -> None:
+    if not backup.exists() and not backup.is_symlink():
+        return
+    reserved = False
+    try:
+        target.mkdir()
+        reserved = True
+        os.replace(backup, target)
+        return
+    except OSError:
+        if reserved:
+            with contextlib.suppress(OSError):
+                target.rmdir()
+    recovery = Path(tempfile.mkdtemp(prefix=".skillager-recovery-", dir=target.parent))
+    preserved = recovery / "previous"
+    os.replace(backup, preserved)
+    raise ValueError(f"exposure target changed during replacement; previous target preserved at {preserved}")
+
+
+def _install_verified_candidate(
+    candidate: Path,
+    target: Path,
+    *,
+    temp_root: Path,
+    expected_hash: str,
+    previous_target_hash: str | None,
+) -> None:
     _verify_materialized_projection(candidate, expected_hash=expected_hash)
+    candidate_state = target_state_hash(candidate)
+    if _projection_target_state(target) != previous_target_hash:
+        raise ValueError("exposure target changed during preparation; local changes were preserved")
     backup = temp_root / "previous"
-    had_target = target.exists()
-    if had_target:
+    installed = False
+    reserved = False
+    if previous_target_hash is not None:
         os.replace(target, backup)
     try:
+        # Check the detached tree as well: an editor does not take our resource lock.
+        if previous_target_hash is not None and target_state_hash(backup) != previous_target_hash:
+            raise ValueError("exposure target changed during replacement; local changes were preserved")
+        # Reserve an absent path without replacing a target created by another writer.
+        target.mkdir()
+        reserved = True
         os.replace(candidate, target)
+        installed = True
         _verify_installed_projection(target, expected_hash=expected_hash)
+        if backup.exists() and target_state_hash(backup) != previous_target_hash:
+            raise ValueError("previous exposure target changed during replacement")
     except Exception:
-        if target.exists():
-            shutil.rmtree(target)
-        if had_target and backup.exists():
-            os.replace(backup, target)
+        if installed:
+            with contextlib.suppress(OSError, ValueError):
+                if _projection_target_state(target) == candidate_state:
+                    shutil.rmtree(target)
+        elif reserved:
+            try:
+                target.rmdir()
+            except OSError:
+                pass  # A concurrent writer populated the reservation; keep its files.
+        _restore_previous_projection(backup, target)
         raise
     if backup.exists():
         shutil.rmtree(backup)

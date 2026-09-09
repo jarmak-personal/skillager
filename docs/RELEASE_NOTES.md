@@ -20,6 +20,11 @@ Highlights:
 - Detect current-project exposure drift and accepted-source updates without writes,
   exclude stale projections from current inventory, and refuse to overwrite local
   edits or remove them unless the user explicitly confirms a bound force preview.
+- Preserve concurrent exposure-target edits during replacement, including edits made
+  while a candidate is prepared or installed. If another writer occupies the target
+  during recovery, retain the previous tree at a reported recovery path.
+- Validate release notes before modifying version files or pushing release commits
+  and tags, so a mismatched version fails without publishing partial release state.
 - Keep metadata commands body-safe and keep ownership separate from approval and
   exposure.
 - Remove the public activation and exposure review-bypass flags. Availability now

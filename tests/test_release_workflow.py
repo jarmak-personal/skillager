@@ -1,0 +1,78 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class ReleaseWorkflowTests(unittest.TestCase):
+    def test_notes_are_validated_before_version_mutation_and_push(self) -> None:
+        steps = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["jobs"]["release"]["steps"]
+        names = [step.get("name") for step in steps]
+        notes_index = names.index("Build release notes")
+        self.assertLess(names.index("Reuse existing current release tag"), notes_index)
+        self.assertLess(notes_index, names.index("Update version files"))
+        self.assertLess(notes_index, names.index("Commit version bump and tag"))
+        script = steps[notes_index]["run"]
+        for version, expected_code in (("0.9.0", 0), ("0.8.2", 1)):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as tmp:
+                work = Path(tmp)
+                (work / "docs").mkdir()
+                (work / "docs/RELEASE_NOTES.md").write_text(
+                    "# Release Notes\n\n## skillager 0.9.0 (planned)\n\nRelease changes.\n",
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    ["bash", "-e", "-c", script], cwd=work,
+                    env={**os.environ, "PACKAGE": "skillager", "NEXT": version, "TAG_PATTERN": "v[0-9]*"},
+                    capture_output=True, text=True, check=False,
+                )
+                self.assertEqual(result.returncode, expected_code, result.stderr)
+                if expected_code:
+                    self.assertIn("does not contain release notes", result.stderr)
+                    self.assertFalse((work / "RELEASE_NOTES.md").exists())
+                else:
+                    self.assertEqual((work / "RELEASE_NOTES.md").read_text(),
+                                     "## skillager 0.9.0\n\nRelease changes.\n")
+
+    def test_linter_notes_keep_the_same_release_range_before_version_commit(self) -> None:
+        steps = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["jobs"]["release"]["steps"]
+        script = next(step["run"] for step in steps if step.get("name") == "Build release notes")
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            env = {**os.environ, "HOME": str(work / "home"), "XDG_CONFIG_HOME": str(work / "config"),
+                   "GIT_CONFIG_NOSYSTEM": "1", "PACKAGE": "skillager-linter", "NEXT": "0.1.3",
+                   "TAG_PATTERN": "skillager-linter-v[0-9]*", "BUMP": "patch"}
+
+            def git(*args):
+                subprocess.run(["git", *args], cwd=work, env=env, check=True, capture_output=True)
+
+            git("init")
+            git("config", "user.name", "Release check")
+            git("config", "user.email", "release-check@example.invalid")
+            git("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "Older published fix")
+            git("tag", "skillager-linter-v0.1.2")
+            empty = subprocess.run(["bash", "-e", "-c", script], cwd=work, env=env,
+                                   capture_output=True, text=True)
+            self.assertEqual(empty.returncode, 0, empty.stderr)
+            self.assertNotIn("Older published fix", (work / "RELEASE_NOTES.md").read_text())
+            git("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "New linter fix")
+            for bump in ("patch", "current"):
+                if bump == "current":
+                    git("-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "Bump skillager-linter to 0.1.3")
+                    git("tag", "skillager-linter-v0.1.3")
+                with self.subTest(bump=bump):
+                    result = subprocess.run(["bash", "-e", "-c", script], cwd=work,
+                                            env={**env, "BUMP": bump}, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    notes = (work / "RELEASE_NOTES.md").read_text()
+                    self.assertIn("- New linter fix", notes)
+                    self.assertNotIn("Older published fix", notes)
+                    self.assertNotIn("Bump skillager-linter", notes)
