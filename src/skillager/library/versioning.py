@@ -107,7 +107,7 @@ def library_diff(
     versions = history["versions"]
     target = Path(history["skill"]["path"])
     if to_hash is None:
-        to_endpoint = _working_endpoint(target, str(history["skill"]["working_hash"]))
+        to_endpoint = _working_endpoint(target, history["skill"]["working_hash"])
     else:
         to_version = resolve_history_version(versions, to_hash)
         to_endpoint = _historical_endpoint(registration.layout.root, target, to_version)

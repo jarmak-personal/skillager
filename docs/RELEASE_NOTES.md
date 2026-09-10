@@ -15,8 +15,8 @@ Highlights:
 - Create or explicitly import one skill, then accept only its exact scanned and linted
   content hash. The version-2 hash is domain-separated and length-framed over canonical
   paths, bytes, and normalized executable bits.
-- Inspect content-addressed history and diffs, and restore an old version as a new
-  descendant commit.
+- Inspect content-addressed history and diffs, including deleted working trees, and
+  restore an old version as a new descendant commit.
 - Detect current-project exposure drift and accepted-source updates without writes,
   exclude stale projections from current inventory, and refuse to overwrite local
   edits or remove them unless the user explicitly confirms a bound force preview.

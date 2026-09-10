@@ -301,6 +301,28 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             self.assertTrue(version["accepted"])
             self.assertFalse(version["current"])
 
+            for selection in ((), ("--from", accepted_hash[:12])):
+                with self.subTest(selection=selection):
+                    diff = cli.run("library", "diff", "recoverable", *selection, "--stat", "--json")
+                    self.assert_code(diff, 0)
+                    self.assertNotIn(FIRST_BODY, diff.stdout)
+                    data = diff.json()
+                    self.assertEqual(data["to"]["kind"], "missing")
+                    self.assertIsNone(data["to"]["content_hash"])
+                    self.assertEqual(data["stat"]["files_changed"], 1)
+                    self.assertEqual(data["stat"]["files"][0]["path"], "SKILL.md")
+                    self.assertEqual(data["stat"]["files"][0]["status"], "deleted")
+                    self.assertIsNone(data["diff"])
+
+            plain_diff = cli.run("library", "diff", "recoverable", "--stat")
+            self.assert_code(plain_diff, 0)
+            self.assertNotIn(FIRST_BODY, plain_diff.stdout)
+            self.assertIn("missing", plain_diff.stdout)
+            content_diff = cli.run("library", "diff", "recoverable", "--json")
+            self.assert_code(content_diff, 0)
+            self.assertIn("-" + FIRST_BODY, content_diff.json()["diff"])
+            self.assertFalse(skill.exists())
+
             preview = cli.run("library", "restore", "recoverable", "--to", accepted_hash[:12], "--json")
             self.assert_code(preview, 0)
             self.assertNotIn(FIRST_BODY, preview.stdout)
