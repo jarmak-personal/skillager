@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from support import TtyStringIO, chdir
+from skillager.trust import load_trust
 from skillager.cli import main
 from skillager.commands.impl import content_hashes
 from skillager.commands.impl import _print_router_suggestions
@@ -60,7 +61,7 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["setup", "--no-packages", "--accept-low", "--json", "--summary-json"]), 2)
             self.assertIn("--json and --summary-json cannot be combined", stderr.getvalue())
-            self.assertFalse((state / "trust.json").exists())
+            self.assertFalse((state / "trust.sqlite3").exists())
 
     def test_setup_accept_low_reviews_native_skill_without_auto_trust(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -466,9 +467,9 @@ class SkillagerSetupTests(unittest.TestCase):
                 chdir(project),
             ):
                 self.assertEqual(main(["setup", "--source", "project", "--no-packages"]), 0)
-            trust_log = json.loads((catalog_state / "trust.json").read_text(encoding="utf-8"))
+            trust_log = load_trust(catalog_state)
             self.assertEqual(len(trust_log.get("global_approvals", {})), 1)
-            self.assertFalse((state / "trust.json").exists())
+            self.assertFalse((state / "trust.sqlite3").exists())
 
             reset = StringIO()
             with (
@@ -513,7 +514,7 @@ class SkillagerSetupTests(unittest.TestCase):
                 chdir(project),
             ):
                 self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--summary-json", "--no-packages"]), 0)
-            trust_log = json.loads((catalog_state / "trust.json").read_text(encoding="utf-8"))
+            trust_log = load_trust(catalog_state)
             self.assertEqual(len(trust_log.get("global_approvals", {})), 1)
 
             output = StringIO()
@@ -1128,7 +1129,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("project/linted: reviewed", text)
             self.assertIn("Approved with audited lint override (1):", text)
             self.assertEqual(load_index(state)["skills"][0]["trust"], "reviewed")
-            trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
+            trust_log = load_trust(state)
             self.assertEqual(trust_log["skills"]["project/linted"]["lint_override"]["reason"], "audited local fixture")
 
     def test_interactive_lint_review_skip_block_and_quit(self) -> None:
@@ -1739,7 +1740,7 @@ class SkillagerSetupTests(unittest.TestCase):
                     self.assertEqual(main(["setup", "--no-packages", "--yolo"]), 0)
             data = load_index(state)
             self.assertEqual(data["skills"][0]["trust"], "reviewed")
-            trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
+            trust_log = load_trust(state)
             self.assertIn("--yolo", trust_log["skills"]["project/trusted-linted"]["lint_override"]["reason"])
             text = output.getvalue()
             self.assertIn("Lint overrides recorded this run: 1 (audited)", text)
@@ -1800,7 +1801,7 @@ class SkillagerSetupTests(unittest.TestCase):
             changed = report["action"]["changed"][0]
             self.assertEqual(changed["lint_override"]["reason"], "known good")
             self.assertEqual(changed["lint_override"]["findings"][0]["code"], "unknown_key")
-            trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
+            trust_log = load_trust(state)
             self.assertEqual(trust_log["skills"]["project/known-good-linted"]["lint_override"]["reason"], "known good")
 
     def test_setup_bulk_approve_reviews_high_risk_for_trusted_source(self) -> None:

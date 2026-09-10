@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -8,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from skillager.trust import load_trust
 from tests.behavior.support import CliResult, make_basic_workspace
 
 
@@ -483,7 +483,7 @@ class PersonalLibraryVersioningBehaviorTests(unittest.TestCase):
             restored = cli.run(*reason_preview.json()["next_command_argv"][1:], "--json")
             self.assert_code(restored, 0)
             self.assertEqual(restored.json()["skill"]["working_hash"], risky_hash)
-            trust = json.loads((catalog / "trust.json").read_text(encoding="utf-8"))
+            trust = load_trust(catalog)
             approval_key = next(iter(trust["global_approvals"]))
             self.assertEqual(
                 trust["global_approvals"][approval_key]["risk_override"]["reason"],

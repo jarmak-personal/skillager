@@ -8,6 +8,16 @@ package, native-agent, and collection skills.
 
 Highlights:
 
+- Store approvals, blocks, pins, overrides, and append-only decision history in
+  SQLite. Bind library acceptance to verified Git content versions. Keep collection
+  metadata and approved-body FTS in separate, rebuildable SQLite caches so search
+  reuses indexed content between commands.
+- Verify ranked search candidates before filling the result limit, reuse stable
+  collection metadata, and refresh newly discovered or newly accepted source
+  versions. Preserve exact tree checks, stale-result refill, exposure ranking,
+  agent variants, and identity collision handling. Add `search --scope library`
+  for personal approval authority without workspace discovery; its exposure
+  status is explicitly `unknown`.
 - Initialize the default Git-backed personal library on the first owned draft or
   confirmed import, while keeping import previews read-only. Explicit initialization
   still selects a custom path or disables Git. Diagnose a missing registered path and
@@ -51,6 +61,14 @@ Highlights:
 
 Compatibility and migration:
 
+- Legacy JSON approvals migrate on the next approval write, preserving the original
+  as `trust.json.migrated`. Read-only commands do not migrate them. Back up
+  `trust.sqlite3` in each state root alongside the library/Git repository; stale JSON
+  backups are never consulted once migrated. Small identity, provenance, tag, and
+  configuration documents retain their existing formats.
+- Search may populate `search-v1.sqlite3` in the configured cache directory.
+  Metadata-only output, ranking, filters, and the 50,000-character body search
+  window remain unchanged. Other metadata/readiness commands remain read-only.
 - Existing project, package, environment, native-agent, and collection discovery
   remains available; no source is automatically moved into the personal library.
 - Version-2 content hashes intentionally do not reuse older ambiguous hash approvals.

@@ -47,7 +47,7 @@ def snapshot_tree(*roots: Path) -> dict[str, str]:
 
 class SkillagerReadPurityTests(unittest.TestCase):
 
-    def test_metadata_commands_do_not_write_state_cache_or_project_files(self) -> None:
+    def test_metadata_commands_only_allow_search_to_populate_its_derived_cache(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             state = root / "state"
@@ -78,7 +78,7 @@ class SkillagerReadPurityTests(unittest.TestCase):
             exposed.write_text("# Locally Edited Demo\n\nPreview this reconciliation only.\n", encoding="utf-8")
             (state / "index.json").unlink()
 
-            before = snapshot_tree(state, catalog, cache, project, library)
+            before = snapshot_tree(state, catalog, project, library)
             commands = [
                 ["working", "--agent", "codex", "--json"],
                 ["list", "--no-packages", "--json"],
@@ -95,13 +95,18 @@ class SkillagerReadPurityTests(unittest.TestCase):
                 chdir(project),
             ):
                 for command in commands:
+                    cache_before = snapshot_tree(cache)
                     output = StringIO()
                     with redirect_stdout(output):
                         self.assertEqual(main(command), 0, command)
                     if command[0] in {"working", "list", "search", "show", "tag", "doctor"}:
                         json.loads(output.getvalue())
+                    if command[0] == "search":
+                        self.assertEqual([path.name for path in cache.iterdir()], ["search-v1.sqlite3"])
+                    else:
+                        self.assertEqual(snapshot_tree(cache), cache_before)
 
-            self.assertEqual(snapshot_tree(state, catalog, cache, project, library), before)
+            self.assertEqual(snapshot_tree(state, catalog, project, library), before)
             self.assertFalse((state / "index.json").exists())
 
 

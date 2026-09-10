@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import sqlite3
 from pathlib import Path
 from typing import Any
 
-from ..state.trust import APPROVED_TRUST_STATES
+from ..state.database import connect_database
+from ..state.trust import APPROVED_TRUST_STATES, content_hash
 
 STOPWORDS = {
     "a",
@@ -99,6 +102,7 @@ def search(
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
     include_untrusted: bool = True,
+    cache_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     candidates = [
         skill
@@ -106,12 +110,12 @@ def search(
         if _included(skill, include_blocked=include_blocked, include_lint_blocked=include_lint_blocked, include_untrusted=include_untrusted)
     ]
     try:
-        return _fts5_search(candidates, query)
-    except (sqlite3.Error, RuntimeError):
-        return _fallback_search(candidates, query)
+        return _fts5_search(candidates, query, cache_path=cache_path)
+    except (sqlite3.Error, RuntimeError, OSError):
+        return _fallback_search(candidates, query, verify_content=cache_path is not None)
 
 
-def _fts5_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+def _fts5_search(skills: list[dict[str, Any]], query: str, *, cache_path: Path | None = None) -> list[dict[str, Any]]:
     terms = _query_terms(query)
     exact = _exact_id_match(skills, query)
     if _looks_like_skill_id(query) and not exact:
@@ -123,81 +127,117 @@ def _fts5_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any
             return []
         return [_with_score(skill, 0.0, []) for skill in sorted(skills, key=lambda item: (_visibility_rank(item), item["id"]))]
 
-    body_texts = {skill["id"]: _body_text(skill) for skill in skills}
-    conn = sqlite3.connect(":memory:")
+    conn = connect_database(cache_path, writable=True) if cache_path is not None else sqlite3.connect(":memory:")
+    matched_fields: dict[int, dict[str, set[str]]] = {}
     try:
-        conn.execute(
-            """
-            CREATE VIRTUAL TABLE skill_fts USING fts5(
-                name,
-                summary,
-                audience,
-                package,
-                targets,
-                source,
-                tags,
-                body,
+        with conn:
+            conn.execute("CREATE TABLE IF NOT EXISTS search_entries(rowid INTEGER PRIMARY KEY, cache_key TEXT NOT NULL UNIQUE)")
+            conn.execute("""CREATE VIRTUAL TABLE IF NOT EXISTS skill_fts USING fts5(
+                name, summary, audience, package, targets, source, tags, body,
                 tokenize = 'unicode61 remove_diacritics 2'
-            )
-            """
-        )
-        for rowid, skill in enumerate(skills, start=1):
-            conn.execute(
-                "INSERT INTO skill_fts(rowid, name, summary, audience, package, targets, source, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    rowid,
-                    skill.get("name") or "",
-                    skill.get("summary") or "",
-                    _audience_text(skill),
-                    _package_text(skill),
-                    _target_text(skill),
-                    _source_text(skill),
-                    " ".join(str(tag) for tag in skill.get("tags", [])),
-                    body_texts[skill["id"]],
-                ),
-            )
-        match = " OR ".join(f'"{term}"' for term in terms)
-        rows = conn.execute(
-            """
-            SELECT rowid, bm25(skill_fts, 8.0, 3.0, 0.5, 4.0, 4.0, 3.0, 6.0, 0.2) AS rank
-            FROM skill_fts
-            WHERE skill_fts MATCH ?
-            ORDER BY rank
-            """,
-            (match,),
-        ).fetchall()
+            )""")
+            conn.execute("CREATE TABLE IF NOT EXISTS entry_terms(entry_rowid INTEGER NOT NULL, field TEXT NOT NULL, term TEXT NOT NULL, PRIMARY KEY(entry_rowid, field, term)) WITHOUT ROWID")
+            conn.execute("CREATE INDEX IF NOT EXISTS terms_lookup ON entry_terms(term, entry_rowid)")
+            conn.execute("CREATE TEMP TABLE query_terms(term TEXT PRIMARY KEY)")
+            conn.executemany("INSERT INTO query_terms VALUES (?)", [(term,) for term in terms])
+            conn.execute("CREATE TEMP TABLE candidates(position INTEGER PRIMARY KEY, cache_key TEXT NOT NULL, entry_rowid INTEGER)")
+            columns = [_search_columns(skill) for skill in skills]
+            keys = [_search_cache_key(skill, fields) for skill, fields in zip(skills, columns)]
+            conn.executemany("INSERT INTO candidates(position, cache_key) VALUES (?, ?)", enumerate(keys))
+            conn.execute("UPDATE candidates SET entry_rowid = (SELECT rowid FROM search_entries WHERE search_entries.cache_key = candidates.cache_key)")
+            missing = conn.execute("SELECT position FROM candidates WHERE entry_rowid IS NULL").fetchall()
+            for (position,) in missing:
+                skill = skills[position]
+                body = _verified_body_text(skill) if cache_path is not None else _body_text(skill)
+                # An unreadable/changing source must never poison a hash's cached body.
+                if body is None:
+                    continue
+                conn.execute("INSERT OR IGNORE INTO search_entries(cache_key) VALUES (?)", (keys[position],))
+                rowid = conn.execute("SELECT rowid FROM search_entries WHERE cache_key = ?", (keys[position],)).fetchone()[0]
+                conn.execute("INSERT OR REPLACE INTO skill_fts(rowid, name, summary, audience, package, targets, source, tags, body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", (rowid, *columns[position], body))
+                conn.executemany("INSERT OR IGNORE INTO entry_terms VALUES (?, ?, ?)",
+                                 [(rowid, field, term) for field, tokens in _token_fields(skill, body_text=body).items() for term in tokens])
+                conn.execute("UPDATE candidates SET entry_rowid = ? WHERE position = ?", (rowid, position))
+            conn.execute("CREATE INDEX candidates_rowid ON candidates(entry_rowid)")
+            match = " OR ".join(f'"{term}"' for term in terms)
+            rows = conn.execute("""SELECT candidates.position
+                FROM skill_fts JOIN candidates ON candidates.entry_rowid = skill_fts.rowid
+                WHERE skill_fts MATCH ?""", (match,)).fetchall()
+            # Persist the existing ASCII scoring tokens as well as the Unicode FTS
+            # index. This preserves ranking/reasons without loading matching bodies.
+            for position, field, term in conn.execute("""SELECT candidates.position, entry_terms.field, entry_terms.term
+                FROM query_terms JOIN entry_terms ON entry_terms.term = query_terms.term
+                JOIN candidates ON candidates.entry_rowid = entry_terms.entry_rowid"""):
+                fields = matched_fields.setdefault(position, _empty_token_fields())
+                fields[field].add(term)
     finally:
         conn.close()
 
     by_id: dict[str, dict[str, Any]] = {}
     if exact:
-        exact_body = body_texts.get(exact["id"], "")
+        exact_fields = matched_fields.get(skills.index(exact), _empty_token_fields())
         by_id[exact["id"]] = _with_score(
             exact,
-            100.0 + _score_boost(exact, terms, body_text=exact_body),
-            ["id:exact", *_reasons(exact, terms, body_text=exact_body)],
+            100.0 + _score_boost(exact, terms, body_text="", fields=exact_fields),
+            ["id:exact", *_reasons(exact, terms, body_text="", fields=exact_fields)],
         )
-    for rowid, _rank in rows:
-        skill = skills[int(rowid) - 1]
-        body_text = body_texts[skill["id"]]
-        reasons = _reasons(skill, terms, body_text=body_text)
+    for (position,) in rows:
+        skill = skills[position]
+        fields = matched_fields.get(position, _empty_token_fields())
+        reasons = _reasons(skill, terms, body_text="", fields=fields)
         if not reasons or _only_weak_provenance_matches(reasons, terms):
             continue
         item = _with_score(
             skill,
-            _score_boost(skill, terms, body_text=body_text),
+            _score_boost(skill, terms, body_text="", fields=fields),
             reasons,
         )
         by_id.setdefault(skill["id"], item)
     return sorted(by_id.values(), key=lambda item: (-float(item["score"]), _visibility_rank(item), item["id"]))
 
 
-def _fallback_search(skills: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+def _search_columns(skill: dict[str, Any]) -> tuple[str, ...]:
+    return (
+        skill.get("name") or "", skill.get("summary") or "", _audience_text(skill),
+        _package_text(skill), _target_text(skill), _source_text(skill),
+        " ".join(str(tag) for tag in skill.get("tags", [])),
+    )
+
+
+def _search_cache_key(skill: dict[str, Any], columns: tuple[str, ...]) -> str:
+    payload = (
+        "skillager.search.v1", "scoring-tokens-v1", BODY_SEARCH_CHAR_LIMIT, skill.get("approval_key"),
+        skill.get("root"), skill.get("entrypoint"), skill.get("content_hash"),
+        skill.get("trust") in APPROVED_TRUST_STATES, columns,
+    )
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _verified_body_text(skill: dict[str, Any]) -> str | None:
+    if skill.get("trust") not in APPROVED_TRUST_STATES:
+        return ""
+    root, expected = skill.get("root"), skill.get("content_hash")
+    if not root or not expected:
+        return None
+    try:
+        if content_hash(Path(root)) != expected:
+            return None
+        entrypoint = skill.get("entrypoint")
+        if not entrypoint:
+            return ""
+        with Path(entrypoint).open(encoding="utf-8", errors="replace") as handle:
+            body = handle.read(BODY_SEARCH_CHAR_LIMIT)
+        return body if content_hash(Path(root)) == expected else None
+    except (OSError, ValueError):
+        return None
+
+
+def _fallback_search(skills: list[dict[str, Any]], query: str, *, verify_content: bool = False) -> list[dict[str, Any]]:
     terms = _query_terms(query)
     exact = _exact_id_match(skills, query)
     if _looks_like_skill_id(query) and not exact:
         return []
-    body_texts = {skill["id"]: _body_text(skill) for skill in skills} if terms else {}
+    body_texts = {skill["id"]: (_verified_body_text(skill) or "") if verify_content else _body_text(skill) for skill in skills} if terms else {}
     results: list[dict[str, Any]] = []
     for skill in skills:
         reasons: list[str] = ["id:exact"] if exact and skill["id"] == exact["id"] else []
@@ -259,10 +299,11 @@ def _tokens(text: str) -> list[str]:
     return [match.group(0).lower() for match in TOKEN_RE.finditer(text or "")]
 
 
-def _score_boost(skill: dict[str, Any], terms: list[str], *, body_text: str) -> float:
+def _score_boost(skill: dict[str, Any], terms: list[str], *, body_text: str, fields: dict[str, set[str]] | None = None) -> float:
     if not terms:
         return 0.0
-    fields = _token_fields(skill, body_text=body_text)
+    if fields is None:
+        fields = _token_fields(skill, body_text=body_text)
     score = 0.0
     for term in terms:
         if term in fields["name"]:
@@ -286,8 +327,9 @@ def _score_boost(skill: dict[str, Any], terms: list[str], *, body_text: str) -> 
     return score
 
 
-def _reasons(skill: dict[str, Any], terms: list[str], *, body_text: str) -> list[str]:
-    fields = _token_fields(skill, body_text=body_text)
+def _reasons(skill: dict[str, Any], terms: list[str], *, body_text: str, fields: dict[str, set[str]] | None = None) -> list[str]:
+    if fields is None:
+        fields = _token_fields(skill, body_text=body_text)
     reasons: list[str] = []
     for term in terms:
         for field in ("name", "tags", "package", "targets", "source", "summary", "body", "audience"):
@@ -297,6 +339,10 @@ def _reasons(skill: dict[str, Any], terms: list[str], *, body_text: str) -> list
                 reasons.append(f"{field}:{term}")
                 break
     return sorted(set(reasons))
+
+
+def _empty_token_fields() -> dict[str, set[str]]:
+    return {field: set() for field in ("name", "summary", "audience", "package", "targets", "source", "tags", "body")}
 
 
 def _token_fields(skill: dict[str, Any], *, body_text: str) -> dict[str, set[str]]:

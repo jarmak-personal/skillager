@@ -25,7 +25,8 @@ from ..search import search as search_skills
 from ..selection import select_visible_skills
 from ..signing import signature_info
 from ..statefiles import mutate_user_json, read_user_json, write_user_json
-from ..trust import approval_key_for, content_hash, trust_info, trust_path
+from ..trust import approval_key_for, content_hash, mutate_trust, trust_info, trust_snapshot
+from . import storage
 
 COLLECTION_MIGRATIONS_SCHEMA = "skillager.collection-migrations.v1"
 IGNORED_SKILL_DIR_NAMES = {
@@ -105,6 +106,7 @@ def remove_collection(state_root: Path, name: str) -> bool:
 
     removed = mutate_user_json(collections_path(state_root), {"collections": {}}, mutation)
     if removed:
+        storage.remove_collection(state_root, name)
         index_path = _collection_index_path(state_root, name)
         if index_path.exists():
             index_path.unlink()
@@ -172,9 +174,12 @@ def refresh_collection(state_root: Path, name: str) -> dict[str, Any]:
     if collection.get("kind") == LIBRARY_COLLECTION_KIND:
         data["kind"] = LIBRARY_COLLECTION_KIND
         data["library_id"] = collection.get("library_id")
+        data["provenance_hash"] = _library_provenance_hash(collection)
     _migrate_collection_references(state_root, name, old_index, data)
-    collection_index_dir(state_root).mkdir(parents=True, exist_ok=True)
-    _collection_index_path(state_root, name).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    storage.write_collection(state_root, name, data)
+    legacy_index = _collection_index_path(state_root, name)
+    if legacy_index.exists():
+        legacy_index.unlink()
     return data
 
 
@@ -202,6 +207,18 @@ def select_collection_skills(
 
 
 def _collection_skills(
+    state_root: Path,
+    name: str | None = None,
+    *,
+    trust_root: Path | None = None,
+    approval_root: Path | None = None,
+    refresh_library: bool = True,
+) -> list[dict[str, Any]]:
+    with trust_snapshot([trust_root or state_root, approval_root or trust_root or state_root]):
+        return _collection_skills_snapshot(state_root, name, trust_root=trust_root, approval_root=approval_root, refresh_library=refresh_library)
+
+
+def _collection_skills_snapshot(
     state_root: Path,
     name: str | None = None,
     *,
@@ -535,7 +552,7 @@ def apply_collection_trust_migrations(state_root: Path, catalog_root: Path) -> i
             changed += 1
         return changed
 
-    return mutate_user_json(trust_path(state_root), {"skills": {}}, mutation)
+    return mutate_trust(state_root, mutation)
 
 
 def attach_project_tag(state_root: Path, tag: str, *, catalog_root: Path | None = None) -> dict[str, Any]:
@@ -617,6 +634,7 @@ def _index_collection_skills(
     root: Path,
     *,
     collection: dict[str, Any] | None = None,
+    skill_dirs: list[Path] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     skills: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
@@ -629,7 +647,8 @@ def _index_collection_skills(
         if isinstance(provenance, dict):
             provenance_skills = provenance.get("skills", {})
     try:
-        skill_dirs = _skill_dirs(root)
+        if skill_dirs is None:
+            skill_dirs = _skill_dirs(root)
     except OSError as exc:
         return [], [{"path": str(root), "error": str(exc)}]
     for skill_dir in skill_dirs:
@@ -730,6 +749,8 @@ def _collection_quarantined(
 
 def _load_or_refresh_collection_index(state_root: Path, name: str, *, refresh_library: bool = True) -> dict[str, Any]:
     collection = load_collections(state_root).get("collections", {}).get(name)
+    if not isinstance(collection, dict):
+        raise KeyError(f"collection not found: {name}")
     if isinstance(collection, dict) and collection.get("kind") == LIBRARY_COLLECTION_KIND:
         if not refresh_library:
             return _load_collection_index(state_root, name) or {
@@ -741,25 +762,24 @@ def _load_or_refresh_collection_index(state_root: Path, name: str, *, refresh_li
                 "skills": [],
                 "errors": [],
             }
-        root = Path(collection["path"]).expanduser().resolve()
-        skills, errors = _index_collection_skills(state_root, name, root, collection=collection)
-        return {
-            "schema": "skillager.collection-index.v1",
-            "name": name,
-            "path": str(root),
-            "kind": LIBRARY_COLLECTION_KIND,
-            "library_id": collection.get("library_id"),
-            "skills": skills,
-            "errors": errors,
-        }
-    path = _collection_index_path(state_root, name)
-    if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
+    data = _load_collection_index(state_root, name)
+    if data is not None:
         collection_root = Path(collection["path"]).expanduser().resolve()
+        if collection.get("kind") == LIBRARY_COLLECTION_KIND and (
+            data.get("library_id") != collection.get("library_id")
+            or data.get("path") != str(collection_root)
+            or data.get("provenance_hash") != _library_provenance_hash(collection)
+        ):
+            return _live_collection_index(state_root, name, collection)
         if _collection_index_hashes_current(data, collection_root=collection_root):
             return data
         return _live_collection_index(state_root, name, collection)
-    return refresh_collection(state_root, name)
+    return _live_collection_index(state_root, name, collection)
+
+
+def _library_provenance_hash(collection: dict[str, Any]) -> str:
+    layout = LibraryLayout.from_root(Path(collection["library_root"]))
+    return hashlib.sha256(json.dumps(load_library_provenance(layout), sort_keys=True).encode()).hexdigest()
 
 
 def _collection_index_hashes_current(
@@ -813,6 +833,9 @@ def _live_collection_index(
 
 
 def _load_collection_index(state_root: Path, name: str) -> dict[str, Any] | None:
+    cached = storage.read_collection(state_root, name)
+    if cached is not None:
+        return cached
     path = _collection_index_path(state_root, name)
     if not path.exists():
         return None
@@ -972,7 +995,7 @@ def _migrate_trust(state_root: Path, old_entries: list[dict[str, Any]], new_by_r
             migrated.append({"old_id": old_id, "new_id": new["id"], "content_hash": record_hash})
         return {"trust_migrated": migrated, "needs_review": needs_review}
 
-    return mutate_user_json(trust_path(state_root), {"skills": {}}, mutation)
+    return mutate_trust(state_root, mutation)
 
 
 def _migrate_tags(state_root: Path, old_entries: list[dict[str, Any]], new_by_root: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:

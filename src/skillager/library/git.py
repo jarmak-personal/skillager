@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from ..skills.tree import content_path_excluded
-from ..trust import content_hash_entries
+from ..trust import content_hash, content_hash_entries
 
 
 FALLBACK_GIT_NAME = "Skillager"
@@ -221,6 +221,22 @@ def _require_safe_existing_status(root: Path) -> None:
         raise LibraryGitError(f"library Git repository has an in-progress {status['operation']} operation")
     if status["staged"]:
         raise LibraryGitError("library Git repository has staged changes; commit or unstage them before initializing")
+
+
+def verified_version_reference(root: Path, path: Path, *, source_key: str, expected_hash: str, mode: str) -> dict[str, str]:
+    """Bind a reviewed hash to a specific verified Git object, never moving HEAD."""
+    version = {"source_key": source_key, "content_hash": expected_hash}
+    if mode == "system":
+        commit = _head_commit(root)
+        if not commit:
+            raise ValueError("library Git HEAD is missing; content remains pending acceptance")
+        files = git_tree_files(root, path, commit)
+        if content_hash_entries((item.path, item.content, item.mode) for item in files) != expected_hash:
+            raise ValueError("library Git commit does not reproduce the accepted Skillager content hash")
+        version.update(repository=str(root.resolve()), git_commit=commit, skill_path=_relative_path(root, path))
+    if content_hash(path) != expected_hash:
+        raise ValueError("library content changed before recording acceptance; review it again")
+    return version
 
 
 def head_content_hash(root: Path, path: Path) -> str | None:

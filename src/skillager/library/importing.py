@@ -13,7 +13,7 @@ from ..state.locking import resource_locks
 from ..state.statefiles import read_user_json
 from ..trust import APPROVED_TRUST_STATES, approval_key_for, content_hash, set_trust
 from .candidate import index_library_candidate
-from .git import LibraryGitError, commit_paths, path_changes, repository_status
+from .git import LibraryGitError, commit_paths, path_changes, repository_status, verified_version_reference
 from .metadata import load_library_provenance, set_import_provenance
 from .model import LIBRARY_NAMESPACE, normalize_skill_name
 from .service import (
@@ -192,6 +192,7 @@ def import_library_skill(
                 approval_key=approval_key,
                 approval_root=catalog_root,
                 global_scope=True,
+                version=verified_version_reference(layout.root, target, source_key=approval_key, expected_hash=expected_hash, mode=identity.git_mode),
             )
         except Exception as exc:
             pending_state = "committed but pending" if identity.git_mode == "system" else "copied but pending"

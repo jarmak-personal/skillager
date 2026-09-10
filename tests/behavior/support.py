@@ -24,8 +24,9 @@ class CliResult:
 
 
 class SkillagerCli:
-    def __init__(self, project: Path, *, state: Path, catalog_state: Path, home: Path, cache: Path) -> None:
+    def __init__(self, project: Path, *, state: Path, catalog_state: Path, home: Path, cache: Path, timeout: float = 30) -> None:
         self.project = project
+        self.timeout = timeout
         env = os.environ.copy()
         python_path = str(SRC_ROOT)
         if env.get("PYTHONPATH"):
@@ -53,7 +54,7 @@ class SkillagerCli:
             stderr=subprocess.PIPE,
             text=True,
             check=False,
-            timeout=30,
+            timeout=self.timeout,
         )
         return CliResult(completed.returncode, completed.stdout, completed.stderr)
 

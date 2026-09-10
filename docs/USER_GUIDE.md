@@ -81,6 +81,63 @@ Skillager can govern content used through its commands and managed project files
 Codex and Claude may also load skills installed directly in their own native folders;
 Skillager cannot block those independent host paths.
 
+## Storage and Backups
+
+Library skills remain editable files, with Git history unless you chose `--no-git`.
+Approvals, blocks, pins, overrides, and decision history live in `trust.sqlite3` in
+each project state directory and the user catalog directory. Back up these state
+directories while Skillager is idle, along with your library. Git alone does not
+back up approval decisions.
+
+Existing `trust.json` approvals remain usable. The next approval write migrates them
+to SQLite and retains `trust.json.migrated` as the original backup. The small
+`trust.sqlite3.required` marker prevents using stale JSON if the database disappears.
+Keep the database and marker together. If the database is lost or damaged, restore
+its backup; do not replace it with the old JSON file. Older Skillager releases cannot
+manage the new approval database.
+
+Collection metadata in `catalog.sqlite3` and search content in
+`search-v1.sqlite3` are rebuildable caches. The latter lives under
+`SKILLAGER_CACHE_DIR` (or the default user cache directory). Search may populate it;
+other metadata/readiness commands remain read-only. Deleting these caches while
+Skillager is idle does not revoke approvals. Search still validates current content
+and returns metadata only, using the existing 50,000-character body search window.
+
+## Search The Personal Library
+
+```bash
+skillager search "database migration" --scope library --limit 20 --json
+```
+
+`--scope library` searches accepted owned skills using the personal catalog's approval
+authority. Scope applies before ranking and limiting. It skips project, package,
+native-directory, and workspace-exposure discovery. Results report `exposure: "unknown"`;
+this means workspace status was not checked. Project-specific blocks, tags, and
+exposure status belong to the default `--scope workspace` query. Library scope cannot
+be combined with `--tag` or `--include-global`; agent and compatibility filters work
+in either scope. An uninitialized library returns an empty result list.
+
+Search covers titles, descriptions, tags, and approved entrypoint bodies, returning
+metadata and match reasons without body excerpts. Pending drafts remain visible
+through library metadata commands, but do not match body searches. `--limit` defaults
+to 10; `0` returns all matches. Results remain a JSON list with no total count or
+paging cursor. A full result window does not establish how many more matches exist.
+
+Warm searches reuse collection metadata and indexed prose, then verify the exact
+current content tree and approval for ranked candidates before filling the result
+limit. Changed or deleted matches cannot consume that limit. Source discovery and
+accepted-hash changes refresh candidate metadata as needed; library acceptance
+refreshes its catalog metadata. An external accepted edit is searchable without
+`collection refresh`, though an explicit refresh avoids repeatedly rebuilding that
+changed entry's metadata. Search does not write catalog or approval state.
+
+A missing search cache still requires initial body indexing. Exposed skills, agent
+variants, and ambiguous identities need additional verification to preserve ranking.
+Project/package discovery remains live. Exhaustive queries and inventories still
+perform the work needed to verify every returned source. UI integrations should run
+the CLI asynchronously, cancel obsolete requests, and refresh after acceptance or
+other relevant changes; search is not a watcher or an update notification service.
+
 ## Create A Personal Skill
 
 Ask your agent:

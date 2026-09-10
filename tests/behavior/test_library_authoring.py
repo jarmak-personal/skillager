@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from skillager.trust import load_trust
 from skillager.simple_yaml import load_mapping
 from tests.behavior.support import BODY_SENTINEL, CliResult, make_basic_workspace
 
@@ -122,6 +123,10 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             )
             self.assert_code(cli.run_confirmed("library", "accept", "lib/demo", "--yes"), 0)
 
+            initial_search = cli.run("search", "lib/demo", "--json")
+            self.assert_code(initial_search, 0)
+            self.assertEqual([row["id"] for row in initial_search.json()], ["lib/demo"])
+
             external_body = "UNREVIEWED_EXTERNAL_COLLISION_BODY"
             external = project / ".venv" / "lib" / "python3.13" / "site-packages" / "lib" / ".skills" / "demo"
             external.mkdir(parents=True)
@@ -135,6 +140,12 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertFalse(metadata.json()["skill"]["available"])
             self.assertEqual(metadata.json()["skill"]["identity_collision"]["source_count"], 2)
             self.assertNotIn(external_body, metadata.stdout)
+            collision_search = cli.run("search", "lib/demo", "--json")
+            self.assert_code(collision_search, 0)
+            self.assertEqual(collision_search.json(), [])
+            library_search = cli.run("search", "lib/demo", "--scope", "library", "--json")
+            self.assert_code(library_search, 0)
+            self.assertEqual([row["id"] for row in library_search.json()], ["lib/demo"])
 
             for blocked in (
                 cli.run("show", "lib/demo", "--content"),
@@ -172,20 +183,20 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertIn("--yes", next_command)
             self.assertEqual(next_command[-2], "--confirmation-token")
             self.assertRegex(next_command[-1], r"^[0-9a-f]{64}$")
-            self.assertFalse((catalog / "trust.json").exists())
+            self.assertFalse((catalog / "trust.sqlite3").exists())
             self.assert_body_not_exposed(preview)
 
             unbound = cli.run("library", "accept", "lib/orbital-review", "--yes")
             self.assert_code(unbound, 2)
             self.assertIn("confirmation token", unbound.stderr)
-            self.assertFalse((catalog / "trust.json").exists())
+            self.assertFalse((catalog / "trust.sqlite3").exists())
 
             previewed_body = skill_file.read_text(encoding="utf-8")
             skill_file.write_text(previewed_body + "\nChanged after preview.\n", encoding="utf-8")
             stale = cli.run(*next_command[1:], "--json")
             self.assert_code(stale, 2)
             self.assertIn("preview is stale", stale.stderr)
-            self.assertFalse((catalog / "trust.json").exists())
+            self.assertFalse((catalog / "trust.sqlite3").exists())
             skill_file.write_text(previewed_body, encoding="utf-8")
 
             readable_preview = cli.run("library", "accept", "lib/orbital-review")
@@ -207,7 +218,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             approval_key = f"library:{library_id}#orbital-review"
             self.assertEqual(approval_key, f"library:{library_id}#orbital-review")
 
-            trust = json.loads((catalog / "trust.json").read_text(encoding="utf-8"))
+            trust = load_trust(catalog)
             self.assertEqual(trust["global_approvals"][approval_key]["content_hash"], accepted_data["skill"]["working_hash"])
             self.assertNotIn("lib/orbital-review", trust.get("skills", {}))
 
@@ -474,7 +485,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assert_code(cli.run("library", "init", "--path", str(library), "--no-git"), 0)
             self.assert_code(cli.run("library", "new", "stale-working"), 0)
             self.assert_code(cli.run_confirmed("library", "accept", "stale-working", "--yes"), 0)
-            trust_path = catalog / "trust.json"
+            trust_path = catalog / "trust.sqlite3"
             trust_before = trust_path.read_bytes()
 
             skill_file = library / "skills" / "stale-working" / "SKILL.md"
@@ -513,7 +524,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             refused = cli.run("library", "accept", "linted-skill", "--yes")
             self.assert_code(refused, 2)
             self.assertIn("--override-lint --reason", refused.stderr)
-            self.assertFalse((catalog / "trust.json").exists())
+            self.assertFalse((catalog / "trust.sqlite3").exists())
 
             missing_reason = cli.run("library", "accept", "linted-skill", "--yes", "--override-lint")
             self.assert_code(missing_reason, 2)
@@ -534,7 +545,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assert_code(accepted, 0)
             override = accepted.json()["approval"]["lint_override"]
             self.assertEqual(override["reason"], "Reviewed local authoring metadata")
-            trust = json.loads((catalog / "trust.json").read_text(encoding="utf-8"))
+            trust = load_trust(catalog)
             approval_key = next(iter(trust["global_approvals"]))
             self.assertEqual(
                 trust["global_approvals"][approval_key]["lint_override"]["reason"],
@@ -564,7 +575,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             refused = cli.run_confirmed("library", "accept", "git-skill", "--yes")
             self.assert_code(refused, 2)
             self.assertIn("unrelated staged changes", refused.stderr)
-            self.assertFalse((catalog / "trust.json").exists())
+            self.assertFalse((catalog / "trust.sqlite3").exists())
             staged = subprocess.run(
                 ["git", "diff", "--cached", "--name-only"],
                 cwd=library,
@@ -593,7 +604,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             self.assertEqual(changed_files, ["skills/git-skill/SKILL.md"])
             self.assertTrue(unrelated.exists())
 
-            trust_before = json.loads((catalog / "trust.json").read_text(encoding="utf-8"))["global_approvals"]
+            trust_before = load_trust(catalog)["global_approvals"]
             subprocess.run(
                 ["git", "remote", "add", "origin", "https://example.invalid/personal-skills.git"],
                 cwd=library,
@@ -603,7 +614,7 @@ class PersonalLibraryAuthoringBehaviorTests(unittest.TestCase):
             after_remote = cli.run("library", "status", "git-skill", "--json")
             self.assert_code(after_remote, 0)
             self.assertEqual(after_remote.json()["skill"]["acceptance"], "accepted")
-            trust_after = json.loads((catalog / "trust.json").read_text(encoding="utf-8"))["global_approvals"]
+            trust_after = load_trust(catalog)["global_approvals"]
             self.assertEqual(trust_after, trust_before)
 
 

@@ -22,6 +22,7 @@ from .git import (
     git_tree_files,
     head_content_hash,
     repository_status,
+    verified_version_reference,
 )
 from .model import LIBRARY_NAMESPACE, normalize_skill_name
 from .service import (
@@ -285,6 +286,7 @@ def restore_library_skill(
                 approval_key=approval_key,
                 approval_root=catalog_root,
                 global_scope=True,
+                version=verified_version_reference(registration.layout.root, target, source_key=approval_key, expected_hash=expected_hash, mode=identity.git_mode),
             )
         except Exception as exc:
             restored_state = "committed" if commit is not None else "restored at existing Git HEAD"

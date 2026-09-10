@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from support import chdir
+from skillager.catalog.storage import write_collection
 from skillager.cli import main
 from skillager.materialize import materialize_working_skill
 from skillager.trust import content_hash, set_trust
@@ -73,6 +74,7 @@ class SkillagerDoctorTests(unittest.TestCase):
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
             with (
+                patch.dict(os.environ, {"CODEX_SESSION_ID": "", "CLAUDE_SESSION_ID": ""}),
                 patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
                 patch("skillager.discovery.find_project_root", return_value=root),
                 patch("pathlib.Path.home", return_value=root),
@@ -146,6 +148,7 @@ class SkillagerDoctorTests(unittest.TestCase):
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text("# Demo\n\nUse demo guidance.\n", encoding="utf-8")
             with (
+                patch.dict(os.environ, {"CODEX_SESSION_ID": "", "CLAUDE_SESSION_ID": ""}),
                 patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
                 patch("skillager.discovery.find_project_root", return_value=root),
                 patch("pathlib.Path.home", return_value=root),
@@ -421,9 +424,7 @@ class SkillagerDoctorTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
-                (state / "collections" / "personal.json").write_text(
-                    json.dumps(
-                        {
+                write_collection(state, 'personal', {
                             "schema": "skillager.collection-index.v1",
                             "name": "personal",
                             "path": str(collection),
@@ -432,12 +433,7 @@ class SkillagerDoctorTests(unittest.TestCase):
                                 {"id": "personal/foo", "root": str(writing), "content_hash": content_hash(writing)},
                             ],
                             "errors": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
+                        })
                 (state / "tags.json").write_text(json.dumps({"tags": {"foo": ["personal/foo"]}}, indent=2) + "\n", encoding="utf-8")
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "refresh", "personal"]), 0)
@@ -465,20 +461,13 @@ class SkillagerDoctorTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
-                (state / "collections" / "personal.json").write_text(
-                    json.dumps(
-                        {
+                write_collection(state, 'personal', {
                             "schema": "skillager.collection-index.v1",
                             "name": "personal",
                             "path": str(collection),
                             "skills": [{"id": "personal/foo", "root": str(python), "content_hash": digest}],
                             "errors": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
+                        })
                 set_trust(state, "personal/foo", "reviewed", digest, {"type": "collection", "collection": "personal"})
                 (state / "tags.json").write_text(json.dumps({"tags": {"foo": ["personal/foo"]}}, indent=2) + "\n", encoding="utf-8")
                 with redirect_stdout(StringIO()):

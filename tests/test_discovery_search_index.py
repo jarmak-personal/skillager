@@ -10,12 +10,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from support import chdir
+from skillager.trust import load_trust
 from skillager.cli import main
 from skillager.commands.impl import _inventory_summary, _sort_agent_variant_search
 from skillager.index import build_index, load_index
 from skillager.search import search as search_skills
 from skillager.skills import discovery as discovery_impl
-from skillager.trust import set_trust, trust_state
+from skillager.trust import content_hash, set_trust, trust_state
 
 
 class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
@@ -260,6 +261,20 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
             results = search_skills(skills, "reticulating splines", include_untrusted=False)
         self.assertEqual(results[0]["id"], "project/body-only")
         self.assertIn("body:reticulating", results[0]["reasons"])
+
+    def test_cache_failure_does_not_search_changed_unreviewed_body(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skill"
+            root.mkdir()
+            entrypoint = root / "SKILL.md"
+            entrypoint.write_text("# Ordinary\n\nReviewedbody examples.\n")
+            skill = {"id": "project/ordinary", "name": "Ordinary", "summary": "Use ordinary examples.",
+                     "root": str(root), "entrypoint": str(entrypoint), "content_hash": content_hash(root), "trust": "reviewed"}
+            cache = Path(tmp) / "unavailable.sqlite3"
+            with patch("skillager.search._fts5_search", side_effect=RuntimeError("fts unavailable")):
+                self.assertEqual(len(search_skills([skill], "reviewedbody", cache_path=cache)), 1)
+                entrypoint.write_text("# Ordinary\n\nPendingbody examples.\n")
+                self.assertEqual(search_skills([skill], "pendingbody", cache_path=cache), [])
 
     def test_lexical_search_does_not_match_unreviewed_skill_body(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -527,7 +542,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                 self.assertEqual(first_data["action"]["changed"][0]["scope"], "global")
                 self.assertEqual(first_data["global_approved"], 1)
 
-                trust_log = json.loads((catalog_state / "trust.json").read_text(encoding="utf-8"))
+                trust_log = load_trust(catalog_state)
                 self.assertEqual(len(trust_log.get("global_approvals", {})), 1)
 
                 reused = StringIO()
@@ -547,7 +562,7 @@ class SkillagerDiscoverySearchIndexTests(unittest.TestCase):
                 self.assertEqual(reset_data["review_needed"], 0)
                 self.assertEqual(reset_data["global_approved"], 1)
                 self.assertEqual(reset_data["global_reset"], 0)
-                trust_log = json.loads((catalog_state / "trust.json").read_text(encoding="utf-8"))
+                trust_log = load_trust(catalog_state)
                 self.assertEqual(len(trust_log.get("global_approvals", {})), 1)
 
                 reapproved = StringIO()

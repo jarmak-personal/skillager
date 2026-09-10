@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from support import TtyStringIO, chdir
+from skillager.trust import load_trust
 from skillager.cli import main
 from skillager.index import build_index, load_index
 from skillager.manifest import init_manifests
@@ -136,7 +137,7 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                     self.assertEqual(main(["review", "approve", "project/demo", "--override-lint", "--reason", "local test fixture"]), 0)
                 trusted = load_index(state)["skills"][0]
                 self.assertEqual(trusted["trust"], "reviewed")
-                trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
+                trust_log = load_trust(state)
                 self.assertEqual(trust_log["skills"]["project/demo"]["lint_override"]["reason"], "local test fixture")
 
     def test_lint_blocked_reports_show_path_and_resolution_command(self) -> None:
@@ -262,7 +263,7 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
 
             trusted = load_index(state)["skills"][0]
             self.assertEqual(trusted["trust"], "reviewed")
-            trust_log = json.loads((state / "trust.json").read_text(encoding="utf-8"))
+            trust_log = load_trust(state)
             self.assertEqual(trust_log["skills"]["project/demo"]["lint_override"]["reason"], "known good")
 
     def test_review_output_sanitizes_author_controlled_manifest_keys(self) -> None:
@@ -512,7 +513,7 @@ class SkillagerSchemaScanLintTests(unittest.TestCase):
                 self.assertEqual(main(["verify-signature", str(skill_dir), "--certificate-chain", str(cert), "--json"]), 0)
             data = json.loads(stdout.getvalue())
             self.assertTrue(data["verified"])
-            self.assertFalse((root / ".skillager" / "trust.json").exists())
+            self.assertFalse((root / ".skillager" / "trust.sqlite3").exists())
 
     def test_verify_signature_invokes_model_signing_with_canonical_flags(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

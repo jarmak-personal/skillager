@@ -22,7 +22,7 @@ from ..scan import scan_text
 from ..simple_yaml import load_mapping
 from ..skills.tree import require_canonical_content_tree
 from ..state.locking import resource_lock, resource_locks
-from ..trust import approval_key_for, load_trust, make_lint_override, set_trust
+from ..trust import approval_key_for, trust_record, make_lint_override, set_trust
 from .git import (
     LibraryGitError,
     commit_paths,
@@ -35,6 +35,7 @@ from .git import (
     repository_status,
     require_paths_trackable,
     unstage_paths,
+    verified_version_reference,
 )
 from .metadata import (
     load_library_identity,
@@ -317,6 +318,7 @@ def accept_library_skill(
             approval_key=approval_key,
             approval_root=catalog_root,
             global_scope=True,
+            version=verified_version_reference(layout.root, Path(skill["root"]), source_key=approval_key, expected_hash=working_hash, mode=identity.git_mode),
         )
         refresh_collection(catalog_root, LIBRARY_NAMESPACE)
         where = library_where(catalog_root, normalized, project_dir=project_dir)["skill"]
@@ -723,7 +725,7 @@ def _skill_status(
     skill = _library_skill_entry(catalog_root, value)
     root = Path(skill["root"])
     approval_key = _library_approval_key(skill)
-    approval = load_trust(catalog_root).get("global_approvals", {}).get(approval_key)
+    approval = trust_record(catalog_root, "global_approvals", approval_key)
     accepted_hash = approval.get("content_hash") if isinstance(approval, dict) else None
     working_hash = str(skill["content_hash"])
     head_hash = head_content_hash(registration.layout.root, root) if identity.git_mode == "system" and git.get("repository") else None
@@ -790,7 +792,7 @@ def _missing_skill_status(
         },
         entrypoint=root / "SKILL.md",
     )
-    approval = load_trust(catalog_root).get("global_approvals", {}).get(approval_key)
+    approval = trust_record(catalog_root, "global_approvals", approval_key)
     accepted_hash = approval.get("content_hash") if isinstance(approval, dict) else None
     head_hash = (
         head_content_hash(registration.layout.root, root)

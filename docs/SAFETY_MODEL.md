@@ -24,6 +24,47 @@ Acceptance previews body-safe scanner and lint metadata, recomputes the hash und
 
 The user catalog and its approvals are user-owned authority. Repository-controlled tag metadata may retain a portable catalog hint, but Skillager honors it only when matching user state has bound that exact project and catalog through an authorized tag operation. Explicit command-line or environment configuration takes precedence. A repository cannot substitute its own library registration or approval files by committing a catalog path.
 
+## Approval Storage and Search Caches
+
+Each state root stores current approval decisions in `trust.sqlite3`. Updates append
+the previous and new decision to an audit table in the same transaction. Library
+accept/import/restore also record an immutable source-identity/content-hash version
+and, when Git is enabled, a verified commit reference. An unrelated Git commit does
+not create a new content version. Historical versions and Git commits never grant
+current approval. A failed approval transaction after a Git commit leaves content
+pending; preview and retry `library accept` after repairing the storage problem.
+
+Legacy `trust.json` remains readable without writes. The next approval mutation
+imports all records transactionally and retains the original as
+`trust.json.migrated`. Thereafter SQLite is the sole approval authority: corrupt or
+missing migrated databases fail closed instead of consulting stale JSON. Existing
+in-tree state still requires the separately confirmed state-import workflow.
+
+Collection refresh stores metadata in `catalog.sqlite3`; old collection JSON
+indexes remain readable until refreshed. Search incrementally fills
+`search-v1.sqlite3` under the configured cache directory with metadata and the
+existing first 50,000 characters of approved entrypoints. Search may write this
+derived cache; other metadata/readiness commands do not populate it. Search joins
+FTS matches to candidates selected by current approval records. Cached collection
+metadata is tentative until each ranked result passes a fresh exact source-tree
+hash and approval check. Rejected candidates do not consume the result limit.
+New source roots and changed accepted hashes trigger live metadata scans. Exposed
+sources and agent variants are verified before ranking; identity collisions use a
+fully verified inventory. Source hashes include bytes and executable modes, so
+unchanged size or restored timestamps cannot preserve availability after an edit.
+
+`search --scope library` uses personal catalog authority without project discovery
+or project decisions. Its `exposure: "unknown"` explicitly means workspace state
+was not inspected. Default workspace search retains project decisions and exposure
+ranking. Neither scope approves content or exposes it to an agent.
+
+These caches contain no approval authority and can be deleted while Skillager is
+idle. Old cached bodies may remain on disk after revocation, but cannot produce a
+returned search result without current exact-hash approval. Cache construction and
+the live fallback verify sources before reading body text. Back up the approval databases as
+well as the library files/Git repository. A Git backup alone does not preserve
+approvals, overrides, blocks, or decision history.
+
 ## Import Boundary
 
 Import is the only Skillager operation that turns an external skill into an owned library skill. Preview is read-only. An external ID claimed by multiple distinct roots is ambiguous and fails closed; explicit collision-suffixed inventory IDs remain selectable. After explicit confirmation, Skillager re-resolves and rehashes the source, applies the same scanner/lint and audited-override rules as authored acceptance, and only then prepares a filtered candidate outside the library. Source changes invalidate the preview.
@@ -100,7 +141,7 @@ For fully reviewed sources, `--bulk-approve` also approves selected lint-blocked
 
 Interactive setup has a lint-blocked review lane. Its override path requires a non-empty user-supplied reason and stores the same audited lint override record as `review approve --override-lint`.
 
-The override is stored in `trust.json` with the reason, timestamp, content hash, and the accepted finding identities. Content changes or new blocking finding identities drop the skill back to `lint_blocked`.
+The override is stored in `trust.sqlite3` with the reason, timestamp, content hash, and the accepted finding identities. Content changes or new blocking finding identities drop the skill back to `lint_blocked`.
 
 ## Review Metadata
 

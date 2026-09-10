@@ -10,6 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from support import chdir
+from skillager.catalog.storage import read_collection, write_collection
+from skillager.trust import load_trust
 from skillager.cli import main
 from skillager.index import build_index
 from skillager.materialize import explicit_router_slug
@@ -29,6 +31,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text("# GIS Domain\n\nUse GIS domain concepts.\n", encoding="utf-8")
             with (
+                patch.dict(os.environ, {"CODEX_SESSION_ID": "", "CLAUDE_SESSION_ID": ""}),
                 patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"}),
                 patch("skillager.discovery.find_project_root", return_value=root),
                 patch("pathlib.Path.home", return_value=root),
@@ -336,7 +339,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                    index = json.loads((state / "collections" / "community.json").read_text(encoding="utf-8"))
+                    index = read_collection(state, 'community')
                     reviewed_skill = next(skill for skill in index["skills"] if skill["id"] == "community/reviewed")
                     set_trust(
                         state,
@@ -421,7 +424,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(output):
                     self.assertEqual(main(["collection", "add", str(repos), "--name", "personal"]), 0)
                 self.assertIn("personal: indexed 3 skills", output.getvalue())
-                index = json.loads((state / "collections" / "personal.json").read_text(encoding="utf-8"))
+                index = read_collection(state, 'personal')
             self.assertEqual(
                 [skill["id"] for skill in index["skills"]],
                 ["personal/legacy-root", "personal/project-a/review-pr", "personal/project-b/deploy-preview"],
@@ -449,7 +452,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "community"]), 0)
-                index = json.loads((state / "collections" / "community.json").read_text(encoding="utf-8"))
+                index = read_collection(state, 'community')
             self.assertEqual([skill["id"] for skill in index["skills"]], ["community/gis-domain"])
 
     def test_collection_refresh_migrates_flattened_trust_and_tag_by_old_root(self) -> None:
@@ -469,27 +472,20 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
-                (state / "collections" / "personal.json").write_text(
-                    json.dumps(
-                        {
+                write_collection(state, 'personal', {
                             "schema": "skillager.collection-index.v1",
                             "name": "personal",
                             "path": str(collection),
                             "skills": [{"id": "personal/foo", "root": str(skill_dir), "content_hash": digest}],
                             "errors": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
+                        })
                 set_trust(state, "personal/foo", "reviewed", digest, {"type": "collection", "collection": "personal"})
                 (state / "tags.json").write_text(json.dumps({"tags": {"python": ["personal/foo"]}}, indent=2) + "\n", encoding="utf-8")
 
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "refresh", "personal"]), 0)
 
-                new_index = json.loads((state / "collections" / "personal.json").read_text(encoding="utf-8"))
+                new_index = read_collection(state, 'personal')
                 self.assertEqual([skill["id"] for skill in new_index["skills"]], ["personal/python/foo"])
                 new_hash = new_index["skills"][0]["content_hash"]
                 self.assertEqual(trust_state(state, "personal/python/foo", new_hash), "reviewed")
@@ -510,7 +506,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(acked):
                     self.assertEqual(main(["doctor", "--no-packages", "--json"]), 10)
                 self.assertFalse(json.loads(acked.getvalue())["state"]["migration"]["pending"])
-                trust = json.loads((state / "trust.json").read_text(encoding="utf-8"))
+                trust = load_trust(state)
                 self.assertIn("personal/foo", trust["skills"])
                 self.assertIn("personal/python/foo", trust["skills"])
 
@@ -537,34 +533,20 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(first), "--name", "first"]), 0)
                     self.assertEqual(main(["collection", "add", str(second), "--name", "second"]), 0)
-                (state / "collections" / "first.json").write_text(
-                    json.dumps(
-                        {
+                write_collection(state, 'first', {
                             "schema": "skillager.collection-index.v1",
                             "name": "first",
                             "path": str(first),
                             "skills": [{"id": "first/foo", "root": str(first_skill), "content_hash": first_hash}],
                             "errors": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
-                (state / "collections" / "second.json").write_text(
-                    json.dumps(
-                        {
+                        })
+                write_collection(state, 'second', {
                             "schema": "skillager.collection-index.v1",
                             "name": "second",
                             "path": str(second),
                             "skills": [{"id": "second/bar", "root": str(second_skill), "content_hash": second_hash}],
                             "errors": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
+                        })
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "refresh", "first"]), 0)
                 first_status = StringIO()
@@ -598,20 +580,13 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 project_state = project_state_root(project)
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "collection", "add", str(collection), "--name", "personal"]), 0)
-                (catalog_state / "collections" / "personal.json").write_text(
-                    json.dumps(
-                        {
+                write_collection(catalog_state, 'personal', {
                             "schema": "skillager.collection-index.v1",
                             "name": "personal",
                             "path": str(collection),
                             "skills": [{"id": "personal/foo", "root": str(skill_dir), "content_hash": digest}],
                             "errors": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
+                        })
                 (project / ".skillager").mkdir()
                 (project / ".skillager" / "tags.json").write_text(
                     json.dumps(
@@ -635,7 +610,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 status_data = json.loads(status.getvalue())
                 self.assertTrue(status_data["readiness"]["review_ready"])
                 self.assertEqual(status_data["readiness"]["exposure"]["approved"], 1)
-                new_hash = json.loads((catalog_state / "collections" / "personal.json").read_text(encoding="utf-8"))["skills"][0]["content_hash"]
+                new_hash = read_collection(catalog_state, 'personal')["skills"][0]["content_hash"]
             self.assertEqual(trust_state(project_state, "personal/python/foo", new_hash), "reviewed")
 
     def test_collection_inventory_uses_migrated_project_local_trust_without_writing(self) -> None:
@@ -654,20 +629,13 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             with patch.dict(os.environ, {"NO_COLOR": "1"}, clear=True), patch("pathlib.Path.home", return_value=root):
                 with chdir(project_a), redirect_stdout(StringIO()):
                     self.assertEqual(main(["--catalog-state-dir", str(catalog_state), "collection", "add", str(collection), "--name", "personal"]), 0)
-                (catalog_state / "collections" / "personal.json").write_text(
-                    json.dumps(
-                        {
+                write_collection(catalog_state, 'personal', {
                             "schema": "skillager.collection-index.v1",
                             "name": "personal",
                             "path": str(collection),
                             "skills": [{"id": "personal/foo", "root": str(skill_dir), "content_hash": digest}],
                             "errors": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
+                        })
                 project_a_state = project_state_root(project_a)
                 set_trust(project_a_state, "personal/foo", "reviewed", digest, {"type": "collection", "collection": "personal"})
 
@@ -681,7 +649,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 self.assertEqual([skill["id"] for skill in search_data], ["personal/python/foo"])
                 self.assertTrue(search_data[0]["available"])
 
-                trust = json.loads((project_a_state / "trust.json").read_text(encoding="utf-8"))
+                trust = load_trust(project_a_state)
                 self.assertIn("personal/foo", trust["skills"])
                 self.assertNotIn("personal/python/foo", trust["skills"])
 
@@ -702,26 +670,19 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
-                (state / "collections" / "personal.json").write_text(
-                    json.dumps(
-                        {
+                write_collection(state, 'personal', {
                             "schema": "skillager.collection-index.v1",
                             "name": "personal",
                             "path": str(collection),
                             "skills": [{"id": "personal/foo", "root": str(skill_dir), "content_hash": old_digest}],
                             "errors": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
+                        })
                 set_trust(state, "personal/foo", "reviewed", old_digest, {"type": "collection", "collection": "personal"})
                 (skill_dir / "SKILL.md").write_text("# Foo\n\nUse changed foo guidance.\n", encoding="utf-8")
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "refresh", "personal"]), 0)
 
-                new_index = json.loads((state / "collections" / "personal.json").read_text(encoding="utf-8"))
+                new_index = read_collection(state, 'personal')
                 new_hash = new_index["skills"][0]["content_hash"]
                 self.assertEqual(trust_state(state, "personal/python/foo", new_hash), "discovered")
                 migrations = json.loads((state / "collection_migrations.json").read_text(encoding="utf-8"))
@@ -745,7 +706,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
-                indexed = json.loads((state / "collections" / "personal.json").read_text(encoding="utf-8"))
+                indexed = read_collection(state, 'personal')
                 old_hash = indexed["skills"][0]["content_hash"]
                 set_trust(state, "personal/foo", "reviewed", old_hash, {"type": "collection", "collection": "personal"})
 
@@ -789,9 +750,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
-                (state / "collections" / "personal.json").write_text(
-                    json.dumps(
-                        {
+                write_collection(state, 'personal', {
                             "schema": "skillager.collection-index.v1",
                             "name": "personal",
                             "path": str(collection),
@@ -800,12 +759,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                                 {"id": "personal/foo", "root": str(writing), "content_hash": digest},
                             ],
                             "errors": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
+                        })
                 set_trust(state, "personal/foo", "reviewed", digest, {"type": "collection", "collection": "personal"})
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "refresh", "personal"]), 0)
@@ -835,9 +789,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
             ):
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "add", str(collection), "--name", "personal"]), 0)
-                (state / "collections" / "personal.json").write_text(
-                    json.dumps(
-                        {
+                write_collection(state, 'personal', {
                             "schema": "skillager.collection-index.v1",
                             "name": "personal",
                             "path": str(collection),
@@ -846,12 +798,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                                 {"id": "personal/foo", "root": str(writing), "content_hash": content_hash(writing)},
                             ],
                             "errors": [],
-                        },
-                        indent=2,
-                    )
-                    + "\n",
-                    encoding="utf-8",
-                )
+                        })
                 (state / "tags.json").write_text(json.dumps({"tags": {"foo": ["personal/foo"]}}, indent=2) + "\n", encoding="utf-8")
                 with redirect_stdout(StringIO()):
                     self.assertEqual(main(["collection", "refresh", "personal"]), 0)

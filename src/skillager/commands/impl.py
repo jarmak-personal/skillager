@@ -37,6 +37,8 @@ from ..collections import (
     remove_collection,
     select_collection_skills,
 )
+from ..catalog.search import collection_search_candidates
+from ..catalog.impl import _apply_approval_metadata, _trust_with_collection_migration_alias
 from ..families import agent_variant_family_key, canonical_agent_variant_slug
 from ..exposure.drift import classify_exposure_target, scan_project_exposures
 from ..exposure.target_state import matches_materialized_target, target_state_hash
@@ -57,7 +59,7 @@ from ..materialize import (
 from ..materialize import materialize_router
 from ..materialize import target_dir, working_source_hash
 from ..manifest import init_manifests
-from ..paths import find_project_root, project_state_root, state_root
+from ..paths import cache_root, find_project_root, project_state_root, state_root
 from ..render import render_skill
 from ..review import (
     annotate_duplicate_content,
@@ -67,14 +69,14 @@ from ..review import (
     review_summary,
     setup_environment,
 )
-from ..review_gates import approval_state, review_gates as compute_review_gates
+from ..review_gates import apply_review_metadata, approval_state, review_gates as compute_review_gates
 from ..scan import scan_path
 from ..search import search as search_index
 from ..selection import select_visible_skills
 from ..signing import verify_oms_signature
 from ..simple_yaml import YamlError, load_mapping
 from ..state.locking import resource_lock
-from ..trust import content_hash, load_trust, merge_global_approvals, save_trust, set_trust
+from ..trust import content_hash, load_trust, merge_global_approvals, save_trust, set_trust, trust_info
 from .context import (
     catalog_root,
     current_project_dir as _current_project_dir,
@@ -230,6 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("query")
+    p.add_argument("--scope", choices=["workspace", "library"], default="workspace", help="Search all available workspace sources (default), or only the personal library without project discovery or exposure status.")
     p.add_argument("--tag", help="Search skills in a curated tag.")
     p.add_argument("--include-global", action="store_true", help="Include global native skills. Defaults to project/environment/package and attached collection skills.")
     p.add_argument("--agent", choices=["codex", "claude"], help="Include compatibility warnings for this agent.")
@@ -3929,52 +3932,101 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
+    if args.limit < 0:
+        raise ValueError("--limit must be 0 or greater")
+    if args.compatible_only and not args.agent:
+        raise ValueError("--compatible-only requires --agent")
+    library_only = getattr(args, "scope", "workspace") == "library"
+    if library_only and (args.tag or args.include_global):
+        raise ValueError("--scope library cannot be combined with --tag or --include-global")
+    skills = _search_inventory(args, deferred=True)
+    # Ambiguous identities need live metadata from every claimant before merging.
+    if any(skill.get("identity_collision") for skill in skills):
+        skills = _search_inventory(args, deferred=False)
+    trust_root = catalog_root(args) if library_only else root(args)
+    families = Counter(_agent_variant_family_key(skill) for skill in skills) if args.agent else Counter()
+    for skill in skills:
+        if skill.get("materialized_targets") or (args.agent and families[_agent_variant_family_key(skill)] > 1):
+            if not _search_result_is_current(skill, trust_root, catalog_root(args)):
+                skill["trust"] = "discovered"
+    skills = _available_skills(_filter_current_inventory_exposures(skills))
     if args.tag:
         tag_key = project_tags.normalize_tag(args.tag)
-        skills = []
-        for skill in _select_project_tag_skills(
-            root(args),
-            catalog_root(args),
-            args.tag,
-        ):
-            item = dict(skill)
-            availability = set(item.get("availability", []))
-            availability.add("attached-tag")
-            item["availability"] = sorted(availability)
-            item["tags"] = sorted(set(item.get("tags", [])) | {tag_key})
-            skills.append(item)
+        tag_ids = set(project_tags.tag_skills(_current_project_dir(), tag_key))
+        skills = [
+            {**skill, "tags": sorted(set(skill.get("tags", [])) | {tag_key}),
+             "availability": sorted(set(skill.get("availability", [])) | {"attached-tag"})}
+            for skill in skills if skill["id"] in tag_ids
+        ]
+    if args.agent:
+        skills = _collapse_agent_variant_results(skills, args.agent)
+    results = search_index(skills, args.query, include_untrusted=False, cache_path=cache_root() / "search-v1.sqlite3")
+    if args.compatible_only:
+        results = [skill for skill in results if compatibility_problem(skill, args.agent) is None]
+    if args.agent:
+        results = _sort_agent_variant_search(results, args.agent)
+    verified = []
+    for skill in results:
+        if not _search_result_is_current(skill, trust_root, catalog_root(args)):
+            continue
+        if library_only:
+            skill["exposure"] = "unknown"
+        verified.append(skill)
+        if args.limit and len(verified) >= args.limit:
+            break
+    if args.json or args.full_json:
+        payload = [_public_full_skill_metadata(skill) for skill in verified] if args.full_json else [_compact_search_result(skill, agent=args.agent) for skill in verified]
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        for skill in verified:
+            print(f"{skill['score']}\t{skill['id']}\t{skill['summary']}")
+    return 0
+
+
+def _search_inventory(args: argparse.Namespace, *, deferred: bool) -> list[dict[str, Any]]:
+    if getattr(args, "scope", "workspace") == "library":
+        if load_library_registration(catalog_root(args)) is None:
+            return []
+        if deferred:
+            skills = collection_search_candidates(catalog_root(args), trust_root=catalog_root(args), name="lib")
+        else:
+            skills = select_collection_skills(catalog_root(args), "lib", trust_root=catalog_root(args), approval_root=catalog_root(args))
+        by_id: dict[str, dict[str, Any]] = {}
+        for skill in skills:
+            _merge_skill_inventory(by_id, {**skill, "availability": ["collection"], "exposure": "hidden", "materialized_targets": []})
+        return [by_id[skill_id] for skill_id in sorted(by_id)]
+    if args.tag:
+        # Keep router dependencies until exposure validation, then scope before ranking.
+        if not project_tags.tag_skills(_current_project_dir(), args.tag):
+            return []
+        skills = list(_all_taggable_skill_map(
+            root(args), catalog_root(args), _current_project_dir(), defer_verification=deferred,
+        ).values())
     else:
         skills = _effective_project_skills(
             root(args),
             catalog_root=catalog_root(args),
+            defer_collection_verification=deferred,
         )
         if not args.include_global:
             skills = [skill for skill in skills if skill.get("source", {}).get("type") != "global"]
-    skills = _available_skills(skills)
-    if args.agent:
-        skills = _collapse_agent_variant_results(skills, args.agent)
-    results = search_index(
-        skills,
-        args.query,
-        include_untrusted=False,
-    )
-    if args.compatible_only:
-        if not args.agent:
-            raise ValueError("--compatible-only requires --agent")
-        results = [skill for skill in results if compatibility_problem(skill, args.agent) is None]
-    if args.limit < 0:
-        raise ValueError("--limit must be 0 or greater")
-    if args.agent:
-        results = _sort_agent_variant_search(results, args.agent)
-    if args.limit:
-        results = results[: args.limit]
-    if args.json or args.full_json:
-        payload = [_public_full_skill_metadata(skill) for skill in results] if args.full_json else [_compact_search_result(skill, agent=args.agent) for skill in results]
-        print(json.dumps(payload, indent=2, sort_keys=True))
-    else:
-        for skill in results:
-            print(f"{skill['score']}\t{skill['id']}\t{skill['summary']}")
-    return 0
+    return skills
+
+
+def _search_result_is_current(skill: dict[str, Any], trust_root: Path, approval_root: Path) -> bool:
+    if not _is_available_skill(skill) or not skill.get("root") or not skill.get("content_hash"):
+        return False
+    try:
+        if content_hash(Path(skill["root"])) != skill["content_hash"]:
+            return False
+    except (OSError, ValueError):
+        return False
+    key = skill.get("approval_key")
+    trust = trust_info(trust_root, skill["id"], skill["content_hash"], lint=skill.get("lint"), approval_key=key, approval_root=approval_root)
+    trust = _trust_with_collection_migration_alias(approval_root, trust_root, skill, trust)
+    _apply_approval_metadata(skill, key, trust)
+    apply_review_metadata(skill)
+    return _is_available_skill(skill)
 
 
 def _is_available_skill(skill: dict[str, Any]) -> bool:
@@ -4593,6 +4645,7 @@ def _effective_project_skills(
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
     project_dir: Path | None = None,
+    defer_collection_verification: bool = False,
 ) -> list[dict[str, Any]]:
     catalog_root = catalog_root or state_root
     project_dir = (project_dir or _current_project_dir()).resolve()
@@ -4604,6 +4657,7 @@ def _effective_project_skills(
         project_dir=project_dir,
         include_blocked=include_blocked,
         include_lint_blocked=include_lint_blocked,
+        defer_verification=defer_collection_verification,
     ):
         item = dict(skill)
         _merge_skill_inventory(by_id, item)
@@ -4618,6 +4672,7 @@ def _effective_project_skills(
 
 def _base_project_skill_map(state_root: Path, *, catalog_root: Path, project_dir: Path) -> dict[str, dict[str, Any]]:
     exposure = _project_exposure(project_dir)
+    native_prefixes = _native_root_prefixes(project_dir)
     extra_paths = _active_setup_paths(state_root)
     data = build_index(
         state_root,
@@ -4628,7 +4683,7 @@ def _base_project_skill_map(state_root: Path, *, catalog_root: Path, project_dir
     )
     by_id: dict[str, dict[str, Any]] = {}
     for skill in data.get("skills", []):
-        item = _with_project_inventory_fields(skill, exposure)
+        item = _with_project_inventory_fields(skill, exposure, native_prefixes=native_prefixes)
         _merge_skill_inventory(by_id, item)
     return by_id
 
@@ -4642,20 +4697,29 @@ def _collection_inventory_skills(
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
     refresh_library: bool = True,
+    defer_verification: bool = False,
 ) -> list[dict[str, Any]]:
     tag_membership = _project_tag_membership(project_dir)
     exposure = _project_exposure(project_dir)
+    native_prefixes = _native_root_prefixes(project_dir)
     by_id: dict[str, dict[str, Any]] = {}
-    for skill in select_collection_skills(
-        catalog_root,
-        collection,
-        trust_root=state_root,
-        approval_root=catalog_root,
-        include_blocked=include_blocked,
-        include_lint_blocked=include_lint_blocked,
-        refresh_library=refresh_library,
-    ):
-        item = _with_project_inventory_fields(skill, exposure)
+    if defer_verification:
+        candidates = select_visible_skills(
+            collection_search_candidates(catalog_root, trust_root=state_root, name=collection),
+            include_blocked=include_blocked, include_lint_blocked=include_lint_blocked,
+        )
+    else:
+        candidates = select_collection_skills(
+            catalog_root,
+            collection,
+            trust_root=state_root,
+            approval_root=catalog_root,
+            include_blocked=include_blocked,
+            include_lint_blocked=include_lint_blocked,
+            refresh_library=refresh_library,
+        )
+    for skill in candidates:
+        item = _with_project_inventory_fields(skill, exposure, native_prefixes=native_prefixes)
         tags = tag_membership.get(item["id"], set())
         if tags:
             item["tags"] = sorted(set(item.get("tags", [])) | tags)
@@ -4676,17 +4740,19 @@ def _project_tag_names(project_dir: Path) -> list[str]:
     return sorted(project_tags.load_tags(project_dir).get("tags", {}))
 
 
-def _all_taggable_skill_map(state_root: Path, catalog_root: Path, project_dir: Path) -> dict[str, dict[str, Any]]:
+def _all_taggable_skill_map(state_root: Path, catalog_root: Path, project_dir: Path, *, defer_verification: bool = False) -> dict[str, dict[str, Any]]:
     by_id = _base_project_skill_map(state_root, catalog_root=catalog_root, project_dir=project_dir)
     exposure = _project_exposure(project_dir)
-    for skill in select_collection_skills(
+    native_prefixes = _native_root_prefixes(project_dir)
+    candidates = collection_search_candidates(catalog_root, trust_root=state_root) if defer_verification else select_collection_skills(
         catalog_root,
         trust_root=state_root,
         approval_root=catalog_root,
         include_blocked=True,
         include_lint_blocked=True,
-    ):
-        item = _with_project_inventory_fields(skill, exposure)
+    )
+    for skill in candidates:
+        item = _with_project_inventory_fields(skill, exposure, native_prefixes=native_prefixes)
         _merge_skill_inventory(by_id, item)
     filtered = _filter_current_inventory_exposures([by_id[skill_id] for skill_id in sorted(by_id)])
     return {str(skill["id"]): skill for skill in filtered}
@@ -4873,11 +4939,16 @@ def _collision_source(skill: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _with_project_inventory_fields(skill: dict[str, Any], exposure: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+def _with_project_inventory_fields(
+    skill: dict[str, Any],
+    exposure: dict[str, list[dict[str, Any]]],
+    *,
+    native_prefixes: tuple[tuple[str, str], ...] | None = None,
+) -> dict[str, Any]:
     item = dict(skill)
     item["availability"] = _skill_availability(item)
     targets = list(exposure.get(item["id"], []))
-    unmanaged = _unmanaged_native_target(item, Path.cwd())
+    unmanaged = _unmanaged_native_target(item, native_prefixes=native_prefixes)
     if unmanaged and not any(target.get("path") == unmanaged["path"] for target in targets):
         targets.append(unmanaged)
     return _with_materialized_targets(item, targets)
@@ -5001,7 +5072,16 @@ def _project_exposure(
     return exposure
 
 
-def _unmanaged_native_target(skill: dict[str, Any], project: Path) -> dict[str, Any] | None:
+def _native_root_prefixes(project: Path) -> tuple[tuple[str, str], ...]:
+    return tuple((agent, os.path.normcase(str(base))) for agent, roots in _project_skill_roots(project).items() for base in roots)
+
+
+def _unmanaged_native_target(
+    skill: dict[str, Any],
+    project: Path | None = None,
+    *,
+    native_prefixes: tuple[tuple[str, str], ...] | None = None,
+) -> dict[str, Any] | None:
     root_value = skill.get("root")
     if not root_value:
         return None
@@ -5009,28 +5089,30 @@ def _unmanaged_native_target(skill: dict[str, Any], project: Path) -> dict[str, 
         root = Path(root_value).resolve()
     except OSError:
         return None
-    for agent, roots in _project_skill_roots(project).items():
-        for base in roots:
-            try:
-                root.relative_to(base)
-            except ValueError:
-                continue
-            if (root / "SKILL.md").exists():
-                return {
-                    "agent": agent,
-                    "scope": "project",
-                    "path": str(root),
-                    "status": "existing",
-                    "managed": (root / "skillager.materialized.yaml").exists(),
-                    "kind": "native",
-                }
+    if native_prefixes is None:
+        native_prefixes = _native_root_prefixes(project or Path.cwd())
+    normalized = os.path.normcase(str(root))
+    for agent, base in native_prefixes:
+        # Match a whole path component, with the platform's path case semantics.
+        if normalized != base and not normalized.startswith(base + os.sep):
+            continue
+        if (root / "SKILL.md").exists():
+            return {
+                "agent": agent,
+                "scope": "project",
+                "path": str(root),
+                "status": "existing",
+                "managed": (root / "skillager.materialized.yaml").exists(),
+                "kind": "native",
+            }
     return None
 
 
 def _known_native_source_roots(skills: list[dict[str, Any]], project: Path) -> set[Path]:
     roots: set[Path] = set()
+    native_prefixes = _native_root_prefixes(project)
     for skill in skills:
-        target = _unmanaged_native_target(skill, project)
+        target = _unmanaged_native_target(skill, native_prefixes=native_prefixes)
         if target:
             roots.add(Path(target["path"]).resolve())
     return roots
@@ -5042,9 +5124,10 @@ def _add_native_source_exposures(
     *,
     project_dir: Path,
 ) -> None:
+    native_prefixes = _native_root_prefixes(project_dir)
     for skill in skills:
         skill_id = skill.get("id")
-        target = _unmanaged_native_target(skill, project_dir)
+        target = _unmanaged_native_target(skill, native_prefixes=native_prefixes)
         if not skill_id or not target:
             continue
         existing = exposure.setdefault(str(skill_id), [])

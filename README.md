@@ -88,6 +88,14 @@ skillager library init --no-git
 
 Run `skillager library status` to see the library location and health.
 
+Git keeps library content history; SQLite keeps approvals and their decision history.
+Search reuses a persistent SQLite index. Back up the library and approval state
+together; see [storage and recovery](docs/USER_GUIDE.md#storage-and-backups).
+
+Search accepted owned skills with `skillager search "database migration" --scope library --json`.
+The default scope includes available workspace sources. Both return metadata only;
+see [search scope and freshness](docs/USER_GUIDE.md#search-the-personal-library).
+
 After you or your agent edits a personal skill, Skillager asks you to review the
 change before the skill can run.
 
@@ -148,6 +156,9 @@ Run the full local check:
 ```bash
 uv run --python 3.13 python scripts/check.py
 ```
+
+The opt-in [synthetic search benchmark](docs/SEARCH_BENCHMARK.md) generates 5,000
+approved skills locally and measures the real CLI without downloads or private data.
 
 External contributions are not being accepted yet while the API and workflow settle.
 
