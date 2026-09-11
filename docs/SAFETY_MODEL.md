@@ -89,6 +89,36 @@ New materialization sidecars record a projection-kind-aware stable identity, exa
 
 ## Managed Exposure Recovery
 
+An eligible `expose <id> --mode native|stub --agent <agent> --scope project --dry-run
+--json` result includes an additive `skillager.exposure-preview.v1` object and a
+bound confirmation command. This opt-in contract supports one explicit skill and
+agent without filters, force, or compatibility overrides. The token covers source
+identity, exact accepted content hash and approval state, canonical project path,
+agent, mode, selected collision-safe target, current target hash and directory
+mode, and the complete projected entry effects. Source eligibility is resolved
+again while holding the existing target lock, including after candidate preparation.
+The apply command requires both `--yes` and `--confirmation-token`; a changed
+source or target cannot silently consume the earlier preview. Existing unbound
+exposure calls retain their current-source behavior.
+
+`file_effects` reports every created, replaced, or removed relative entry, with
+before/after file hashes, byte sizes, entry types, and modes. It returns no file
+bodies. The deployment sidecar instead reports its deterministic metadata and an
+explicit `generated_fields` policy: installation time, advisory file-metadata
+fingerprint, and sidecar integrity hash are generated at apply. Those generated
+values do not select source bytes or grant approval. The manifest describes the
+projection tree; ordinary CLI cache/index maintenance, private scratch cleanup,
+parent-directory creation, and existing resource-lock artifacts remain operational
+effects outside that tree. Preview itself creates no project projection or lock.
+
+Pending or blocked sources, explicit incompatibility, local target modifications,
+unmanaged targets, and existing exposure-blocked hashes retain their refusal rules.
+Pinned external sources remain usable only at their approved hash; personal-library
+skills continue to use library acceptance. There is no separate target-pin policy.
+Refusals retain their distinct reasons and are never successful exposures merely
+because the process returned zero. Skillager does not automatically retry a refused
+or uncertain write.
+
 Exposed copies are managed projections, not independent canonical sources. Ordinary native, stub, and router exposure fully hashes existing targets and refuses to overwrite local changes unless the user explicitly chooses `--force`. Every projection family is built and verified beside the target, then installed by same-filesystem rename with rollback on ordinary write/install/verification failure. Project scope refuses symlinked or non-directory native skill bases and unsafe target ancestors before creating locks or files. Direct skills, tag routers, explicit routers, and first-party Working share a kind-aware namespace: distinct identities that normalize to the same host slug receive deterministic collision-safe targets, an occupied fallback fails closed even with force, and the reserved Working target never accepts another managed identity. Router activation selects one matching agent exposure and refuses disagreeing duplicates instead of unioning their members. Drift metadata never decides whether a project edit should become a library version.
 
 Project tags are repository-local curation, not approval authority. Tag reads and

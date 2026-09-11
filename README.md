@@ -99,6 +99,12 @@ see [search scope and freshness](docs/USER_GUIDE.md#search-the-personal-library)
 After you or your agent edits a personal skill, Skillager asks you to review the
 change before the skill can run.
 
+Preview a project Add, Update, or mode change with
+`skillager expose <skill-id> --mode native --agent codex --scope project --dry-run --json`.
+The preview lists all projected file changes and returns a confirmation command
+bound to that source and target. See the [agent CLI guide](docs/AGENT_CLI_GUIDE.md#respect-owner-boundaries)
+for confirmation and refusal handling.
+
 Importing copies one external skill into your library and leaves the original where
 it is.
 

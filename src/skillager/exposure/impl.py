@@ -7,9 +7,11 @@ import shutil
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..compatibility import compatibility_problem, compatibility_warnings
+from ..library.confirmation import require_confirmation_token
+from .preview import exposure_preview
 from ..simple_yaml import load_mapping, loads
 from ..skills.tree import content_tree_fingerprint, iter_content_files
 from ..state.locking import resource_lock
@@ -40,6 +42,9 @@ def materialize_skills(
     reviewed_only: bool = True,
     project_dir: Path | None = None,
     allow_incompatible: bool = False,
+    bound_preview: bool = False,
+    confirmation: str | None = None,
+    revalidate_source: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
     if mode not in {"native", "stub"}:
         raise ValueError("mode must be native or stub")
@@ -57,7 +62,7 @@ def materialize_skills(
         if reviewed_only and skill.get("trust") not in TRUSTED_STATES:
             results.append(_result(skill, None, "skipped", _unreviewed_reason(skill)))
             continue
-        authoritative_error = _authoritative_source_error(skill) if not dry_run else None
+        authoritative_error = _authoritative_source_error(skill) if not dry_run or bound_preview else None
         if authoritative_error:
             results.append(_result(skill, None, "skipped", authoritative_error))
             continue
@@ -69,9 +74,9 @@ def materialize_skills(
                 continue
             try:
                 if mode == "stub":
-                    results.append(materialize_stub_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force))
+                    results.append(materialize_stub_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force, bound_preview=bound_preview, confirmation=confirmation, project_dir=project_dir, revalidate_source=revalidate_source))
                 else:
-                    results.append(materialize_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force))
+                    results.append(materialize_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force, bound_preview=bound_preview, confirmation=confirmation, project_dir=project_dir, revalidate_source=revalidate_source))
             except (OSError, ValueError) as exc:
                 results.append(_result(skill, target, "skipped", str(exc), agent=agent, scope=scope))
     return results
@@ -571,53 +576,16 @@ def materialize_stub_one(
     scope: str,
     dry_run: bool = False,
     force: bool = False,
+    bound_preview: bool = False,
+    confirmation: str | None = None,
+    project_dir: Path | None = None,
+    revalidate_source: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    projection_identity = _direct_projection_identity(skill)
-    with _projection_target_context(
-        target,
-        projection_identity,
-        dry_run=dry_run,
-        scope=scope,
-        fallback_key=str(skill["id"]),
-    ) as target:
-        previous_target_hash = _projection_target_state(target)
-        sidecar = target / "skillager.materialized.yaml"
-        rendered = render_stub_skill(skill, stub_slug=target.name)
-        prospective_hash = _single_file_content_hash(rendered)
-        decisions = _exposure_decisions(sidecar)
-        if prospective_hash in decisions.get("exposure_blocked_hashes", []):
-            return _result(skill, target, "skipped", "exact exposure hash is blocked by prior project policy", agent=agent, scope=scope)
-        if target.exists():
-            if _is_customized(sidecar, target) and not force:
-                return _result(skill, target, "skipped", WORKING_REASON_LOCAL_CUSTOMIZATION, agent=agent, scope=scope)
-            if not force and not sidecar.exists() and target_has_entries(target):
-                return _result(skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
-        if dry_run:
-            return _result(skill, target, "would_write", None, agent=agent, scope=scope)
-        with tempfile.TemporaryDirectory(prefix=".skillager-stub-", dir=target.parent) as raw_temp:
-            temp_root = Path(raw_temp)
-            candidate = temp_root / "candidate"
-            candidate.mkdir()
-            (candidate / "SKILL.md").write_text(rendered, encoding="utf-8")
-            materialized_hash = content_hash(candidate)
-            sidecar_data = _stub_sidecar(
-                skill,
-                agent=agent,
-                scope=scope,
-                materialized_hash=materialized_hash,
-                materialized_fingerprint=content_tree_fingerprint(candidate),
-                materialized_target_hash=target_state_hash(candidate, include_sidecar=False),
-            )
-            sidecar_data.update(decisions)
-            write_materialized_sidecar(candidate / "skillager.materialized.yaml", sidecar_data)
-            _install_verified_candidate(
-                candidate,
-                target,
-                temp_root=temp_root,
-                expected_hash=materialized_hash,
-                previous_target_hash=previous_target_hash,
-            )
-        return _result(skill, target, "materialized", None, agent=agent, scope=scope)
+    return _materialize_direct(
+        skill, target=target, agent=agent, scope=scope, mode="stub", dry_run=dry_run,
+        force=force, bound_preview=bound_preview, confirmation=confirmation,
+        project_dir=project_dir, revalidate_source=revalidate_source,
+    )
 
 
 def render_stub_skill(skill: dict[str, Any], *, stub_slug: str | None = None) -> str:
@@ -680,55 +648,91 @@ def materialize_one(
     scope: str,
     dry_run: bool = False,
     force: bool = False,
+    bound_preview: bool = False,
+    confirmation: str | None = None,
+    project_dir: Path | None = None,
+    revalidate_source: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    source_root = Path(skill["root"]).resolve()
-    _require_native_skill_frontmatter(source_root / "SKILL.md")
+    return _materialize_direct(
+        skill, target=target, agent=agent, scope=scope, mode="native", dry_run=dry_run,
+        force=force, bound_preview=bound_preview, confirmation=confirmation,
+        project_dir=project_dir, revalidate_source=revalidate_source,
+    )
+
+
+def _materialize_direct(
+    skill: dict[str, Any], *, target: Path, agent: str, scope: str, mode: str,
+    dry_run: bool, force: bool, bound_preview: bool, confirmation: str | None,
+    project_dir: Path | None, revalidate_source: Callable[[dict[str, Any]], None] | None,
+) -> dict[str, Any]:
+    source_root = Path(skill.get("root") or ".").resolve()
+    verify_source = mode == "native" or bound_preview or confirmation is not None
+    if mode == "native":
+        _require_native_skill_frontmatter(source_root / "SKILL.md")
     projection_identity = _direct_projection_identity(skill)
     with _projection_target_context(
-        target,
-        projection_identity,
-        dry_run=dry_run,
-        scope=scope,
+        target, projection_identity, dry_run=dry_run, scope=scope,
         fallback_key=str(skill["id"]),
     ) as target:
-        if scope == "project" and target.resolve() == source_root and (target / "SKILL.md").exists() and not (target / "skillager.materialized.yaml").exists():
+        if mode == "native" and scope == "project" and target.resolve() == source_root and (target / "SKILL.md").exists() and not (target / "skillager.materialized.yaml").exists():
             return _result(skill, target, "already_native", "existing unmanaged native skill", agent=agent, scope=scope)
+        if revalidate_source is not None:
+            revalidate_source(skill)
         previous_target_hash = _projection_target_state(target)
         sidecar = target / "skillager.materialized.yaml"
+        rendered = render_stub_skill(skill, stub_slug=target.name) if mode == "stub" else None
+        prospective_hash = _single_file_content_hash(rendered) if rendered is not None else skill.get("content_hash")
         decisions = _exposure_decisions(sidecar)
-        if skill.get("content_hash") in decisions.get("exposure_blocked_hashes", []):
+        if prospective_hash in decisions.get("exposure_blocked_hashes", []):
             return _result(skill, target, "skipped", "exact exposure hash is blocked by prior project policy", agent=agent, scope=scope)
         if target.exists():
             if _is_customized(sidecar, target) and not force:
                 return _result(skill, target, "skipped", WORKING_REASON_LOCAL_CUSTOMIZATION, agent=agent, scope=scope)
             if not force and not sidecar.exists() and target_has_entries(target):
                 return _result(skill, target, "skipped", "target exists without Skillager provenance", agent=agent, scope=scope)
-        if dry_run:
+        if dry_run and not bound_preview:
             return _result(skill, target, "would_write", None, agent=agent, scope=scope)
         expected_hash = skill.get("content_hash")
         if not isinstance(expected_hash, str):
             raise ValueError("source identity is incomplete; refresh inventory before exposure")
-        with tempfile.TemporaryDirectory(prefix=".skillager-expose-", dir=target.parent) as raw_temp:
+        # Preview scratch never creates a project directory, lock, or projection.
+        with tempfile.TemporaryDirectory(prefix=".skillager-expose-", dir=None if dry_run else target.parent) as raw_temp:
             temp_root = Path(raw_temp)
             candidate = temp_root / "candidate"
             candidate.mkdir()
-            _copy_skill_tree(source_root, candidate)
+            if rendered is None:
+                _copy_skill_tree(source_root, candidate)
+            else:
+                (candidate / "SKILL.md").write_text(rendered, encoding="utf-8")
             materialized_hash = content_hash(candidate)
-            if materialized_hash != expected_hash or content_hash(source_root) != expected_hash:
+            if (rendered is None and materialized_hash != expected_hash) or (verify_source and content_hash(source_root) != expected_hash):
                 raise ValueError("source changed during exposure; review the new hash before exposing it")
-            candidate_sidecar = candidate / "skillager.materialized.yaml"
-            sidecar_data = _sidecar(
-                skill,
-                agent=agent,
-                scope=scope,
-                materialized_hash=materialized_hash,
+            sidecar_builder = _stub_sidecar if mode == "stub" else _sidecar
+            sidecar_data = sidecar_builder(
+                skill, agent=agent, scope=scope, materialized_hash=materialized_hash,
                 materialized_fingerprint=content_tree_fingerprint(candidate),
                 materialized_target_hash=target_state_hash(candidate, include_sidecar=False),
             )
             sidecar_data.update(decisions)
-            write_materialized_sidecar(candidate_sidecar, sidecar_data)
+            write_materialized_sidecar(candidate / "skillager.materialized.yaml", sidecar_data)
+            preview = None
+            if bound_preview or confirmation is not None:
+                preview = exposure_preview(
+                    skill, candidate=candidate, target=target, previous_target_hash=previous_target_hash,
+                    sidecar=sidecar_data, agent=agent, mode=mode, project_dir=project_dir or Path.cwd(),
+                )
+                if _projection_target_state(target) != previous_target_hash:
+                    raise ValueError("exposure target changed during preview; review the current target again")
+                if confirmation is not None:
+                    require_confirmation_token(confirmation, preview["confirmation_token"], operation="exposure")
+            if dry_run:
+                return {**_result(skill, target, "would_write", None, agent=agent, scope=scope), "preview": preview}
+            if revalidate_source is not None:
+                revalidate_source(skill)
+            if verify_source and content_hash(source_root) != expected_hash:
+                raise ValueError("source changed during exposure; review the new hash before exposing it")
             _install_verified_candidate(
-                candidate, target, temp_root=temp_root, expected_hash=expected_hash,
+                candidate, target, temp_root=temp_root, expected_hash=materialized_hash,
                 previous_target_hash=previous_target_hash,
             )
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
