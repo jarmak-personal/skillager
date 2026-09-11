@@ -101,6 +101,9 @@ The apply command requires both `--yes` and `--confirmation-token`; a changed
 source or target cannot silently consume the earlier preview. Existing unbound
 exposure calls retain their current-source behavior.
 
+Only JSON previews provide the complete effect set and confirmation command.
+Text dry runs direct users to `--json` and withhold ready-to-run confirmation.
+
 `file_effects` reports every created, replaced, or removed relative entry, with
 before/after file hashes, byte sizes, entry types, and modes. It returns no file
 bodies. The deployment sidecar instead reports its deterministic metadata and an

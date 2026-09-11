@@ -160,6 +160,9 @@ agent, mode, project, and target before writing. A stale or refused result requi
 a fresh preview and user decision; never retry a write automatically or treat exit
 zero with `status: "skipped"` as success.
 
+Text dry runs only summarize the target and direct you to `--json`; they do not
+provide a confirmation command without the complete effect manifest.
+
 This bound contract covers one explicit project skill and one agent, native or
 stub, without selection filters or overrides. Router, global, bulk, and forced
 operations retain their existing contracts. The ordinary exposure command remains

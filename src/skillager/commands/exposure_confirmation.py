@@ -39,6 +39,8 @@ def source_revalidator(
 
 
 def add_confirmation_commands(results: list[dict[str, Any]], *, json_output: bool) -> None:
+    if not json_output:
+        return
     for result in results:
         preview = result.get("preview")
         if not preview or result.get("status") != "would_write":
@@ -48,7 +50,6 @@ def add_confirmation_commands(results: list[dict[str, Any]], *, json_output: boo
             "--mode", str(result["mode"]), "--agent", str(result["agent"]),
             "--scope", "project",
         ]
-        if json_output:
-            command.append("--json")
+        command.append("--json")
         command.extend(["--yes", "--confirmation-token", preview["confirmation_token"]])
         result["next_command_argv"] = command

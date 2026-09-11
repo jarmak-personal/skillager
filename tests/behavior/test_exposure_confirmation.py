@@ -119,6 +119,64 @@ class ExposureConfirmationBehaviorTests(unittest.TestCase):
             self.assert_code(self.apply(cli, current))
             self.assert_effects_match(current)
 
+    def test_text_preview_requires_complete_json_preview_before_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, cli, _ = self.fixture(Path(tmp))
+            for mode in ("native", "stub"):
+                text_preview = cli.run("expose", "lib/demo", "--mode", mode, "--agent", "codex", "--dry-run")
+                self.assert_code(text_preview)
+                self.assertIn("would_expose", text_preview.stdout)
+                self.assertIn("Rerun with --json to review complete file effects", text_preview.stdout)
+                self.assertNotIn("--confirmation-token", text_preview.stdout)
+                self.assertNotIn("--yes", text_preview.stdout)
+                complete = self.preview(cli, mode=mode)
+                self.assertNotIn(complete["preview"]["confirmation_token"], text_preview.stdout)
+                if mode == "native":
+                    ordinary = cli.run("expose", "lib/demo", "--agent", "codex")
+                    self.assert_code(ordinary)
+                    self.assertIn("lib/demo: exposed", ordinary.stdout)
+                    self.assertNotIn("Rerun with --json", ordinary.stdout)
+                else:
+                    self.assertTrue(any(item["action"] == "remove" for item in complete["preview"]["file_effects"]))
+                    self.assertTrue((Path(complete["target"]) / "scripts/example.sh").exists())
+
+    def test_managed_collision_invalidates_preview_and_preserves_other_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, cli, source = self.fixture(root)
+            first_collection = root / "first-collection"
+            second_collection = root / "second-collection"
+            shutil.copytree(source, first_collection / "a" / "b")
+            shutil.copytree(source, second_collection / "b")
+            with (second_collection / "b" / "SKILL.md").open("a") as handle:
+                handle.write("Different guidance for the second fixture.\n")
+            for collection, name, skill_id in ((first_collection, "team", "team/a/b"), (second_collection, "team-a", "team-a/b")):
+                self.assert_code(cli.run("collection", "add", str(collection), "--name", name))
+                reviewed = cli.run("review", "approve", skill_id, "--json")
+                self.assert_code(reviewed)
+                self.assertTrue(reviewed.json()["action"]["changed"])
+            stale = self.preview(cli, skill_id="team/a/b")
+            other = cli.run("expose", "team-a/b", "--mode", "native", "--agent", "codex", "--json")
+            self.assert_code(other)
+            self.assertEqual(other.json()[0]["status"], "exposed")
+            self.assertEqual(other.json()[0]["target"], stale["target"])
+            target = Path(stale["target"])
+            before = self.tree_state(target)
+            before_mode = target.stat().st_mode
+            self.assertEqual(load_mapping(target / "skillager.materialized.yaml")["source_id"], "team-a/b")
+            refused = self.apply(cli, stale)
+            self.assert_code(refused)
+            self.assertEqual(refused.json()[0]["status"], "skipped")
+            self.assertIn("preview is stale", refused.json()[0]["reason"])
+            self.assertEqual(self.tree_state(target), before)
+            self.assertEqual(target.stat().st_mode, before_mode)
+            current = self.preview(cli, skill_id="team/a/b")
+            self.assertNotEqual(current["target"], stale["target"])
+            self.assertFalse(Path(current["target"]).exists())
+            listed = cli.run("expose", "--list", "--agent", "codex", "--json")
+            self.assert_code(listed)
+            self.assertEqual([item["skill_id"] for item in listed.json()["exposures"]], ["team-a/b"])
+
     def test_target_changes_refuse_without_repeating_or_overwriting(self) -> None:
         for mutation in ("body", "mode", "directory-mode", "excluded", "sidecar", "disappear", "appear"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:

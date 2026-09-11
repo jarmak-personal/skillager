@@ -6062,8 +6062,8 @@ def _print_expose_results(results: list[dict[str, Any]]) -> None:
         if public.get("reason"):
             line += f" ({public['reason']})"
         print(line)
-        if public.get("next_command_argv"):
-            print(f"  Next: {shlex.join(public['next_command_argv'])}")
+        if public.get("preview"):
+            print("  Rerun with --json to review complete file effects and get a confirmation command.")
 
 
 def _public_exposure_status(status: object) -> object:
