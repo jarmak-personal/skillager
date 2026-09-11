@@ -105,6 +105,9 @@ The preview lists all projected file changes and returns a confirmation command
 bound to that source and target. See the [agent CLI guide](docs/AGENT_CLI_GUIDE.md#respect-owner-boundaries)
 for confirmation and refusal handling.
 
+Removal previews use `skillager expose --remove <exposure-id> --agent codex --json`
+and disclose the complete removed tree and target-folder permissions before confirmation.
+
 Importing copies one external skill into your library and leaves the original where
 it is.
 

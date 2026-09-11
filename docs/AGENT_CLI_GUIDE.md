@@ -163,10 +163,19 @@ zero with `status: "skipped"` as success.
 Text dry runs only summarize the target and direct you to `--json`; they do not
 provide a confirmation command without the complete effect manifest.
 
-This bound contract covers one explicit project skill and one agent, native or
-stub, without selection filters or overrides. Router, global, bulk, and forced
-operations retain their existing contracts. The ordinary exposure command remains
-available; it does not consume an earlier preview unless its token is supplied.
+This bound exposure contract covers one explicit project skill and one agent,
+native or stub, without selection filters or overrides. Router, global, bulk, and
+forced exposures retain their existing contracts. The ordinary exposure command
+remains available; it does not consume an earlier preview unless its token is supplied.
+
+For removal, run `skillager expose --remove <exposure-id> --agent codex --scope
+project --json`. Its `skillager.exposure-remove.v1` result includes a nested
+`skillager.exposure-remove-preview.v1` preview of every removed entry, including
+supporting files and the deployment sidecar, plus the target folder's permissions.
+Show those effects before executing the returned confirmation command. A changed
+file, metadata record, managed identity, or folder permission invalidates it.
+Text removal previews also direct to `--json` without offering confirmation.
+Removal leaves the canonical library and other exposed copies untouched.
 
 ## Respect Owner Boundaries
 
