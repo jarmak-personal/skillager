@@ -1,9 +1,5 @@
 # Release Runbook
 
-User-facing changes for the next release are maintained in
-[`RELEASE_NOTES.md`](RELEASE_NOTES.md). Keep those notes aligned with README and CLI
-behavior before starting this runbook.
-
 Skillager is released as two independently versioned distributions from this
 repository:
 
@@ -72,16 +68,13 @@ version bump, use `patch`, `minor`, or `major`.
 
 The workflow:
 
-- validates release notes for the selected version before changing version files or pushing a commit/tag
+- builds release notes from commit subjects since the previous package tag before changing version files or pushing a commit/tag
 - builds the selected distribution
 - runs package checks before publishing
 - runs the local wheelhouse smoke check for Skillager releases
 - uploads selected package artifacts to the draft GitHub Release
 - skips publishing a package version that already exists on PyPI
 - publishes the GitHub Release only after PyPI jobs complete
-
-Release notes must name the package version being released. Replace a planned version
-heading before publishing if the workflow selects a different version.
 
 ## Recovering From a Half-Published Release
 

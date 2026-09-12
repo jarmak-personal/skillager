@@ -1,6 +1,6 @@
 # Release Notes
 
-## skillager 0.9.0 (planned)
+## skillager 0.9.0
 
 This release recenters Skillager on a canonical personal library for skills the user
 owns while preserving discovery and review for external project, environment,
