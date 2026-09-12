@@ -100,6 +100,27 @@ def matches_materialized_target(root: Path, sidecar: dict[str, Any]) -> bool:
         return False
 
 
+def target_state_manifest(root: Path) -> dict[str, dict[str, Any]]:
+    """Describe every target entry without returning file content or following links."""
+    result: dict[str, dict[str, Any]] = {}
+    for relative, path, entry_stat in _walk_entries(root):
+        item: dict[str, Any] = {"mode": stat.S_IMODE(entry_stat.st_mode)}
+        if stat.S_ISDIR(entry_stat.st_mode):
+            item["type"] = "directory"
+        elif stat.S_ISREG(entry_stat.st_mode):
+            digest = hashlib.sha256()
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(65536), b""):
+                    digest.update(chunk)
+            item.update(type="file", size=entry_stat.st_size, sha256=digest.hexdigest())
+        elif stat.S_ISLNK(entry_stat.st_mode):
+            item.update(type="symlink", link_target=os.readlink(path))
+        else:
+            item.update(type="special", device=entry_stat.st_rdev)
+        result[relative] = item
+    return result
+
+
 def materialized_sidecar_hash(sidecar: dict[str, Any]) -> str:
     """Hash a deterministic sidecar payload, excluding its self-authentication field."""
 
@@ -184,5 +205,6 @@ __all__ = [
     "matches_materialized_target",
     "target_has_entries",
     "target_state_hash",
+    "target_state_manifest",
     "write_materialized_sidecar",
 ]

@@ -89,6 +89,39 @@ New materialization sidecars record a projection-kind-aware stable identity, exa
 
 ## Managed Exposure Recovery
 
+An eligible `expose <id> --mode native|stub --agent <agent> --scope project --dry-run
+--json` result includes an additive `skillager.exposure-preview.v1` object and a
+bound confirmation command. This opt-in contract supports one explicit skill and
+agent without filters, force, or compatibility overrides. The token covers source
+identity, exact accepted content hash and approval state, canonical project path,
+agent, mode, selected collision-safe target, current target hash and directory
+mode, and the complete projected entry effects. Source eligibility is resolved
+again while holding the existing target lock, including after candidate preparation.
+The apply command requires both `--yes` and `--confirmation-token`; a changed
+source or target cannot silently consume the earlier preview. Existing unbound
+exposure calls retain their current-source behavior.
+
+Only JSON previews provide the complete effect set and confirmation command.
+Text dry runs direct users to `--json` and withhold ready-to-run confirmation.
+
+`file_effects` reports every created, replaced, or removed relative entry, with
+before/after file hashes, byte sizes, entry types, and modes. It returns no file
+bodies. The deployment sidecar instead reports its deterministic metadata and an
+explicit `generated_fields` policy: installation time, advisory file-metadata
+fingerprint, and sidecar integrity hash are generated at apply. Those generated
+values do not select source bytes or grant approval. The manifest describes the
+projection tree; ordinary CLI cache/index maintenance, private scratch cleanup,
+parent-directory creation, and existing resource-lock artifacts remain operational
+effects outside that tree. Preview itself creates no project projection or lock.
+
+Pending or blocked sources, explicit incompatibility, local target modifications,
+unmanaged targets, and existing exposure-blocked hashes retain their refusal rules.
+Pinned external sources remain usable only at their approved hash; personal-library
+skills continue to use library acceptance. There is no separate target-pin policy.
+Refusals retain their distinct reasons and are never successful exposures merely
+because the process returned zero. Skillager does not automatically retry a refused
+or uncertain write.
+
 Exposed copies are managed projections, not independent canonical sources. Ordinary native, stub, and router exposure fully hashes existing targets and refuses to overwrite local changes unless the user explicitly chooses `--force`. Every projection family is built and verified beside the target, then installed by same-filesystem rename with rollback on ordinary write/install/verification failure. Project scope refuses symlinked or non-directory native skill bases and unsafe target ancestors before creating locks or files. Direct skills, tag routers, explicit routers, and first-party Working share a kind-aware namespace: distinct identities that normalize to the same host slug receive deterministic collision-safe targets, an occupied fallback fails closed even with force, and the reserved Working target never accepts another managed identity. Router activation selects one matching agent exposure and refuses disagreeing duplicates instead of unioning their members. Drift metadata never decides whether a project edit should become a library version.
 
 Project tags are repository-local curation, not approval authority. Tag reads and
@@ -99,6 +132,30 @@ legacy-state detector exempts only that supported tag file and its exact regular
 artifact; unexpected in-tree state continues to fail the Working readiness check.
 
 For an intentional edit to an owned skill, the safe workflow is to compare the exposure with the canonical library tree, move the intended work into the library, accept that exact hash, then explicitly re-expose it. For an accidental edit, preserve anything needed before choosing forced re-exposure. Removal is preview-first and bound to the complete live target, including sidecar and canonically excluded entries. After confirmation, Skillager atomically detaches the directory and hashes that detached state again before deleting it; a concurrent path change is restored and refused. Non-current targets do not receive a removal command until the user explicitly previews with `--force`. Skillager performs no automatic merge, promotion, upstream update, or cross-project rollout.
+
+Removal JSON additionally exposes `preview.schema: skillager.exposure-remove-preview.v1`.
+Its `file_effects` contains every removed descendant entry, including binary/supporting
+files, directories, symlinks, excluded local files, and the raw deployment sidecar.
+Each effect uses the same metadata-only entry descriptors as exposure previews,
+with `action: remove` and `after: null`. `target_directory` binds the root folder's
+permission mode separately; `target_state_hash` retains the existing descendant-state
+hash semantics so previously managed projections remain valid.
+
+The complete removal payload is bound into the existing destination/identity-bound
+token. Preview capture also verifies that the displayed skill identity and mode
+match the managed metadata in the disclosed file set; a swap refuses confirmation.
+Before deletion, Skillager reconstructs and compares that payload from the
+detached tree, including file bytes/modes and root-folder permissions. A mismatch
+restores the detached copy when possible and refuses deletion; a conflicting
+concurrent destination preserves the recovery copy instead. The quarantine path
+does not replace the original confirmed destination identity. Root-folder permission
+changes between preview and apply now require a fresh preview. Interrupted or
+incomplete filesystem deletion can still require inspection of a recovery path;
+this contract does not introduce automatic retries or a crash-recovery service.
+
+Text removal previews summarize the target and direct users to `--json`; only the
+complete JSON preview offers a confirmation command. Existing explicit forced
+removal continues to disclose local entries and preserves symlink destinations.
 
 ## Static Scanner
 

@@ -15,10 +15,37 @@ from skillager.exposure.impl import (
     write_materialized_sidecar,
 )
 from skillager.exposure.target_state import target_state_hash
+from skillager.commands.exposure_confirmation import source_revalidator
 from skillager.trust import content_hash
 
 
 class AtomicProjectionRefreshTests(unittest.TestCase):
+    def test_confirmed_direct_exposure_rechecks_approval_after_candidate_preparation(self) -> None:
+        for materialize in (materialize_one, materialize_stub_one):
+            with self.subTest(materialize=materialize.__name__), tempfile.TemporaryDirectory() as tmp:
+                project = Path(tmp)
+                source = project / "source"
+                source.mkdir()
+                (source / "SKILL.md").write_text("---\nname: demo\ndescription: Fixture guidance.\n---\n\nRead the fixture.\n", encoding="utf-8")
+                skill = {"id": "project/demo", "root": str(source), "source": {"type": "project"}, "content_hash": content_hash(source), "trust": "reviewed"}
+                target = project / ".agents" / "skills" / "project-demo"
+                preview = materialize(skill, target=target, agent="codex", scope="project", dry_run=True, bound_preview=True, project_dir=project)
+                current = dict(skill)
+
+                def revoke_while_preparing(path, data):
+                    write_materialized_sidecar(path, data)
+                    current["trust"] = "blocked"
+
+                with patch("skillager.exposure.impl.write_materialized_sidecar", side_effect=revoke_while_preparing):
+                    with self.assertRaisesRegex(ValueError, "approval changed"):
+                        materialize(
+                            skill, target=target, agent="codex", scope="project",
+                            confirmation=preview["preview"]["confirmation_token"],
+                            project_dir=project, revalidate_source=source_revalidator(lambda: [current]),
+                        )
+                self.assertFalse(target.exists())
+                self.assertFalse(any(target.parent.glob(".skillager-expose-*")))
+
     def test_clean_generated_projection_survives_each_refresh_failure_stage(self) -> None:
         for family in ("native", "stub", "router", "working"):
             for failure_stage in ("candidate_write", "install", "final_verification"):
