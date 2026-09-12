@@ -8,6 +8,7 @@ from .target_state import MATERIALIZED_SIDECAR, target_state_manifest
 
 
 PREVIEW_SCHEMA = "skillager.exposure-preview.v1"
+REMOVE_PREVIEW_SCHEMA = "skillager.exposure-remove-preview.v1"
 GENERATED_METADATA = {
     "materialized_at": "UTC installation time",
     "materialized_fingerprint": "advisory fingerprint of installed file metadata",
@@ -70,4 +71,21 @@ def exposure_preview(
     return {**state, "confirmation_token": confirmation_token("exposure", **state)}
 
 
-__all__ = ["PREVIEW_SCHEMA", "exposure_preview", "exposure_source_state"]
+def removal_file_effects(target: Path, *, target_hash: str) -> dict[str, Any]:
+    """Describe the entire removed tree, including its root and deployment sidecar."""
+    entries = target_state_manifest(target)
+    return {
+        "schema": REMOVE_PREVIEW_SCHEMA,
+        "target_state_hash": target_hash,
+        "target_directory": {
+            "before_mode": target.stat().st_mode & 0o7777,
+            "after_mode": None,
+        },
+        "file_effects": [
+            {"path": path, "action": "remove", "before": entries[path], "after": None}
+            for path in sorted(entries)
+        ],
+    }
+
+
+__all__ = ["PREVIEW_SCHEMA", "REMOVE_PREVIEW_SCHEMA", "exposure_preview", "exposure_source_state", "removal_file_effects"]

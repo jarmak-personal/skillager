@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
-import shlex
 import shutil
 import sys
 import tempfile
@@ -41,6 +41,7 @@ from ..catalog.search import collection_search_candidates
 from ..catalog.impl import _apply_approval_metadata, _trust_with_collection_migration_alias
 from ..families import agent_variant_family_key, canonical_agent_variant_slug
 from ..exposure.drift import classify_exposure_target, scan_project_exposures
+from ..exposure.preview import removal_file_effects
 from ..exposure.target_state import matches_materialized_target, target_state_hash
 from ..index import build_index, find_skill, load_index
 from ..library.confirmation import confirmation_token, require_confirmation_token
@@ -74,7 +75,7 @@ from ..scan import scan_path
 from ..search import search as search_index
 from ..selection import select_visible_skills
 from ..signing import verify_oms_signature
-from ..simple_yaml import YamlError, load_mapping
+from ..simple_yaml import YamlError, load_mapping, loads
 from ..state.locking import resource_lock
 from ..trust import content_hash, load_trust, merge_global_approvals, save_trust, set_trust, trust_info
 from .exposure_confirmation import add_confirmation_commands, bound_exposure_request, source_revalidator
@@ -5744,7 +5745,7 @@ def _cmd_expose_remove(args: argparse.Namespace) -> int:
                 )
             _remove_confirmed_exposure(
                 target,
-                expected_target_hash=str(current["_target_state_hash"]),
+                expected_preview=current["preview"],
             )
         result = {key: value for key, value in current.items() if not key.startswith("_")}
         result["status"] = "removed"
@@ -5759,8 +5760,8 @@ def _cmd_expose_remove(args: argparse.Namespace) -> int:
             print(f"{item['exposure_id']}: {item['status']} {item['target']}")
             if item.get("requires_force"):
                 print("  Local edits detected; inspect or preserve them before previewing with --force.")
-            elif item.get("next_command_argv"):
-                print(f"  Next: {shlex.join(item['next_command_argv'])}")
+            elif item["status"] == "would_remove":
+                print("  Rerun with --json to review complete file effects and get a confirmation command.")
     return 0
 
 
@@ -5783,11 +5784,27 @@ def _exposure_removal_preview(
     current_status = str(classification.get("status") or "unknown")
     local_changes = current_status != "current"
     requires_force = local_changes and not force
-    sidecar_state = load_mapping(sidecar)
+    sidecar_bytes = sidecar.read_bytes()
+    sidecar_state = loads(sidecar_bytes.decode("utf-8"))
+    if not isinstance(sidecar_state, dict):
+        raise YamlError(f"{sidecar} must contain a mapping")
+    live_item = _exposure_record(
+        sidecar, sidecar_state, fallback_agent=str(item["agent"]), fallback_scope=str(item["scope"])
+    )
+    if live_item != item:
+        raise ValueError("managed exposure identity changed during removal preview; preview the current target again")
     live_target_hash = target_state_hash(target, include_sidecar=True)
+    effects = removal_file_effects(target, target_hash=live_target_hash)
+    sidecar_effect: dict[str, Any] = next(
+        (entry["before"] for entry in effects["file_effects"] if entry["path"] == sidecar.name), {}
+    )
+    if sidecar_effect.get("sha256") != hashlib.sha256(sidecar_bytes).hexdigest():
+        raise ValueError("managed exposure metadata changed during removal preview; preview the current target again")
     token = confirmation_token(
         "exposure-remove",
         exposure_id=item["exposure_id"],
+        skill_id=item["skill_id"],
+        mode=item["mode"],
         target=str(target.resolve()),
         agent=item["agent"],
         scope=item["scope"],
@@ -5796,6 +5813,7 @@ def _exposure_removal_preview(
         target_state_hash=live_target_hash,
         sidecar=sidecar_state,
         force=force,
+        preview=effects,
     )
     result = {
         **item,
@@ -5804,12 +5822,12 @@ def _exposure_removal_preview(
         "current_status": current_status,
         "local_changes": local_changes,
         "requires_force": requires_force,
+        "preview": effects,
         "_confirmation_token": token,
-        "_target_state_hash": live_target_hash,
     }
     if requires_force:
         result["required_arguments"] = ["--force"]
-    else:
+    elif json_output:
         command = [
             "skillager",
             "expose",
@@ -5829,8 +5847,8 @@ def _exposure_removal_preview(
     return result
 
 
-def _remove_confirmed_exposure(target: Path, *, expected_target_hash: str) -> None:
-    """Atomically detach and re-hash a removal target before deleting it."""
+def _remove_confirmed_exposure(target: Path, *, expected_preview: dict[str, Any]) -> None:
+    """Detach and verify every disclosed entry and root permission before deletion."""
 
     quarantine_root = Path(
         tempfile.mkdtemp(prefix=f".{target.name}.skillager-remove-", dir=target.parent)
@@ -5844,10 +5862,11 @@ def _remove_confirmed_exposure(target: Path, *, expected_target_hash: str) -> No
 
     try:
         detached_hash = target_state_hash(detached, include_sidecar=True)
+        detached_preview = removal_file_effects(detached, target_hash=detached_hash)
     except Exception:
         _restore_detached_exposure(detached, target, quarantine_root)
         raise
-    if detached_hash != expected_target_hash:
+    if detached_preview != expected_preview:
         _restore_detached_exposure(detached, target, quarantine_root)
         raise ValueError("managed exposure changed during removal; preview the current target again")
 

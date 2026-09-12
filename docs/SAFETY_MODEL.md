@@ -133,6 +133,30 @@ artifact; unexpected in-tree state continues to fail the Working readiness check
 
 For an intentional edit to an owned skill, the safe workflow is to compare the exposure with the canonical library tree, move the intended work into the library, accept that exact hash, then explicitly re-expose it. For an accidental edit, preserve anything needed before choosing forced re-exposure. Removal is preview-first and bound to the complete live target, including sidecar and canonically excluded entries. After confirmation, Skillager atomically detaches the directory and hashes that detached state again before deleting it; a concurrent path change is restored and refused. Non-current targets do not receive a removal command until the user explicitly previews with `--force`. Skillager performs no automatic merge, promotion, upstream update, or cross-project rollout.
 
+Removal JSON additionally exposes `preview.schema: skillager.exposure-remove-preview.v1`.
+Its `file_effects` contains every removed descendant entry, including binary/supporting
+files, directories, symlinks, excluded local files, and the raw deployment sidecar.
+Each effect uses the same metadata-only entry descriptors as exposure previews,
+with `action: remove` and `after: null`. `target_directory` binds the root folder's
+permission mode separately; `target_state_hash` retains the existing descendant-state
+hash semantics so previously managed projections remain valid.
+
+The complete removal payload is bound into the existing destination/identity-bound
+token. Preview capture also verifies that the displayed skill identity and mode
+match the managed metadata in the disclosed file set; a swap refuses confirmation.
+Before deletion, Skillager reconstructs and compares that payload from the
+detached tree, including file bytes/modes and root-folder permissions. A mismatch
+restores the detached copy when possible and refuses deletion; a conflicting
+concurrent destination preserves the recovery copy instead. The quarantine path
+does not replace the original confirmed destination identity. Root-folder permission
+changes between preview and apply now require a fresh preview. Interrupted or
+incomplete filesystem deletion can still require inspection of a recovery path;
+this contract does not introduce automatic retries or a crash-recovery service.
+
+Text removal previews summarize the target and direct users to `--json`; only the
+complete JSON preview offers a confirmation command. Existing explicit forced
+removal continues to disclose local entries and preserves symlink destinations.
+
 ## Static Scanner
 
 The scanner runs locally and does not use an agent. It scans the full skill directory, including `SKILL.md`, supporting docs, scripts, templates, and references.
