@@ -68,23 +68,26 @@ def materialize_skills(
             results.append(_result(skill, None, "skipped", authoritative_error))
             continue
         for agent in agents:
-            if exposure_id is not None:
-                if scope != "project":
-                    raise ValueError("--exposure-id requires project scope")
-                target = _managed_library_project_target(skill, agent=agent, project=(project_dir or Path.cwd()).resolve(), exposure_id=exposure_id)
-                assert target is not None
-            else:
-                target = target_dir(agent=agent, scope=scope, skill=skill, project_dir=project_dir)
-            problem = compatibility_problem(skill, agent)
-            if problem and not allow_incompatible:
-                results.append(_result(skill, target, "skipped", problem, agent=agent, scope=scope))
-                continue
+            target = None
             try:
+                if exposure_id is not None:
+                    if scope != "project":
+                        raise ValueError("--exposure-id requires project scope")
+                    target = _managed_library_project_target(skill, agent=agent, project=(project_dir or Path.cwd()).resolve(), exposure_id=exposure_id)
+                    assert target is not None
+                else:
+                    target = target_dir(agent=agent, scope=scope, skill=skill, project_dir=project_dir)
+                problem = compatibility_problem(skill, agent)
+                if problem and not allow_incompatible:
+                    results.append(_result(skill, target, "skipped", problem, agent=agent, scope=scope))
+                    continue
                 if mode == "stub":
                     results.append(materialize_stub_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force, bound_preview=bound_preview, confirmation=confirmation, project_dir=project_dir, revalidate_source=revalidate_source, selected_exposure_id=exposure_id))
                 else:
                     results.append(materialize_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force, bound_preview=bound_preview, confirmation=confirmation, project_dir=project_dir, revalidate_source=revalidate_source, selected_exposure_id=exposure_id))
             except (OSError, ValueError) as exc:
+                if exposure_id is not None and target is None:
+                    raise
                 results.append(_result(skill, target, "skipped", str(exc), agent=agent, scope=scope))
     return results
 

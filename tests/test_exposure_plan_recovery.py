@@ -3,19 +3,21 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
 from skillager.exposure.plan import ExposurePlan
 from skillager.exposure.plan_apply import apply_plan
 from skillager.exposure import plan_apply
-from skillager.exposure.plan_targets import tree_state
+from skillager.exposure.plan_targets import PlanTarget, digest, tree_state
+from skillager.state.locking import lock_path_for
 from tests.behavior import test_exposure_plan as fixtures
 
 
 class ExposurePlanRecoveryTests(unittest.TestCase):
     def test_failures_preserve_originals_and_report_actual_per_target_outcomes(self):
-        for fault in ("tag-install", "concurrent-original", "concurrent-installed", "detached-mode", "disposal"):
+        for fault in ("tag-install", "concurrent-original", "concurrent-installed", "detached-mode", "disposal", "observation"):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp).resolve()
                 fixture = fixtures.ExposurePlanBehaviorTests()
@@ -26,6 +28,8 @@ class ExposurePlanRecoveryTests(unittest.TestCase):
                 scratch.mkdir()
                 previous = Path.cwd()
                 real_install, real_replace, real_delete = plan_apply._install, os.replace, plan_apply._delete
+                real_observe = PlanTarget.observe
+                verified_backups = 0
                 router = source.parent / "skillager-recovery"
                 def install(candidate, target):
                     if target.kind == "tags":
@@ -46,22 +50,32 @@ class ExposurePlanRecoveryTests(unittest.TestCase):
                     if fault == "disposal" and path.name == "previous":
                         raise OSError("injected original disposal failure")
                     return real_delete(path)
+                def observe(target, path=None):
+                    nonlocal verified_backups
+                    if fault == "observation" and target.path == source:
+                        if path is not None and path.name == "previous":
+                            verified_backups += 1
+                        elif path is None and verified_backups == 2:
+                            raise OSError("injected post-publication observation failure")
+                    return real_observe(target, path)
                 try:
                     os.chdir(project)
-                    with patch.dict(os.environ, cli.env), patch.object(plan_apply, "_install", side_effect=install), patch.object(plan_apply.os, "replace", side_effect=replace), patch.object(plan_apply, "_delete", side_effect=delete):
+                    with patch.dict(os.environ, cli.env), patch.object(plan_apply, "_install", side_effect=install), patch.object(plan_apply.os, "replace", side_effect=replace), patch.object(plan_apply, "_delete", side_effect=delete), patch.object(PlanTarget, "observe", observe):
                         plan = ExposurePlan(request, state=Path(cli.env["SKILLAGER_STATE_DIR"]), catalog=Path(cli.env["SKILLAGER_CATALOG_STATE_DIR"]), project=project, agent="codex", scratch=scratch)
                         result, code = apply_plan(plan, plan.token)
                 finally:
                     os.chdir(previous)
                 self.assertEqual(code, 2, result)
                 self.assertEqual(result["status"], "partial", result)
+                self.assertIsNotNone(result["reason_code"])
                 self.assertEqual({item["target_id"] for item in result["results"]}, {item["target_id"] for item in result["targets"]})
                 origin_result = next(item for item in result["results"] if item["path"] == str(source))
                 if fault == "concurrent-original":
                     self.assertEqual((source / "local.txt").read_text(), "Concurrent local source")
                     self.assertEqual(origin_result["status"], "recovery_required")
                     self.assertEqual(tree_state(Path(origin_result["recovery_path"])), original)
-                elif fault == "disposal":
+                elif fault in {"disposal", "observation"}:
+                    self.assertEqual(result["reason_code"], f"{fault}-failed")
                     self.assertFalse(source.exists())
                     self.assertEqual(tree_state(Path(origin_result["recovery_path"])), original)
                 elif fault == "detached-mode":
@@ -72,6 +86,120 @@ class ExposurePlanRecoveryTests(unittest.TestCase):
                 if fault == "concurrent-installed":
                     self.assertEqual((router / "local.txt").read_text(), "Concurrent router edit")
                     self.assertEqual(next(item for item in result["results"] if item["path"] == str(router))["status"], "recovery_required")
+
+    def test_parent_rollback_preserves_stable_locks_and_distinguishes_unknown_material(self):
+        for extra in (None, "file", "unknown-lock", "parent-mode"):
+            with self.subTest(extra=extra), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp).resolve()
+                fixture = fixtures.ExposurePlanBehaviorTests()
+                project, cli, source, _, relation = fixture.fixture(root)
+                request = {"schema": "skillager.exposure-request.v1", "action": "group", "name": "Parents", "members": [relation["skill_id"]], "library_id": relation["library_id"], "replace": []}
+                scratch = root / "scratch"
+                scratch.mkdir()
+                previous = Path.cwd()
+                original = tree_state(source)
+                lock_inodes = {}
+                real_install = plan_apply._install
+                def install(candidate, target):
+                    if target.kind == "tags":
+                        lock_inodes.update({path: path.stat().st_ino for path in project.rglob("*.lock")})
+                        if extra == "file":
+                            (project / ".claude/skills/local.txt").write_text("Concurrent material")
+                        elif extra == "unknown-lock":
+                            (project / ".claude/skills/.skillager-locks/other.lock").write_bytes(b"\0")
+                        elif extra == "parent-mode":
+                            (project / ".claude").chmod(0o700)
+                        raise OSError("injected tag publication failure")
+                    return real_install(candidate, target)
+                try:
+                    os.chdir(project)
+                    with patch.dict(os.environ, cli.env), patch.object(plan_apply, "_install", side_effect=install):
+                        plan = ExposurePlan(request, state=Path(cli.env["SKILLAGER_STATE_DIR"]), catalog=Path(cli.env["SKILLAGER_CATALOG_STATE_DIR"]), project=project, agent="claude", scratch=scratch)
+                        result, code = apply_plan(plan, plan.token)
+                finally:
+                    os.chdir(previous)
+                self.assertEqual(code, 2)
+                self.assertFalse((project / ".skillager-locks").exists())
+                self.assertFalse((project / ".claude/skills/skillager-parents").exists())
+                self.assertEqual(tree_state(source), original)
+                self.assertTrue(lock_inodes)
+                self.assertEqual({path: path.stat().st_ino for path in lock_inodes}, lock_inodes)
+                parents = [item for item in result["results"] if item["kind"] == "parent" and item["action"] != "keep"]
+                self.assertEqual(len(parents), 3)
+                for item in parents:
+                    path = Path(item["path"])
+                    actual = {"type": "directory", "mode": path.stat().st_mode & 0o7777}
+                    self.assertEqual(item["observed_state_hash"], digest(actual))
+                    ambiguous = extra is not None and path != project / ".skillager" and (extra != "parent-mode" or path == project / ".claude")
+                    self.assertEqual(item["status"], "recovery_required" if ambiguous else "applied", item)
+                    self.assertEqual(item["reason_code"], "parent-retained" if ambiguous else "coordination-retained", item)
+                    self.assertEqual(item["recovery_path"], str(path) if ambiguous else None)
+                if extra is None:
+                    self.assertFalse(any(item["status"] == "recovery_required" for item in result["results"]), result)
+                    self.assertFalse(list(project.rglob(".skillager-exposure-plan-*")))
+
+    def test_staging_admission_is_rechecked_under_existing_destination_locks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            fixture = fixtures.ExposurePlanBehaviorTests()
+            project, cli, source, origin, relation = fixture.fixture(root)
+            request = {"schema": "skillager.exposure-request.v1", "action": "adopt-native", "origin_id": origin, "source": relation, "mode": "stub"}
+            scratch = root / "scratch"
+            scratch.mkdir()
+            previous = Path.cwd()
+            original = tree_state(source)
+            retained = source.parent / ".skillager-exposure-plan-concurrent"
+            real_locks = plan_apply.resource_locks
+            @contextmanager
+            def locks(resources):
+                with real_locks(resources):
+                    if any(resource.name == ".skillager-target-allocation" for resource in resources):
+                        self.assertTrue(all(lock_path_for(resource).is_file() for resource in resources))
+                        retained.mkdir()
+                        (retained / "preserve.txt").write_text("Retained by another action")
+                    yield
+            try:
+                os.chdir(project)
+                with patch.dict(os.environ, cli.env):
+                    plan = ExposurePlan(request, state=Path(cli.env["SKILLAGER_STATE_DIR"]), catalog=Path(cli.env["SKILLAGER_CATALOG_STATE_DIR"]), project=project, agent="codex", scratch=scratch)
+                    with patch.object(plan_apply, "resource_locks", locks):
+                        result, code = apply_plan(plan, plan.token)
+            finally:
+                os.chdir(previous)
+            self.assertEqual((code, result["status"], result["reason_code"]), (2, "refused", "staging-present"))
+            self.assertEqual(tree_state(source), original)
+            self.assertEqual((retained / "preserve.txt").read_text(), "Retained by another action")
+            self.assertFalse((project / ".skillager-locks").exists())
+
+    def test_effect_and_target_admission_limits_refuse_without_project_writes(self):
+        from skillager.exposure.plan_request import PlanRefusal
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            fixture = fixtures.ExposurePlanBehaviorTests()
+            project, cli, _, _, relation = fixture.fixture(root)
+            request = {"schema": "skillager.exposure-request.v1", "action": "group", "name": "Bounded", "members": [relation["skill_id"]], "library_id": relation["library_id"], "replace": []}
+            previous = Path.cwd()
+            scratch = root / "scratch"
+            scratch.mkdir()
+            before = fixture.snapshot(project)
+            try:
+                os.chdir(project)
+                with patch.dict(os.environ, cli.env):
+                    first = ExposurePlan(request, state=Path(cli.env["SKILLAGER_STATE_DIR"]), catalog=Path(cli.env["SKILLAGER_CATALOG_STATE_DIR"]), project=project, agent="claude", scratch=scratch)
+                    limits = [("MAX_EFFECTS", sum(len(target["file_effects"]) for target in first.payload["targets"]) - 1, "effect-limit"),
+                              ("MAX_TARGETS", len(first.targets) - 1, "target-limit")]
+                    for constant, limit, reason in limits:
+                        with self.subTest(limit=constant):
+                            candidate = root / constant
+                            candidate.mkdir()
+                            with patch(f"skillager.exposure.plan.{constant}", limit), self.assertRaises(PlanRefusal) as refused:
+                                ExposurePlan(request, state=Path(cli.env["SKILLAGER_STATE_DIR"]), catalog=Path(cli.env["SKILLAGER_CATALOG_STATE_DIR"]), project=project, agent="claude", scratch=candidate)
+                            self.assertEqual(refused.exception.code, reason)
+                            self.assertEqual(fixture.snapshot(project), before)
+                            self.assertFalse((project / ".claude").exists())
+                            self.assertFalse((project / ".skillager").exists())
+            finally:
+                os.chdir(previous)
 
     def test_candidate_cleanup_failure_reports_recovery_and_stops_later_actions(self):
         from skillager.exposure.plan_request import PlanRefusal

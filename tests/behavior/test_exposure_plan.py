@@ -146,9 +146,10 @@ class ExposurePlanBehaviorTests(unittest.TestCase):
                 default = Path(direct["target"])
                 adoption = self.preview(cli, "adopt-native", agent, origin_id=origin, source=relation, mode="native")
                 self.apply(cli, adoption)
-                ambiguous = cli.run("expose", skill_id, "--agent", agent, "--mode", "stub", "--dry-run", "--json")
-                self.assertEqual(ambiguous.code, 2)
-                self.assertIn("multiple managed project copies", ambiguous.stderr)
+                ambiguous = self.checked(cli.run("expose", skill_id, "--agent", agent, "--mode", "stub", "--dry-run", "--json"))[0]
+                self.assertEqual(ambiguous["status"], "skipped")
+                self.assertIn("multiple managed project copies", ambiguous["reason"])
+                self.assertIsNone(ambiguous["target"])
                 for selected, other in ((source, default), (default, source)):
                     for mode in ("stub", "native"):
                         untouched = tree_state(other)
@@ -163,6 +164,27 @@ class ExposurePlanBehaviorTests(unittest.TestCase):
                 listed = self.checked(cli.run("expose", "--list", "--agent", agent, "--json"))["exposures"]
                 self.assertEqual({item["target"] for item in listed}, {str(source), str(default)})
                 self.assertTrue(all(item["status"] == "current" for item in listed))
+
+    def test_ambiguous_copy_skips_only_that_member_and_agent_in_an_existing_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            project, cli, source, origin, relation = self.fixture(root)
+            skill_id = relation["skill_id"]
+            default = Path(self.checked(cli.run("expose", skill_id, "--agent", "codex", "--mode", "native", "--json"))[0]["target"])
+            self.apply(cli, self.preview(cli, "adopt-native", origin_id=origin, source=relation, mode="native"))
+            self.checked(cli.run("library", "new", "second", "--json"))
+            (root / "library/skills/second/SKILL.md").write_text("---\nname: Second\ndescription: Use secondary test guidance.\n---\n\nUse secondary test guidance.\n")
+            self.checked(cli.run_confirmed("library", "accept", "lib/second", "--yes", "--json"))
+            before = {path: tree_state(path) for path in (source, default)}
+            results = self.checked(cli.run("expose", skill_id, "lib/second", "--all-agents", "--mode", "stub", "--json"))
+            skipped = [item for item in results if item["status"] == "skipped"]
+            self.assertEqual(len(skipped), 1, results)
+            self.assertEqual((skipped[0]["skill_id"], skipped[0]["agent"]), (skill_id, "codex"))
+            self.assertIn("multiple managed project copies", skipped[0]["reason"])
+            self.assertEqual({(item["skill_id"], item["agent"]) for item in results if item["status"] == "exposed"},
+                             {(skill_id, "claude"), ("lib/second", "codex"), ("lib/second", "claude")})
+            self.assertEqual({path: tree_state(path) for path in before}, before)
+            self.assertFalse((project / ".skillager-locks").exists())
 
     def test_native_target_and_approval_changes_refuse_without_target_writes(self):
         for change in ("root-mode", "file-mode", "disappear", "origin-block", "canonical-block", "extra", "symlink"):

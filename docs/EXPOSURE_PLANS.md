@@ -99,8 +99,12 @@ bodies. They include supporting files, removed directories and deployment
 sidecars. `keep` effects disclose unchanged entries. Parent entries describe the
 parent's own mode, not unrelated descendants. Hidden lock/staging files belong to
 existing CLI coordination; they are not skill content. Preview creates none in the
-project. Apply can retain coordination directories, and failures report any
-parent that could not be removed safely.
+project. Apply can retain coordination directories. After a failed publication,
+an otherwise empty created parent containing only the action's stable lock
+artifacts (or their parent directories) reports `applied` with reason
+`coordination-retained` and its actual observed state, without a recovery path.
+Locks are never unlinked during rollback. Empty parents report `rolled_back`;
+parents containing changed or unknown material report `recovery_required`.
 
 Apply returns the confirmed `plan_hash`, the same plan context/effects, and one
 compact result for every admitted target: target identity/path/action,

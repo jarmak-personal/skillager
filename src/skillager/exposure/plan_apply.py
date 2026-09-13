@@ -11,7 +11,7 @@ from typing import Any
 
 from ..library.confirmation import require_confirmation_token
 from ..state import approvals
-from ..state.locking import resource_lock, resource_locks
+from ..state.locking import lock_path_for, resource_locks
 from .plan import ExposurePlan
 from .impl import install_reserved_projection, _verify_materialized_projection
 from .plan_request import PlanRefusal
@@ -29,11 +29,10 @@ def apply_plan(plan: ExposurePlan, token: str) -> tuple[dict[str, Any], int]:
     resources.extend(source.catalog / f"library-skill-{skill_id[4:]}" for skill_id in source.selected)
     with resource_locks(resources):
         with approvals.locked_records([source.state, source.catalog]) as records:
-            with resource_lock(plan.project / ".skillager-exposure-plan"):
-                source.revalidate(records)
-                plan.require_staging_clear()
-                plan.revalidate_targets()
-                return _publish(plan, records)
+            source.revalidate(records)
+            plan.require_staging_clear()
+            plan.revalidate_targets()
+            return _publish(plan, records)
 
 
 def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[dict[str, Any], int]:
@@ -47,7 +46,11 @@ def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[d
     created_parents: list[PlanTarget] = []
     mutation_started = False
     failed = False
+    rollback_started = False
     failure_code: str | None = None
+    allocations = {target.path.parent / ".skillager-target-allocation" for target in plan.targets if target.kind not in {"parent", "tags"}}
+    target_resources = [target.path for target in plan.targets if target.kind != "parent"]
+    coordination_files = {lock_path_for(resource) for resource in [*allocations, *target_resources]}
     with ExitStack() as locks:
         try:
             # A token mismatch above cannot create destination ancestors. Once this
@@ -61,9 +64,9 @@ def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[d
                 created_parents.append(target)
                 mutation_started = True
                 result["status"] = "applied"
-            allocations = {target.path.parent / ".skillager-target-allocation" for target in plan.targets if target.kind not in {"parent", "tags"}}
             locks.enter_context(resource_locks(list(allocations)))
-            locks.enter_context(resource_locks([target.path for target in plan.targets if target.kind != "parent"]))
+            locks.enter_context(resource_locks(target_resources))
+            plan.require_staging_clear()
             plan.sources.revalidate(records)
             for target in plan.targets:
                 if target not in created_parents:
@@ -143,8 +146,9 @@ def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[d
                     raise PlanRefusal("target-changed", "Retained original changed before disposal")
         except (OSError, ValueError) as error:
             failed = True
+            rollback_started = True
             failure_code = error.code if isinstance(error, PlanRefusal) else "publication-failed"
-            _rollback(plan, outcomes, backups, installed, created_parents, failure_code)
+            _rollback(plan, outcomes, backups, installed, failure_code)
         finally:
             for target, result in zip(plan.targets, outcomes):
                 try:
@@ -153,6 +157,7 @@ def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[d
                 except (OSError, ValueError):
                     result.update(status="recovery_required", reason_code="observation-failed", observed_state_hash=None)
                     failed = True
+                    failure_code = failure_code or "observation-failed"
             # Never discard an original after failed rollback. Successful disposal
             # failures also have an explicit recovery outcome and path.
             for target, result in zip(plan.targets, outcomes):
@@ -168,6 +173,7 @@ def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[d
                     _delete(backup)
                 except OSError:
                     failed = True
+                    failure_code = failure_code or "disposal-failed"
                     result.update(status="recovery_required", reason_code="disposal-failed", recovery_path=str(backup))
             for root, target in scratch.items():
                 if (root / "previous").exists() or (root / "interrupted-current").exists():
@@ -179,6 +185,8 @@ def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[d
                     failure_code = failure_code or "cleanup-incomplete"
                     result = outcomes[plan.targets.index(target)]
                     result.update(status="recovery_required", reason_code="cleanup-incomplete", recovery_path=str(root))
+            if rollback_started:
+                _rollback_parents(plan, outcomes, created_parents, coordination_files, failure_code)
     status = "partial" if failed and mutation_started else "refused" if failed else "applied"
     return {**plan.payload, "status": status, "plan_hash": plan.token, "reason_code": failure_code, "results": outcomes}, 2 if failed else 0
 
@@ -202,7 +210,7 @@ def _install(candidate: Path, target: PlanTarget) -> None:
     install_reserved_projection(candidate, target.path, metadata_file=target.kind == "tags")
 
 
-def _rollback(plan: ExposurePlan, outcomes: list[dict[str, Any]], backups: dict[Path, Path], installed: dict[Path, dict[str, Any] | None], created_parents: list[PlanTarget], code: str) -> None:
+def _rollback(plan: ExposurePlan, outcomes: list[dict[str, Any]], backups: dict[Path, Path], installed: dict[Path, dict[str, Any] | None], code: str) -> None:
     for target, result in reversed(list(zip(plan.targets, outcomes))):
         if target.kind == "parent" or target.keep:
             continue
@@ -230,13 +238,37 @@ def _rollback(plan: ExposurePlan, outcomes: list[dict[str, Any]], backups: dict[
         except (OSError, ValueError):
             recovery = backup.parent if backup is not None and (backup.parent / "interrupted-current").exists() else backup
             result.update(status="recovery_required", reason_code=code, recovery_path=str(recovery) if recovery is not None and recovery.exists() else None)
+
+
+def _rollback_parents(plan: ExposurePlan, outcomes: list[dict[str, Any]], created_parents: list[PlanTarget], coordination_files: set[Path], code: str | None) -> None:
+    retained: set[Path] = set()
     for target in reversed(created_parents):
         result = outcomes[plan.targets.index(target)]
+        result["observed_state_hash"] = None
         try:
-            target.path.rmdir()
-            result.update(status="rolled_back", reason_code=code)
-        except OSError:
+            observed = target.observe()
+            result["observed_state_hash"] = digest(observed) if observed is not None else None
+            if observed != target.after():
+                raise ValueError("created parent changed")
+            entries = list(target.path.iterdir())
+            if not entries:
+                target.path.rmdir()
+                result.update(status="rolled_back", reason_code=code, observed_state_hash=None)
+            elif all(entry in retained or _coordination_directory(entry, coordination_files) for entry in entries):
+                # Stable locks can be held or awaited by other processes. Keep
+                # them and disclose the directory that actually remains.
+                retained.add(target.path)
+                result.update(status="applied", reason_code="coordination-retained", observed_state_hash=digest(observed), recovery_path=None)
+            else:
+                raise ValueError("created parent contains retained material")
+        except (OSError, ValueError):
             result.update(status="recovery_required", reason_code="parent-retained", recovery_path=str(target.path))
+
+
+def _coordination_directory(path: Path, expected_files: set[Path]) -> bool:
+    if path.name != ".skillager-locks" or path.is_symlink() or not path.is_dir():
+        return False
+    return all(child in expected_files and not child.is_symlink() and child.is_file() for child in path.iterdir())
 
 
 def _delete(path: Path) -> None:
