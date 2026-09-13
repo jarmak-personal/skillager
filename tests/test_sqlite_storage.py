@@ -13,7 +13,7 @@ from skillager.catalog.impl import _load_collection_index, _load_or_refresh_coll
 from skillager.catalog.storage import cache_path, write_collection
 from skillager.library.service import initialize_library, new_library_skill
 from skillager.skills.search import search
-from skillager.state import approvals
+from skillager.state import approvals, database
 from skillager.state.trust import clear_trust, content_hash, load_trust, set_trust, trust_info, unblock_trust
 
 
@@ -108,6 +108,92 @@ class SqliteApprovalTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "symlinked"):
                 set_trust(root, "id", "reviewed", "hash", {})
             self.assertEqual(target.read_text(), "untouched")
+
+
+class SqliteConnectionTests(unittest.TestCase):
+    def test_optional_sidecar_disappearance_during_validation_is_allowed(self) -> None:
+        for suffix in ("-journal", "-wal", "-shm"):
+            for moment in ("before-is-file", "ownership-stat"):
+                with self.subTest(suffix=suffix, moment=moment), tempfile.TemporaryDirectory() as tmp:
+                    db = Path(tmp) / "catalog.sqlite3"
+                    with closing(database.connect_database(db, writable=True)) as connection:
+                        connection.execute("CREATE TABLE preserved (value TEXT)")
+                        connection.commit()
+                    before = db.read_bytes()
+                    sidecar = Path(str(db) + suffix)
+                    sidecar.write_bytes(b"")
+                    real_validate, real_stat = database._assert_user_owned_regular_file, Path.stat
+                    validating, stat_calls = False, 0
+                    errors = []
+                    def validate(candidate):
+                        nonlocal validating
+                        validating = candidate == sidecar
+                        if validating and moment == "before-is-file":
+                            sidecar.unlink()
+                        try:
+                            return real_validate(candidate)
+                        except (FileNotFoundError, ValueError) as error:
+                            errors.append(type(error))
+                            raise
+                        finally:
+                            validating = False
+                    def stat(candidate, *args, **kwargs):
+                        nonlocal stat_calls
+                        if validating and moment == "ownership-stat" and candidate == sidecar and kwargs.get("follow_symlinks", True):
+                            stat_calls += 1
+                            if stat_calls == 2:
+                                sidecar.unlink()
+                        return real_stat(candidate, *args, **kwargs)
+                    if moment == "ownership-stat" and not hasattr(os, "geteuid"):
+                        continue
+                    with patch.object(database, "_assert_user_owned_regular_file", side_effect=validate), patch.object(Path, "stat", stat):
+                        with closing(database.connect_database(db)) as connection:
+                            self.assertEqual(connection.execute("SELECT COUNT(*) FROM preserved").fetchone()[0], 0)
+                    self.assertEqual(errors, [ValueError if moment == "before-is-file" else FileNotFoundError])
+                    self.assertFalse(sidecar.exists())
+                    self.assertEqual(db.read_bytes(), before)
+
+    def test_main_database_disappearance_is_still_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "catalog.sqlite3"
+            with closing(database.connect_database(db, writable=True)):
+                pass
+            real_validate = database._assert_user_owned_regular_file
+            def disappear(candidate):
+                if candidate == db:
+                    db.unlink()
+                return real_validate(candidate)
+            with patch.object(database, "_assert_user_owned_regular_file", side_effect=disappear), self.assertRaisesRegex(ValueError, "non-file"):
+                database.connect_database(db, writable=True)
+            self.assertFalse(db.exists())
+
+    def test_present_unsafe_optional_sidecars_are_still_refused(self) -> None:
+        for suffix in ("-journal", "-wal", "-shm"):
+            for kind in ("symlink", "dangling-symlink", "directory", "foreign-owner"):
+                with self.subTest(suffix=suffix, kind=kind), tempfile.TemporaryDirectory() as tmp:
+                    db = Path(tmp) / "catalog.sqlite3"
+                    with closing(database.connect_database(db, writable=True)):
+                        pass
+                    sidecar = Path(str(db) + suffix)
+                    if kind in {"symlink", "dangling-symlink"}:
+                        sidecar.symlink_to(db if kind == "symlink" else db.parent / "missing")
+                    elif kind == "directory":
+                        sidecar.mkdir()
+                    else:
+                        if not hasattr(os, "geteuid"):
+                            continue
+                        sidecar.write_bytes(b"retained")
+                    real_validate = database._assert_user_owned_regular_file
+                    uid = os.geteuid() if hasattr(os, "geteuid") else 0
+                    def validate(candidate):
+                        if candidate == sidecar and kind == "foreign-owner":
+                            with patch("skillager.state.statefiles.os.geteuid", return_value=uid + 1):
+                                return real_validate(candidate)
+                        return real_validate(candidate)
+                    reason = "symlinked" if "symlink" in kind else "non-file" if kind == "directory" else "owned by another user"
+                    with patch.object(database, "_assert_user_owned_regular_file", side_effect=validate), self.assertRaisesRegex(ValueError, reason):
+                        database.connect_database(db)
+                    self.assertTrue(sidecar.exists() or sidecar.is_symlink())
 
 
 class SqliteSearchTests(unittest.TestCase):
