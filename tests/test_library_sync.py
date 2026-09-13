@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
@@ -25,8 +26,10 @@ class LibrarySyncMutationTests(unittest.TestCase):
         self.project.mkdir()
         (self.project / "pyproject.toml").write_text('[project]\nname = "demo"\n')
         self.state, self.catalog, self.library = (self.root / name for name in ("state", "catalog", "library"))
-        self.enterContext(patch("pathlib.Path.home", return_value=self.root / "home"))
-        self.enterContext(chdir(self.project))
+        contexts = ExitStack()
+        self.addCleanup(contexts.close)
+        contexts.enter_context(patch("pathlib.Path.home", return_value=self.root / "home"))
+        contexts.enter_context(chdir(self.project))
         initialize_library(self.catalog, path=self.library, no_git=True)
         self.source = self.add_source("initial")
 
