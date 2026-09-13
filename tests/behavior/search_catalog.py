@@ -208,10 +208,21 @@ def build_catalog(
             summary = f"Use catalogneedle guidance for {domain} examples and review notes."
             body = f"## {domain.title()} examples\n\n| Input | Observation |\n| --- | --- |\n| Small dataset | Compare the recorded output |"
         write(root / collection, collection, slug, title, summary, body, target_chars=rng.choice((1024, 4096, 12_000, 32_000)))
+    synchronized_ids: list[str] = []
     for collection in ("synthetic-a", "synthetic-b"):
         progress(f"Registering and approving generated low-risk content in {collection}")
         require_success(cli.run("collection", "add", str(root / collection), "--name", collection, "--json"))
-        require_success(cli.run("setup", "--collection", collection, "--accept-low", "--no-packages", "--summary-json"))
+        reviewed = cli.run("setup", "--collection", collection, "--accept-low", "--no-packages", "--summary-json")
+        require_success(reviewed)
+        synchronized_ids.extend(item["canonical_skill_id"] for item in reviewed.json()["action"]["library_sync"]["items"]
+                                if item["outcome"] in {"created", "updated", "unchanged"})
+    # This workload tests freshness/ranking of the original external sources.
+    # Explicitly block their newly preserved copies in this private catalog so a
+    # still-approved copy cannot legitimately satisfy a stale-original query.
+    # The sync behavior fixture separately proves original/canonical coexistence.
+    if synchronized_ids:
+        require_success(cli.run("--state-dir", str(root / "state" / "catalog"), "review", "block", *synchronized_ids, "--json"))
+        require_success(cli.run("review", "block", *synchronized_ids, "--json"))
     approved_ids = sorted(generated)
     # Add pending probes only after the explicit low-risk approval pass.
     for collection, base in (("lib", library / "skills"), ("synthetic-a", root / "synthetic-a")):
@@ -225,6 +236,7 @@ def build_catalog(
         "seed": seed,
         "approved_count": size,
         "pending_count": 2,
+        "blocked_sync_copy_ids": synchronized_ids,
         "source_counts": {"library": 5, "external_collections": size - 3},
         "approved_ids": approved_ids,
         "skill_md_bytes": sum(int(entry["bytes"]) for entry in generated.values()),

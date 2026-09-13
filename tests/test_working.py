@@ -213,16 +213,16 @@ class SkillagerWorkingTests(unittest.TestCase):
             code, stdout, stderr = self.run_cli(["working", "--agent", "codex"], root=root, state=state)
             self.assertEqual(code, 0, stderr)
             self.assertIn("Skillager ready.", stdout)
-            self.assertIn("1 available source entry -> 1 Codex-ready choice", stdout)
-            self.assertIn("0 exposed choices, 1 on demand.", stdout)
+            self.assertIn("2 available source entries -> 2 Codex-ready choices", stdout)
+            self.assertIn("0 exposed choices, 2 on demand.", stdout)
             self.assertIn("Optional next step when a specialized skill may help:", stdout)
             self.assertIn('skillager search "<user-goal>" --agent codex --json', stdout)
 
             code, stdout, stderr = self.run_cli(["working", "--agent", "codex", "--json"], root=root, state=state)
             self.assertEqual(code, 0, stderr)
             data = json.loads(stdout)
-            self.assertEqual(data["inventory"]["available_source_entries"], 1)
-            self.assertEqual(data["inventory"]["agent_visible_choices"], 1)
+            self.assertEqual(data["inventory"]["available_source_entries"], 2)
+            self.assertEqual(data["inventory"]["agent_visible_choices"], 2)
             self.assertTrue(data["curation"]["recommended"])
             self.assertEqual(
                 data["curation"]["search_command"],

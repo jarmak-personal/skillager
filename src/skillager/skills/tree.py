@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..signing import is_evidence_file
@@ -46,7 +47,14 @@ def content_path_excluded(relative: Path) -> bool:
     return any(fnmatch.fnmatch(relative.as_posix(), pattern) for pattern in TRANSIENT_PATTERNS)
 
 
-def copy_content_tree(source: Path, destination: Path) -> list[str]:
+@dataclass(frozen=True)
+class ContentTreeLimits:
+    files: int
+    file_bytes: int
+    tree_bytes: int
+
+
+def copy_content_tree(source: Path, destination: Path, *, limits: ContentTreeLimits | None = None) -> list[str]:
     """Copy the canonical content tree without following symlinks."""
 
     source = source.resolve()
@@ -54,13 +62,33 @@ def copy_content_tree(source: Path, destination: Path) -> list[str]:
         raise ValueError(f"skill source is not a directory: {source}")
     if destination.exists() or destination.is_symlink():
         raise ValueError(f"skill destination already exists: {destination}")
+    files = iter_content_files(source)
+    if limits is not None:
+        sizes = [path.stat(follow_symlinks=False).st_size for path in files]
+        if len(files) > limits.files or any(size > limits.file_bytes for size in sizes) or sum(sizes) > limits.tree_bytes:
+            raise ValueError("canonical content tree exceeds copy limits")
     destination.mkdir(parents=True)
     copied: list[str] = []
-    for source_path in iter_content_files(source):
+    total = 0
+    for source_path in files:
         relative = source_path.relative_to(source)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, target)
+        if limits is None:
+            shutil.copy2(source_path, target)
+        else:
+            remaining = min(limits.file_bytes, limits.tree_bytes - total)
+            with source_path.open("rb") as reader, target.open("xb") as writer:
+                while True:
+                    chunk = reader.read(min(65536, remaining + 1))
+                    if len(chunk) > remaining:
+                        raise ValueError("canonical content tree grew beyond copy limits")
+                    if not chunk:
+                        break
+                    writer.write(chunk)
+                    remaining -= len(chunk)
+            shutil.copystat(source_path, target, follow_symlinks=False)
+        total += target.stat().st_size
         copied.append(relative.as_posix())
     return copied
 
@@ -128,6 +156,7 @@ def require_canonical_content_tree(root: Path, *, action: str = "mutation") -> N
 
 __all__ = [
     "CONTENT_TREE_EXCLUDES",
+    "ContentTreeLimits",
     "TREE_FINGERPRINT_SCHEMA",
     "TRANSIENT_PATTERNS",
     "content_path_excluded",

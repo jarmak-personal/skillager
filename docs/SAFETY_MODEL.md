@@ -67,11 +67,65 @@ approvals, overrides, blocks, or decision history.
 
 ## Import Boundary
 
-Import is the only Skillager operation that turns an external skill into an owned library skill. Preview is read-only. An external ID claimed by multiple distinct roots is ambiguous and fails closed; explicit collision-suffixed inventory IDs remain selectable. After explicit confirmation, Skillager re-resolves and rehashes the source, applies the same scanner/lint and audited-override rules as authored acceptance, and only then prepares a filtered candidate outside the library. Source changes invalidate the preview.
+Explicit import previews a separately named owned copy. Preview is read-only. An external ID claimed by multiple distinct roots is ambiguous and fails closed; explicit collision-suffixed inventory IDs remain selectable. After explicit confirmation, Skillager re-resolves and rehashes the source, applies the same scanner/lint and audited-override rules as authored acceptance, and only then prepares a filtered candidate outside the library. Source changes invalidate the preview.
 
 Only the canonical content tree crosses the boundary: regular files below the selected skill root, excluding evidence, generated materialization sidecars, Git/cache data, symlinks, bytecode, and transient editor files. Skillager neither imports nor executes the surrounding package. The candidate hash must reproduce the reviewed source hash before it moves into the library. Git commit precedes trust recording; a later failure leaves a pending copy with an explicit `library accept` repair path. The external origin is never modified or approved as a side effect.
 
 Import provenance stores the source skill ID, imported hash, source type, and timestamp for attribution and audit. It does not create an upstream synchronization contract.
+
+## Approved Source Synchronization
+
+Approval actions and setup preserve canonical copies of approved sources from the
+CLI's effective inventory. `library sync --approved` explicitly backfills existing
+approvals. `library sync --status --json` observes eligibility and lineage without
+initializing a library, approving content, or resuming a write. Ordinary metadata
+reads never synchronize. No machine-wide scanner or background daemon is added.
+
+Synchronization reuses import's filtered-copy and candidate validation boundary.
+An existing effective source decision must authorize the exact copied hash. Source
+and canonical decisions remain locked from pre-publication checks through final
+acceptance; the owner checks the source bytes and complete destination again.
+Project-only source approval derives a separate globally reusable canonical
+approval for identical bytes. The original scope, key, state, hash, and actual
+approval/override evidence remain in lineage. No override reason is invented and
+no pin or block is cleared. Originals and exposure targets remain untouched.
+
+Each logical source has a stable relation to one canonical library UUID/skill.
+Different approved versions at simultaneously observed origins conflict. Only an
+unchanged derived destination may advance; all destination entries and permissions
+are protected, including files outside canonical hashing. Authored skills and old
+explicit imports are not silently adopted into a sync relation. Original drift or
+revocation does not revoke an independently accepted canonical copy.
+
+Discovery and lineage are resolved once per batch; bounded chunks share Git
+commits and append-only approval transactions. Each copy admits at most 512
+entries, 8 MiB per file, and 32 MiB total; chunks admit 128 skills or 256 MiB.
+Effective external origins and canonical entries share a total limit of 10,000.
+Projected new copies must also fit that combined limit before publication.
+Retained historical origins share the identity bound. Projected public metadata
+reserves the 32 MiB response envelope before publication, with an explicit
+`result-limit` refusal instead of truncation. A capacity refusal preserves the
+original approval and initializes no library for those refused copies.
+A soft time limit stops before another chunk. Results distinguish accepted copies,
+conflicts, skipped sources, failures, and uncertain effects. Published content is
+never counted as accepted before Git/version verification and trust recording.
+A failed trust write leaves pending content for explicit review and `library accept`;
+that acceptance restores canonical availability, not automatic sync authority.
+Retained previous directories with concurrent edits are reported for recovery.
+After interruption, observe status; no background retry or rollback is implied.
+
+Bound clients pass both `--expected-library-id` and `--expected-library-root`.
+The existing mutation owner rechecks this exact registered identity before writes
+and acceptance. A missing or replaced bound library refuses instead of initializing
+or selecting another root. Unbound first-use approval/setup may initialize the
+default library using the existing explicit initialization policy.
+
+Public `skillager.library-lineage.v1` records expose safe source provenance,
+historical approval scope/hash/override booleans, current source observations, and
+current canonical acceptance separately. Public metadata does not expose raw
+approval records or skill bodies. A verified historical relation alone cannot
+justify replacing or deleting a changed original; native conversion must verify
+its complete live target separately.
 
 ## Content-Addressed History
 

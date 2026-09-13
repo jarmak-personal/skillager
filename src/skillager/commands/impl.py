@@ -170,7 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
 
             Important rules:
               - Library ownership never bypasses exact-hash acceptance.
-              - External skills remain at their source unless explicitly imported.
+              - Approved skills gain verified reusable library copies; originals stay in place.
               - Never activate or expose unavailable skills; ask the user to complete setup or review.
               - Agents should run `skillager working --json` after context resets and continue quietly when it reports ready.
               - Agents should ask the user to run `skillager setup` when external skills need owner review.
@@ -5417,6 +5417,7 @@ def cmd_review(args: argparse.Namespace) -> int:
         skills,
         bulk_approve=bulk_approve,
         review_action=review_action,
+        sync_inventory=data if not getattr(args, "no_packages", False) and source is None and collection is None and args.include_blocked else None,
         override_lint=args.override_lint,
         reason=args.reason,
         approval_root=catalog_root(args),
@@ -6255,6 +6256,9 @@ def _print_review_report(
     *,
     compact: bool = False,
 ) -> None:
+    if "library_sync" in action:
+        from .library_sync import print_sync_result
+        print_sync_result(action["library_sync"])
     if _use_rich():
         _print_review_report_rich(skills, summary, action, compact=compact)
         return
@@ -7523,6 +7527,9 @@ def _print_action_result(action: dict[str, Any]) -> None:
     _print_lint_override_receipt(action)
     for item in action.get("skipped", []):
         print(f"{item['skill_id']}: skipped ({item['reason']})")
+    if "library_sync" in action:
+        from .library_sync import print_sync_result
+        print_sync_result(action["library_sync"])
 
 
 def _console() -> Console:

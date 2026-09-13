@@ -180,8 +180,10 @@ intended change before replacing anything.
 
 ## Adopt An External Skill
 
-Import a skill only when you want to maintain your own copy. You can use reviewed
-project, package, or collection skills without importing them.
+Approval and setup now preserve reusable library copies of approved project,
+package, environment, native, and collection skills automatically. Originals stay
+where they are. An explicit import remains useful when choosing a separate name
+and independent copy before source approval.
 
 Ask your agent:
 
@@ -203,6 +205,22 @@ skillager import workflows/pr-review --as team-pr-review
 The preview does not create the library or copy files. Confirmation copies only that
 skill, records where it came from, and leaves the original unchanged. A confirmed
 first import creates the default personal library.
+
+## Sync Existing Approvals
+
+Run `skillager library sync --approved` to backfill already approved skills from the
+current project's effective discovery context. Even a project-only source approval
+produces an identical reusable canonical copy; its original scope remains visible
+in provenance. This does not add the skill to any project's agent.
+
+Use `skillager library sync --status --json` to inspect lineage and eligibility
+without writes. The `--approved` apply result reports created, updated, unchanged,
+conflict, skipped, failed, and uncertain counts. Status reports current lineage and
+eligibility; it does not reconstruct a previous apply result. Customized or pinned
+copies stay protected. If a
+large batch stops at its limit, inspect its result before explicitly running another
+batch. A pending copy needs review and `library accept`; an uncertain interruption
+needs status inspection rather than an automatic retry.
 
 ## Compare And Restore Versions
 
@@ -240,7 +258,8 @@ skillager setup --collection workflows --agent codex
 ```
 
 Registration keeps the repository external. It does not copy its skills into your
-personal library. Import only the individual skills you want to own.
+personal library. Approving its skills preserves verified individual copies;
+registering or browsing it alone does not copy anything.
 
 ## Diagnose Problems
 

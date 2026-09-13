@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from contextlib import closing, contextmanager
+from contextlib import closing, contextmanager, nullcontext
 from contextvars import ContextVar
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar
 
 from .database import connect_database
-from .locking import resource_lock
+from .locking import resource_lock, resource_locks
 from .statefiles import read_user_json, write_user_json
 
 
@@ -166,9 +166,9 @@ def _replace(conn: sqlite3.Connection, before: dict[str, Any], after: dict[str, 
 
 
 @contextmanager
-def _writer(root: Path) -> Iterator[sqlite3.Connection]:
+def _writer(root: Path, *, already_locked: bool = False) -> Iterator[sqlite3.Connection]:
     # Retain the legacy lock resource so an older in-flight writer cannot race migration.
-    with resource_lock(_legacy_path(root)):
+    with nullcontext() if already_locked else resource_lock(_legacy_path(root)):
         if not _has_database(root):
             _validate(read_user_json(_legacy_path(root), {"skills": {}}))
         try:
@@ -232,3 +232,46 @@ def mutate_record(root: Path, scope: str, key: str, mutation: Callable[[dict[str
                 conn.execute("INSERT OR IGNORE INTO version_references VALUES (?, ?, ?, ?, ?)",
                              (key, version["content_hash"], version["repository"], version["git_commit"], version["skill_path"]))
         return after
+
+
+def derive_library_records(
+    root: Path,
+    project_root: Path,
+    keys: dict[Path, set[tuple[str, str]]],
+    derive: Callable[[dict[Path, dict[str, Any]]], list[tuple[str, dict[str, Any], dict[str, str]]]],
+) -> None:
+    """Guard source decisions and append one bounded library derivation chunk.
+
+    The trust owner supplies policy; this owner keeps source observation, canonical
+    decisions and version rows inside the existing approval locking/transaction.
+    """
+    root, project_root = root.resolve(), project_root.resolve()
+    with resource_locks([_legacy_path(root), _legacy_path(project_root)]):
+        with _writer(root, already_locked=True) as conn:
+            def selected(connection: sqlite3.Connection, wanted: set[tuple[str, str]]) -> dict[str, Any]:
+                data: dict[str, Any] = {"skills": {}, "global_approvals": {}}
+                for namespace, key in wanted:
+                    row = connection.execute("SELECT record FROM approvals WHERE scope = ? AND key = ?", (namespace, key)).fetchone()
+                    if row:
+                        data[namespace][key] = json.loads(row[0])
+                return data
+            canonical = selected(conn, keys[root])
+            records = {root: canonical}
+            if project_root != root:
+                if _has_database(project_root):
+                    with closing(connect_database(database_path(project_root))) as source_conn:
+                        _check_schema(source_conn)
+                        records[project_root] = selected(source_conn, keys[project_root])
+                else:
+                    records[project_root] = load(project_root)
+            changes = derive(records)
+            for key, after, version in changes:
+                if version["source_key"] != key or version["content_hash"] != after["content_hash"]:
+                    raise ValueError("derived version does not match its canonical approval")
+                before = canonical.get("global_approvals", {}).get(key)
+                _write_record(conn, "global_approvals", key, before, after, action="derive-library", version=version)
+                conn.execute("INSERT OR IGNORE INTO content_versions VALUES (?, ?, ?)",
+                             (key, version["content_hash"], datetime.now(timezone.utc).isoformat()))
+                if version.get("git_commit"):
+                    conn.execute("INSERT OR IGNORE INTO version_references VALUES (?, ?, ?, ?, ?)",
+                                 (key, version["content_hash"], version["repository"], version["git_commit"], version["skill_path"]))

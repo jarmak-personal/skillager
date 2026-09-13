@@ -236,6 +236,8 @@ def apply_review_action(
     block_high: bool = False,
     override_lint: bool = False,
     reason: str | None = None,
+    sync_library: bool = True,
+    sync_inventory: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if override_lint and not (reason or "").strip():
         raise ValueError("--reason is required with --override-lint")
@@ -353,7 +355,23 @@ def apply_review_action(
                 changed.append(_review_action_item(skill, record, lint_override=lint_override))
             else:
                 skipped.append({"skill_id": skill["id"], "reason": f"risk is {risk}"})
-    return {"changed": changed, "skipped": skipped}
+    action: dict[str, Any] = {"changed": changed, "skipped": skipped}
+    approved_ids = {item["skill_id"] for item in changed if item["state"] in APPROVED_REVIEW_STATES}
+    if sync_library and approval_root is not None and approved_ids:
+        action["library_sync"] = sync_reviewed_sources(state_root, approval_root,
+            [skill for skill in skills if skill["id"] in approved_ids], inventory=sync_inventory)
+    return action
+
+
+def sync_reviewed_sources(state_root: Path, catalog_root: Path, skills: list[dict[str, Any]], *, inventory: dict[str, Any] | None = None) -> dict[str, Any]:
+    # This is explicit approval/setup orchestration, never a side effect of set_trust
+    # or an inventory read. The sync owner revalidates the actual current decision.
+    from ..library.sync import sync_approved, sync_refusal
+    from ..paths import find_project_root
+    try:
+        return sync_approved(state_root, catalog_root, skills=skills, project_dir=find_project_root(), inventory=inventory)
+    except Exception:
+        return sync_refusal(False)
 
 
 def _review_action_item(
@@ -499,7 +517,11 @@ def setup_environment(
         reason=reason,
         approval_root=approval_root,
         global_scope=global_scope,
+        sync_library=False,
     )
+    if approval_root is not None:
+        action["library_sync"] = sync_reviewed_sources(state_root, approval_root, skills,
+            inventory=data if include_packages and source is None and collection is None and include_blocked else None)
     refreshed = load_index(state_root, approval_root=approval_root)
     if extra_skills:
         extra_skills = _refresh_extra_skill_trust(state_root, extra_skills, approval_root=approval_root)

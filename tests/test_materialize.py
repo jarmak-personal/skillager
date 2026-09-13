@@ -812,7 +812,7 @@ class SkillagerMaterializeTests(unittest.TestCase):
             listing = StringIO()
             with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state)}), patch("skillager.discovery.find_project_root", return_value=root), patch("pathlib.Path.home", return_value=root), chdir(root), redirect_stdout(listing):
                 self.assertEqual(main(["list", "--no-packages", "--full-json"]), 0)
-            skill = json.loads(listing.getvalue())[0]
+            skill = next(item for item in json.loads(listing.getvalue()) if item["id"] == "project/gis-domain")
             self.assertEqual(skill["exposure_targets"][0]["exposure_status"], "existing")
             self.assertFalse((state / "native_inventory.json").exists())
 

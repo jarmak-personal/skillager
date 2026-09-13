@@ -74,8 +74,8 @@ Use prompts like these:
 
 ## Your Personal Library
 
-When you create your first personal skill or confirm your first import, Skillager
-creates `~/.skillager/library` and starts Git history. You do not need to initialize
+When you approve a skill, complete setup with existing approvals, create your first
+personal skill, or confirm your first import, Skillager creates `~/.skillager/library` and starts Git history. You do not need to initialize
 it first.
 
 Run `library init` before your first skill only to choose a different location or
@@ -125,8 +125,15 @@ skillager collection add ~/skills/workflows --name workflows
 skillager setup --collection workflows --agent codex
 ```
 
-Registering a repository does not copy it into your personal library. Import an
-individual skill only when you want to maintain your own copy.
+Registering a repository only adds discovery. Approving its skills preserves verified
+copies in your library while leaving the repository intact. The same policy covers
+project, environment, package, and native skills, including project-only approvals.
+Canonical copies are reusable across projects; exposure remains a separate action.
+
+Backfill skills approved before this policy with `skillager library sync --approved`.
+Use `skillager library sync --status --json` to inspect current lineage and conflicts
+without copying or approving anything. Customized, blocked, or pinned library
+copies are protected; a partial result lists what still needs attention.
 
 ## Before Skillager Changes Anything
 

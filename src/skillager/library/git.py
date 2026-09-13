@@ -239,6 +239,71 @@ def verified_version_reference(root: Path, path: Path, *, source_key: str, expec
     return version
 
 
+def verified_version_references(root: Path, skills: list[tuple[Path, str, str]], *, mode: str) -> dict[str, dict[str, str]]:
+    """Verify one bounded sync chunk with one tree walk and Git object stream."""
+    versions = {key: {"source_key": key, "content_hash": digest} for _, key, digest in skills}
+    if mode == "system":
+        commit = _head_commit(root)
+        if not commit:
+            raise LibraryGitError("library Git HEAD is missing; sync remains pending")
+        selected = {_relative_path(root, path).rstrip("/"): (key, digest) for path, key, digest in skills}
+        listed = _run_git_bytes(root, "ls-tree", "-r", "-z", commit, "--", *selected)
+        if listed.returncode or len(listed.stdout) > 16 * 1024 * 1024:
+            raise LibraryGitError("could not enumerate the bounded sync commit")
+        trees: dict[str, list[tuple[str, str, str]]] = {relative: [] for relative in selected}
+        for value in filter(None, listed.stdout.split(b"\0")):
+            metadata, separator, raw_name = value.partition(b"\t")
+            fields = metadata.split(b" ")
+            if not separator or len(fields) != 3:
+                raise LibraryGitError("invalid sync Git tree entry")
+            raw_mode, kind, raw_oid = fields
+            name = raw_name.decode("utf-8", errors="surrogateescape")
+            owner = next((relative for relative in selected if name.startswith(relative + "/")), None)
+            if owner is None or raw_mode not in {b"100644", b"100755"} or kind != b"blob":
+                raise LibraryGitError("unsafe entry in sync Git tree")
+            relative = name[len(owner) + 1:]
+            if content_path_excluded(Path(relative)):
+                raise LibraryGitError("noncanonical entry in sync Git tree")
+            trees[owner].append((relative, raw_mode.decode("ascii"), raw_oid.decode("ascii")))
+        process = subprocess.Popen(["git", "cat-file", "--batch"], cwd=root,
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        assert process.stdin is not None and process.stdout is not None
+        try:
+            for relative, (key, expected) in selected.items():
+                entries: list[tuple[str, bytes, str]] = []
+                total = 0
+                for name, file_mode, oid in trees[relative]:
+                    process.stdin.write(oid.encode("ascii") + b"\n")
+                    process.stdin.flush()
+                    header = process.stdout.readline(256).split()
+                    if len(header) != 3 or header[:2] != [oid.encode("ascii"), b"blob"]:
+                        raise LibraryGitError("invalid sync Git object response")
+                    size = int(header[2])
+                    total += size
+                    if size < 0 or size > 8 * 1024 * 1024 or total > 32 * 1024 * 1024 or len(entries) >= 512:
+                        raise LibraryGitError("sync Git tree exceeds verified copy limits")
+                    data = process.stdout.read(size)
+                    if len(data) != size or process.stdout.read(1) != b"\n":
+                        raise LibraryGitError("incomplete sync Git object")
+                    entries.append((name, data, file_mode))
+                if content_hash_entries(entries) != expected:
+                    raise LibraryGitError("sync commit does not reproduce approved source content")
+                versions[key].update(repository=str(root.resolve()), git_commit=commit, skill_path=relative)
+            process.stdin.close()
+            if process.wait(timeout=5) != 0:
+                raise LibraryGitError("sync Git object reader failed")
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+            process.stdin.close()
+            process.stdout.close()
+    for path, key, expected in skills:
+        if content_hash(path) != expected:
+            raise LibraryGitError("sync canonical content changed before acceptance")
+    return versions
+
+
 def head_content_hash(root: Path, path: Path) -> str | None:
     """Return the Skillager content hash for one directory as stored at Git HEAD."""
 

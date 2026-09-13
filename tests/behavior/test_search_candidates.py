@@ -43,7 +43,8 @@ class SearchCandidateBehaviorTests(unittest.TestCase):
         self.assertEqual(self.search("externalrevision"), [])
         require_success(self.cli.run("review", "approve", "synthetic-b/rank-body", "--json"))
         rows = self.search("externalrevision")
-        self.assertEqual([row["id"] for row in rows], ["synthetic-b/rank-body"])
+        originals = [row for row in rows if not row["id"].startswith("lib/")]
+        self.assertEqual([row["id"] for row in originals], ["synthetic-b/rank-body"])
         self.assertIn("body:externalrevision", rows[0]["reasons"])
         self.assertNotIn("synthetic-b/rank-body", [row["id"] for row in self.search("rankneedle")])
 
@@ -55,7 +56,10 @@ class SearchCandidateBehaviorTests(unittest.TestCase):
                 f"---\nname: {slug}\ndescription: Use variantneedle examples.\n---\n\nCompare the examples.\n"
             )
         self.assertEqual(self.search("variantneedle"), [])
-        require_success(self.cli.run("review", "approve", "synthetic-a/fresh-codex", "synthetic-a/fresh-claude", "--json"))
+        approval = self.cli.run("review", "approve", "synthetic-a/fresh-codex", "synthetic-a/fresh-claude", "--json")
+        require_success(approval)
+        copies = [item["canonical_skill_id"] for item in approval.json()["action"]["library_sync"]["items"] if item["outcome"] == "created"]
+        require_success(self.cli.run("review", "block", *copies, "--json"))
         self.assertEqual(len(self.search("variantneedle")), 2)
         require_success(self.cli.run("collection", "refresh", "synthetic-a", "--json"))
         # Without a native-agent path hint, the existing preference is lexical.

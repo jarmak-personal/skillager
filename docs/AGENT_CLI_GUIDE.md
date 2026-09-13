@@ -197,6 +197,34 @@ language, and wait. When the user approves, execute the returned
 `next_command_argv` exactly. Never invent a confirmation token or edit the generated
 command. If it goes stale, show the new preview and ask again.
 
+## Preserve Approved Skills
+
+Approval actions and setup also synchronize verified approved copies into the
+personal library. This includes every effectively discovered source type and
+project-only approvals; originals and their actual approval evidence remain intact.
+Canonical copies become reusable across projects. Exposure is still independent.
+
+For user-requested backfill, run `skillager library sync --approved --json`.
+Read-only reconciliation is `skillager library sync --status --json`. Neither
+metadata browsing nor connection should invoke apply. A connected client supplies
+paired `--expected-library-id <UUID> --expected-library-root <absolute-root>` to
+bind the mutation to its exact library; absent/replaced identity is a refusal.
+
+Apply returns `skillager.library-sync.v1`, with actual per-item phase/outcome,
+coverage, and created/updated/unchanged/conflict/skipped/failed/uncertain counts.
+Exit 0 means complete success; supported partial/refused/uncertain results use 2.
+Status returns `skillager.library-sync-status.v1`, compact candidate states, and
+`skillager.library-lineage.v1` relations. Status coverage counts candidates inspected,
+including eligible ones; it never reconstructs an earlier operation's completion.
+Historical source approval, current
+origin observations, and current canonical acceptance are distinct. Full approval
+records and content bodies are never public sync metadata.
+
+Preserve conflicts and recovery paths. Do not overwrite customizations, clear a
+block, downgrade a pin, or turn a pending original into approved content merely to
+remove it. After an interrupted command, inspect status; never infer accepted
+content from copy completion or replay a mutation automatically.
+
 ## Manage A User-Requested Personal Skill
 
 A request to create or edit a named personal skill authorizes that draft workflow. It

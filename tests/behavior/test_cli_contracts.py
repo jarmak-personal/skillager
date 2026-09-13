@@ -36,7 +36,7 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assert_body_not_exposed(result)
             self.assertIn("When you own or adopt a skill:", result.stdout)
             self.assertIn("Library ownership never bypasses exact-hash acceptance.", result.stdout)
-            self.assertIn("External skills remain at their source unless explicitly imported.", result.stdout)
+            self.assertIn("Approved skills gain verified reusable library copies; originals stay in place.", result.stdout)
 
             for deferred in ("reconcile", "sync", "pin", "unpin", "fork", "where", "edit"):
                 result = cli.run(deferred, "--help")
@@ -290,8 +290,8 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assert_code(working, 0)
             self.assert_body_not_exposed(working)
             self.assertIn("Skillager ready.", working.stdout)
-            self.assertIn("1 available source entry -> 1 Codex-ready choice", working.stdout)
-            self.assertIn("0 exposed choices, 1 on demand.", working.stdout)
+            self.assertIn("2 available source entries -> 2 Codex-ready choices", working.stdout)
+            self.assertIn("0 exposed choices, 2 on demand.", working.stdout)
             self.assertIn("Optional next step when a specialized skill may help:", working.stdout)
             self.assertIn(
                 'skillager search "<user-goal>" --agent codex --json',
@@ -318,11 +318,11 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
 
             listed = cli.run("list", "--agent", "codex", "--json")
             self.assert_code(listed, 0)
-            self.assertEqual(listed.json()[0]["exposure"], "native")
+            self.assertEqual(next(item for item in listed.json() if item["id"] == "project/native-source")["exposure"], "native")
             working = cli.run("working", "--agent", "codex", "--json")
             self.assert_code(working, 0)
             self.assertEqual(working.json()["inventory"]["exposed_now"], 1)
-            self.assertEqual(working.json()["inventory"]["agent_visible_on_demand"], 0)
+            self.assertEqual(working.json()["inventory"]["agent_visible_on_demand"], 1)
             self.assertEqual(working.json()["exposure_changes"]["unmanaged"], 0)
             self.assertEqual(working.json()["exposure_changes"]["local_edits"], 0)
 
@@ -359,8 +359,10 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             self.assert_code(search, 0)
             self.assert_body_not_exposed(search)
             results = search.json()
-            self.assertEqual([item["id"] for item in results[:2]], ["project/higher", "project/lower"])
-            self.assertGreater(float(results[0]["score"]), float(results[1]["score"]))
+            self.assertEqual([float(item["score"]) for item in results], sorted((float(item["score"]) for item in results), reverse=True))
+            originals = [item for item in results if item["id"].startswith("project/")]
+            self.assertEqual([item["id"] for item in originals], ["project/higher", "project/lower"])
+            self.assertGreater(float(originals[0]["score"]), float(originals[1]["score"]))
 
     def test_working_prefers_existing_router_over_repeated_curation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_name:
@@ -406,7 +408,7 @@ class SkillagerCliBehaviorTests(unittest.TestCase):
             plain = cli.run("working", "--agent", "codex")
             self.assert_code(plain, 0)
             self.assert_body_not_exposed(plain)
-            self.assertIn("1 exposed choice (1 routed through 1 router), 0 on demand.", plain.stdout)
+            self.assertIn("1 exposed choice (1 routed through 1 router), 1 on demand.", plain.stdout)
             self.assertIn("Use the existing router tags first: gis.", plain.stdout)
             self.assertNotIn("Tell your agent what you plan to do", plain.stdout)
 
