@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add bounded, complete token-bound local exposure plans for preserved native
+  adoption/removal and named router grouping, membership changes and ungrouping.
+  Preserve unselected copies and tag curation; report partial recovery explicitly.
+- Add exact managed project-library copy selection with `expose --exposure-id`
+  for Full/Stub changes, including adopted native locations and ambiguity refusal.
+
 - Preserve identical reusable personal-library copies after source approval and
   setup, including project-only approvals across every effectively discovered
   source type. Keep original scope/evidence and origin files intact.

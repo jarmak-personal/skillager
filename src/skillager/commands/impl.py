@@ -77,6 +77,7 @@ from ..selection import select_visible_skills
 from ..signing import verify_oms_signature
 from ..simple_yaml import YamlError, load_mapping, loads
 from ..state.locking import resource_lock
+from ..exposure.management import _exposure_records, _exposure_record
 from ..trust import content_hash, load_trust, merge_global_approvals, save_trust, set_trust, trust_info
 from .exposure_confirmation import add_confirmation_commands, bound_exposure_request, source_revalidator
 from .context import (
@@ -622,6 +623,8 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--all-reviewed", action="store_true", help="Expose every available skill selected by filters for supported non-native modes. Owner/admin only; prefer explicit IDs, tags, or routers.")
     p.add_argument("--allow-incompatible", action="store_true", help="Allow native/stub exposure even when skill metadata explicitly excludes the selected agent.")
     p.add_argument("--list", action="store_true", dest="list_exposures", help="List Skillager-managed exposed targets for the selected agent/scope.")
+    p.add_argument("--request-json", help="One complete token-bound local exposure lifecycle request as JSON.")
+    p.add_argument("--exposure-id", help="Select one exact existing managed project library copy for native/stub exposure.")
     p.add_argument("--remove", metavar="EXPOSURE_ID", help="Remove one Skillager-managed exposed target by exposure id.")
     p.add_argument("--dry-run", action="store_true", help="Preview targets; one project native/stub skill also returns complete file effects and bound confirmation.")
     p.add_argument(
@@ -5477,6 +5480,14 @@ def _review_extra_skills(args: argparse.Namespace, *, discovery_errors: list[dic
 
 
 def cmd_expose(args: argparse.Namespace) -> int:
+    if getattr(args, "request_json", None) is not None:
+        from .exposure_plan import cmd_exposure_plan
+        return cmd_exposure_plan(args)
+    if getattr(args, "exposure_id", None):
+        from ..exposure.plan_request import exposure_id
+        exposure_id(args.exposure_id)
+        if args.list_exposures or args.remove or args.scope != "project" or len(args.skill_ids) != 1 or not args.skill_ids[0].startswith("lib/"):
+            raise ValueError("--exposure-id selects one existing project library copy for native/stub exposure")
     if args.list_exposures:
         _require_expose_management_only(args, "--list")
         return _cmd_expose_list(args)
@@ -5489,6 +5500,8 @@ def cmd_expose(args: argparse.Namespace) -> int:
     _require_expose_selection(args)
     agents = _resolve_expose_agents(args, root(args), mutating=not args.dry_run)
     bound_preview = bound_exposure_request(args, agents, mode)
+    if getattr(args, "exposure_id", None) and not bound_preview:
+        raise ValueError("--exposure-id requires one agent and complete native/stub --dry-run preview or bound apply")
     revalidate_source = source_revalidator(lambda: _effective_project_skills(
         root(args), catalog_root=catalog_root(args), include_blocked=True, include_lint_blocked=True,
     )) if bound_preview else None
@@ -5585,6 +5598,7 @@ def cmd_expose(args: argparse.Namespace) -> int:
             bound_preview=bound_preview,
             confirmation=args.confirmation_token,
             revalidate_source=revalidate_source,
+            exposure_id=getattr(args, "exposure_id", None),
         )
     else:
         tag_skill_ids = None
@@ -5618,6 +5632,7 @@ def cmd_expose(args: argparse.Namespace) -> int:
             bound_preview=bound_preview,
             confirmation=args.confirmation_token,
             revalidate_source=revalidate_source,
+            exposure_id=getattr(args, "exposure_id", None),
         )
     _annotate_exposure_results(results, mode=mode)
     add_confirmation_commands(results, json_output=args.json)
@@ -5896,87 +5911,6 @@ def _restore_detached_exposure(detached: Path, target: Path, quarantine_root: Pa
 def _exposure_record_matches(item: dict[str, Any], value: str) -> bool:
     return value == str(item.get("exposure_id") or "")
 
-
-def _exposure_records(project_dir: Path, *, agents: list[str], scope: str) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    seen: set[Path] = set()
-    for agent, roots in _exposure_roots(project_dir, agents=agents, scope=scope).items():
-        for root_path in roots:
-            if not root_path.is_dir():
-                continue
-            for sidecar in sorted(root_path.glob("*/skillager.materialized.yaml")):
-                try:
-                    resolved = sidecar.resolve()
-                except OSError:
-                    continue
-                if resolved in seen:
-                    continue
-                seen.add(resolved)
-                try:
-                    data = load_mapping(sidecar)
-                except Exception:
-                    continue
-                record = _exposure_record(sidecar, data, fallback_agent=agent, fallback_scope=scope)
-                if record is not None:
-                    records.append(record)
-    return sorted(records, key=lambda item: (item["agent"], item["scope"], item["exposure_id"]))
-
-
-def _exposure_roots(project_dir: Path, *, agents: list[str], scope: str) -> dict[str, list[Path]]:
-    if scope == "project":
-        project_roots = _project_skill_roots(project_dir)
-        return {agent: project_roots.get(agent, []) for agent in agents}
-    if scope == "global":
-        roots: dict[str, list[Path]] = {}
-        for agent in agents:
-            if agent == "codex":
-                roots[agent] = [Path.home() / ".agents" / "skills", Path.home() / ".codex" / "skills"]
-            elif agent == "claude":
-                roots[agent] = [Path.home() / ".claude" / "skills"]
-            else:
-                roots[agent] = [Path.home() / ".skillager" / "agents" / agent / "skills"]
-        return roots
-    raise ValueError("scope must be project or global")
-
-
-def _exposure_record(sidecar: Path, data: dict[str, Any], *, fallback_agent: str, fallback_scope: str) -> dict[str, Any] | None:
-    if data.get("schema") not in {"skillager.materialized.v1", "skillager.router.v1"}:
-        return None
-    source_type = data.get("source_type")
-    if source_type == "skillager-working":
-        return None
-    if source_type == "skillager-router":
-        mode = "router"
-        skill_id = data.get("source_id") or data.get("id")
-    elif source_type == "skillager-stub":
-        mode = "stub"
-        skill_id = data.get("source_id") or data.get("id")
-    else:
-        mode = "native"
-        skill_id = data.get("source_id") or data.get("id")
-    if not skill_id:
-        return None
-    target = sidecar.parent
-    record: dict[str, Any] = {
-        "schema": "skillager.exposure.v1",
-        "exposure_id": target.name,
-        "skill_id": str(skill_id),
-        "mode": mode,
-        "agent": str(data.get("agent") or fallback_agent),
-        "scope": str(data.get("scope") or fallback_scope),
-        "target": str(target),
-        "status": "exposed",
-        "reason": None,
-        "restart_required": True,
-    }
-    if data.get("tag"):
-        record["tag"] = data.get("tag")
-    for key in ("router_kind", "selection_kind", "router_slug"):
-        if data.get(key):
-            record[key] = data.get(key)
-    if data.get("skill_ids"):
-        record["skill_ids"] = list(data.get("skill_ids") or [])
-    return record
 
 
 def _require_expose_selection(args: argparse.Namespace) -> None:

@@ -298,6 +298,15 @@ skillager library restore lib/<name> --to <hash> --json
 
 Explain the selected version and ask before running the returned command.
 
+## Plan local native and router changes
+
+Use the closed `expose --request-json` lifecycle contract for preserved native
+adoption/removal and named router changes. Review every returned target, file
+and tag effect before confirming the exact token. Use `--exposure-id` for an
+existing exact managed library copy's Full/Stub change. Never chain tag/expose/
+remove commands to simulate a confirmed aggregate action. See
+[Exposure plans](EXPOSURE_PLANS.md) for fields, limits and partial recovery.
+
 ## Handle Exposure Changes
 
 `exposure_changes` does not block otherwise ready work.

@@ -38,6 +38,7 @@ packages = ["src/skillager"]
 [tool.hatch.build.targets.wheel.force-include]
 ".agents/skills" = "skillager/.agents/skills"
 "docs/AGENT_CLI_GUIDE.md" = "skillager/docs/AGENT_CLI_GUIDE.md"
+"docs/EXPOSURE_PLANS.md" = "skillager/docs/EXPOSURE_PLANS.md"
 "docs/LIBRARY_AUTHORS.md" = "skillager/docs/LIBRARY_AUTHORS.md"
 "docs/RELEASE.md" = "skillager/docs/RELEASE.md"
 "docs/RELEASE_NOTES.md" = "skillager/docs/RELEASE_NOTES.md"

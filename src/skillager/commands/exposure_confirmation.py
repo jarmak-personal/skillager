@@ -50,6 +50,8 @@ def add_confirmation_commands(results: list[dict[str, Any]], *, json_output: boo
             "--mode", str(result["mode"]), "--agent", str(result["agent"]),
             "--scope", "project",
         ]
+        if preview.get("selected_exposure_id") is not None:
+            command.extend(["--exposure-id", preview["selected_exposure_id"]])
         command.append("--json")
         command.extend(["--yes", "--confirmation-token", preview["confirmation_token"]])
         result["next_command_argv"] = command

@@ -34,6 +34,7 @@ def exposure_preview(
     agent: str,
     mode: str,
     project_dir: Path,
+    selected_exposure_id: str | None = None,
 ) -> dict[str, Any]:
     before = target_state_manifest(target) if previous_target_hash is not None else {}
     after = target_state_manifest(candidate)
@@ -68,6 +69,8 @@ def exposure_preview(
         },
         "file_effects": effects,
     }
+    if selected_exposure_id is not None:
+        state["selected_exposure_id"] = selected_exposure_id
     return {**state, "confirmation_token": confirmation_token("exposure", **state)}
 
 

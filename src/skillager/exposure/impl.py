@@ -45,6 +45,7 @@ def materialize_skills(
     bound_preview: bool = False,
     confirmation: str | None = None,
     revalidate_source: Callable[[dict[str, Any]], None] | None = None,
+    exposure_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if mode not in {"native", "stub"}:
         raise ValueError("mode must be native or stub")
@@ -67,16 +68,22 @@ def materialize_skills(
             results.append(_result(skill, None, "skipped", authoritative_error))
             continue
         for agent in agents:
-            target = target_dir(agent=agent, scope=scope, skill=skill, project_dir=project_dir)
+            if exposure_id is not None:
+                if scope != "project":
+                    raise ValueError("--exposure-id requires project scope")
+                target = _managed_library_project_target(skill, agent=agent, project=(project_dir or Path.cwd()).resolve(), exposure_id=exposure_id)
+                assert target is not None
+            else:
+                target = target_dir(agent=agent, scope=scope, skill=skill, project_dir=project_dir)
             problem = compatibility_problem(skill, agent)
             if problem and not allow_incompatible:
                 results.append(_result(skill, target, "skipped", problem, agent=agent, scope=scope))
                 continue
             try:
                 if mode == "stub":
-                    results.append(materialize_stub_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force, bound_preview=bound_preview, confirmation=confirmation, project_dir=project_dir, revalidate_source=revalidate_source))
+                    results.append(materialize_stub_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force, bound_preview=bound_preview, confirmation=confirmation, project_dir=project_dir, revalidate_source=revalidate_source, selected_exposure_id=exposure_id))
                 else:
-                    results.append(materialize_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force, bound_preview=bound_preview, confirmation=confirmation, project_dir=project_dir, revalidate_source=revalidate_source))
+                    results.append(materialize_one(skill, target=target, agent=agent, scope=scope, dry_run=dry_run, force=force, bound_preview=bound_preview, confirmation=confirmation, project_dir=project_dir, revalidate_source=revalidate_source, selected_exposure_id=exposure_id))
             except (OSError, ValueError) as exc:
                 results.append(_result(skill, target, "skipped", str(exc), agent=agent, scope=scope))
     return results
@@ -472,24 +479,11 @@ def materialize_router_one(
         with tempfile.TemporaryDirectory(prefix=".skillager-router-", dir=target.parent) as raw_temp:
             temp_root = Path(raw_temp)
             candidate = temp_root / "candidate"
-            candidate.mkdir()
-            (candidate / "SKILL.md").write_text(rendered, encoding="utf-8")
-            materialized_hash = content_hash(candidate)
-            sidecar_data = _router_sidecar(
-                tag,
-                skills,
-                agent=agent,
-                scope=scope,
-                materialized_hash=materialized_hash,
-                materialized_fingerprint=content_tree_fingerprint(candidate),
-                materialized_target_hash=target_state_hash(candidate, include_sidecar=False),
-                router_slug=actual_router_slug,
-                selection_router_slug=router_slug,
-                router_kind=router_kind,
-                projection_identity=projection_identity,
+            prepare_router_candidate(
+                tag, skills, candidate=candidate, target=target, agent=agent, scope=scope,
+                router_slug=router_slug, router_kind=router_kind, decisions=decisions,
             )
-            sidecar_data.update(decisions)
-            write_materialized_sidecar(candidate / "skillager.materialized.yaml", sidecar_data)
+            materialized_hash = content_hash(candidate)
             _install_verified_candidate(
                 candidate,
                 target,
@@ -580,11 +574,12 @@ def materialize_stub_one(
     confirmation: str | None = None,
     project_dir: Path | None = None,
     revalidate_source: Callable[[dict[str, Any]], None] | None = None,
+    selected_exposure_id: str | None = None,
 ) -> dict[str, Any]:
     return _materialize_direct(
         skill, target=target, agent=agent, scope=scope, mode="stub", dry_run=dry_run,
         force=force, bound_preview=bound_preview, confirmation=confirmation,
-        project_dir=project_dir, revalidate_source=revalidate_source,
+        project_dir=project_dir, revalidate_source=revalidate_source, selected_exposure_id=selected_exposure_id,
     )
 
 
@@ -652,11 +647,12 @@ def materialize_one(
     confirmation: str | None = None,
     project_dir: Path | None = None,
     revalidate_source: Callable[[dict[str, Any]], None] | None = None,
+    selected_exposure_id: str | None = None,
 ) -> dict[str, Any]:
     return _materialize_direct(
         skill, target=target, agent=agent, scope=scope, mode="native", dry_run=dry_run,
         force=force, bound_preview=bound_preview, confirmation=confirmation,
-        project_dir=project_dir, revalidate_source=revalidate_source,
+        project_dir=project_dir, revalidate_source=revalidate_source, selected_exposure_id=selected_exposure_id,
     )
 
 
@@ -664,6 +660,7 @@ def _materialize_direct(
     skill: dict[str, Any], *, target: Path, agent: str, scope: str, mode: str,
     dry_run: bool, force: bool, bound_preview: bool, confirmation: str | None,
     project_dir: Path | None, revalidate_source: Callable[[dict[str, Any]], None] | None,
+    selected_exposure_id: str | None,
 ) -> dict[str, Any]:
     source_root = Path(skill.get("root") or ".").resolve()
     verify_source = mode == "native" or bound_preview or confirmation is not None
@@ -672,8 +669,10 @@ def _materialize_direct(
     projection_identity = _direct_projection_identity(skill)
     with _projection_target_context(
         target, projection_identity, dry_run=dry_run, scope=scope,
-        fallback_key=str(skill["id"]),
+        fallback_key=str(skill["id"]), require_exact=selected_exposure_id is not None,
     ) as target:
+        if selected_exposure_id is not None and _managed_library_project_target(skill, agent=agent, project=(project_dir or Path.cwd()).resolve(), exposure_id=selected_exposure_id) != target:
+            raise ValueError("selected managed exposure identity changed")
         if mode == "native" and scope == "project" and target.resolve() == source_root and (target / "SKILL.md").exists() and not (target / "skillager.materialized.yaml").exists():
             return _result(skill, target, "already_native", "existing unmanaged native skill", agent=agent, scope=scope)
         if revalidate_source is not None:
@@ -699,27 +698,17 @@ def _materialize_direct(
         with tempfile.TemporaryDirectory(prefix=".skillager-expose-", dir=None if dry_run else target.parent) as raw_temp:
             temp_root = Path(raw_temp)
             candidate = temp_root / "candidate"
-            candidate.mkdir()
-            if rendered is None:
-                _copy_skill_tree(source_root, candidate)
-            else:
-                (candidate / "SKILL.md").write_text(rendered, encoding="utf-8")
-            materialized_hash = content_hash(candidate)
-            if (rendered is None and materialized_hash != expected_hash) or (verify_source and content_hash(source_root) != expected_hash):
-                raise ValueError("source changed during exposure; review the new hash before exposing it")
-            sidecar_builder = _stub_sidecar if mode == "stub" else _sidecar
-            sidecar_data = sidecar_builder(
-                skill, agent=agent, scope=scope, materialized_hash=materialized_hash,
-                materialized_fingerprint=content_tree_fingerprint(candidate),
-                materialized_target_hash=target_state_hash(candidate, include_sidecar=False),
+            sidecar_data = prepare_direct_candidate(
+                skill, candidate=candidate, target=target, agent=agent, scope=scope,
+                mode=mode, decisions=decisions, verify_source=verify_source,
             )
-            sidecar_data.update(decisions)
-            write_materialized_sidecar(candidate / "skillager.materialized.yaml", sidecar_data)
+            materialized_hash = content_hash(candidate)
             preview = None
             if bound_preview or confirmation is not None:
                 preview = exposure_preview(
                     skill, candidate=candidate, target=target, previous_target_hash=previous_target_hash,
                     sidecar=sidecar_data, agent=agent, mode=mode, project_dir=project_dir or Path.cwd(),
+                    selected_exposure_id=selected_exposure_id,
                 )
                 if _projection_target_state(target) != previous_target_hash:
                     raise ValueError("exposure target changed during preview; review the current target again")
@@ -738,25 +727,93 @@ def _materialize_direct(
         return _result(skill, target, "materialized", None, agent=agent, scope=scope)
 
 
+def prepare_direct_candidate(
+    skill: dict[str, Any], *, candidate: Path, target: Path, agent: str, scope: str,
+    mode: str, decisions: dict[str, Any], verify_source: bool = True,
+    root_mode: int | None = None,
+) -> dict[str, Any]:
+    """One renderer/sidecar owner for ordinary and aggregate direct exposures."""
+    source_root = Path(skill.get("root") or ".").resolve()
+    if mode == "native":
+        _require_native_skill_frontmatter(source_root / "SKILL.md")
+    candidate.mkdir()
+    if root_mode is not None:
+        candidate.chmod(root_mode)
+    rendered = render_stub_skill(skill, stub_slug=target.name) if mode == "stub" else None
+    if rendered is None:
+        _copy_skill_tree(source_root, candidate)
+    else:
+        (candidate / "SKILL.md").write_text(rendered, encoding="utf-8")
+    materialized_hash = content_hash(candidate)
+    expected = skill.get("content_hash")
+    if (rendered is None and materialized_hash != expected) or (verify_source and content_hash(source_root) != expected):
+        raise ValueError("source changed during exposure; review the new hash before exposing it")
+    builder = _stub_sidecar if mode == "stub" else _sidecar
+    metadata = builder(skill, agent=agent, scope=scope, materialized_hash=materialized_hash,
+        materialized_fingerprint=content_tree_fingerprint(candidate),
+        materialized_target_hash=target_state_hash(candidate, include_sidecar=False))
+    metadata.update(decisions)
+    write_materialized_sidecar(candidate / "skillager.materialized.yaml", metadata)
+    return metadata
+
+
+def prepare_router_candidate(
+    tag: str | None, skills: list[dict[str, Any]], *, candidate: Path, target: Path,
+    agent: str, scope: str, router_slug: str | None, router_kind: str,
+    decisions: dict[str, Any], root_mode: int | None = None,
+) -> dict[str, Any]:
+    """Keep router rendering and generated metadata identical across entrypoints."""
+    candidate.mkdir()
+    if root_mode is not None:
+        candidate.chmod(root_mode)
+    rendered = render_router_skill(tag, skills, agent=agent, router_slug=target.name, router_kind=router_kind)
+    (candidate / "SKILL.md").write_text(rendered, encoding="utf-8")
+    metadata = _router_sidecar(tag, skills, agent=agent, scope=scope,
+        materialized_hash=content_hash(candidate), materialized_fingerprint=content_tree_fingerprint(candidate),
+        materialized_target_hash=target_state_hash(candidate, include_sidecar=False),
+        router_slug=target.name, selection_router_slug=router_slug, router_kind=router_kind,
+        projection_identity=_router_projection_identity(tag=tag, router_slug=router_slug, router_kind=router_kind))
+    metadata.update(decisions)
+    write_materialized_sidecar(candidate / "skillager.materialized.yaml", metadata)
+    return metadata
+
+
 def _projection_target_state(target: Path) -> str | None:
     if not target.exists() and not target.is_symlink():
         return None
     return target_state_hash(target)
 
 
+def install_reserved_projection(candidate: Path, target: Path, *, metadata_file: bool = False) -> None:
+    """Install an exposure into an exclusively reserved absent destination."""
+    if metadata_file:
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        reserved = os.fstat(descriptor)
+        os.close(descriptor)
+    else:
+        target.mkdir()
+        reserved = target.stat()
+    try:
+        current = target.lstat()
+        if (current.st_dev, current.st_ino) != (reserved.st_dev, reserved.st_ino):
+            raise ValueError("exposure destination changed during installation")
+        os.replace(candidate, target)
+    except (OSError, ValueError):
+        with contextlib.suppress(OSError):
+            current = target.lstat()
+            if (current.st_dev, current.st_ino) == (reserved.st_dev, reserved.st_ino):
+                target.unlink() if metadata_file else target.rmdir()
+        raise
+
+
 def _restore_previous_projection(backup: Path, target: Path) -> None:
     if not backup.exists() and not backup.is_symlink():
         return
-    reserved = False
     try:
-        target.mkdir()
-        reserved = True
-        os.replace(backup, target)
+        install_reserved_projection(backup, target)
         return
-    except OSError:
-        if reserved:
-            with contextlib.suppress(OSError):
-                target.rmdir()
+    except (OSError, ValueError):
+        pass
     recovery = Path(tempfile.mkdtemp(prefix=".skillager-recovery-", dir=target.parent))
     preserved = recovery / "previous"
     os.replace(backup, preserved)
@@ -777,7 +834,6 @@ def _install_verified_candidate(
         raise ValueError("exposure target changed during preparation; local changes were preserved")
     backup = temp_root / "previous"
     installed = False
-    reserved = False
     if previous_target_hash is not None:
         os.replace(target, backup)
     try:
@@ -785,9 +841,7 @@ def _install_verified_candidate(
         if previous_target_hash is not None and target_state_hash(backup) != previous_target_hash:
             raise ValueError("exposure target changed during replacement; local changes were preserved")
         # Reserve an absent path without replacing a target created by another writer.
-        target.mkdir()
-        reserved = True
-        os.replace(candidate, target)
+        install_reserved_projection(candidate, target)
         installed = True
         _verify_installed_projection(target, expected_hash=expected_hash)
         if backup.exists() and target_state_hash(backup) != previous_target_hash:
@@ -797,11 +851,6 @@ def _install_verified_candidate(
             with contextlib.suppress(OSError, ValueError):
                 if _projection_target_state(target) == candidate_state:
                     shutil.rmtree(target)
-        elif reserved:
-            try:
-                target.rmdir()
-            except OSError:
-                pass  # A concurrent writer populated the reservation; keep its files.
         _restore_previous_projection(backup, target)
         raise
     if backup.exists():
@@ -852,6 +901,9 @@ def target_dir(*, agent: str, scope: str, skill: dict[str, Any], project_dir: Pa
     slug = slugify(skill["id"])
     if scope == "project":
         project = (project_dir or Path.cwd()).resolve()
+        adopted = _managed_library_project_target(skill, agent=agent, project=project)
+        if adopted is not None:
+            return adopted
         native_source = _native_source_target(skill, agent=agent, project=project)
         if native_source is not None:
             target, base = native_source
@@ -876,6 +928,36 @@ def target_dir(*, agent: str, scope: str, skill: dict[str, Any], project_dir: Pa
     else:
         raise ValueError("scope must be project or global")
     return base / slug
+
+
+def _managed_library_project_target(skill: dict[str, Any], *, agent: str, project: Path, exposure_id: str | None = None) -> Path | None:
+    if (skill.get("source") or {}).get("ownership") != "library":
+        if exposure_id is not None:
+            raise ValueError("--exposure-id requires an existing managed project library copy")
+        return None
+    expected = _direct_projection_identity(skill)
+    matches: list[Path] = []
+    for base in _project_agent_bases(project, agent):
+        if not base.is_dir():
+            continue
+        for sidecar in base.glob("*/skillager.materialized.yaml"):
+            if exposure_id is not None and sidecar.parent.name != exposure_id:
+                continue
+            try:
+                data = load_mapping(sidecar)
+            except (OSError, ValueError):
+                continue
+            if (data.get("projection_kind") == "direct" and data.get("projection_identity") == expected
+                    and data.get("source_id") == skill["id"] and data.get("source_library_id") == skill["source"]["library_id"]
+                    and data.get("agent") == agent and data.get("scope") == "project"):
+                _require_safe_project_projection_target(project, base=base, target=sidecar.parent)
+                if sidecar.parent not in matches:
+                    matches.append(sidecar.parent)
+    if len(matches) > 1:
+        raise ValueError("multiple managed project copies have the same source identity; select one exact --exposure-id")
+    if exposure_id is not None and not matches:
+        raise ValueError("selected exposure is missing or belongs to another managed source")
+    return matches[0] if matches else None
 
 
 def _native_source_target(skill: dict[str, Any], *, agent: str, project: Path) -> tuple[Path, Path] | None:
@@ -1402,7 +1484,7 @@ def _exposure_decisions(sidecar: Path) -> dict[str, Any]:
     blocked = data.get("exposure_blocked_hashes")
     if isinstance(blocked, list):
         decisions["exposure_blocked_hashes"] = [str(value) for value in blocked]
-    for key in ("quarantine_path", "quarantined_at"):
+    for key in ("quarantine_path", "quarantined_at", "adopted_native_origin"):
         value = data.get(key)
         if isinstance(value, str) and value:
             decisions[key] = value

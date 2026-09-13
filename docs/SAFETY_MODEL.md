@@ -316,3 +316,15 @@ Users own the final approval decision.
 - Fix lint-blocked manifests instead of overriding when possible.
 - Re-run `skillager setup --fresh` after major dependency or skill-repo changes.
 - Use router mode for broad skill collections where native exposure would add too much context.
+
+## Bound local lifecycle plans
+
+The closed `expose --request-json` actions reuse canonical approval/lineage,
+project-tag, projection rendering, full target manifest, lock and reservation
+owners. They never derive approval. Native conversion/removal requires current
+approved preservation of all original material, not merely a filtered hash.
+The aggregate token binds each source/target/tag and explicit replacement or
+departure. Preflight stale state refuses without target/tag writes. After
+publication starts, retained originals and per-target recovery outcomes preserve
+concurrent local changes. Managed removal stays target-owned and independent of
+source availability. See [Exposure plans](EXPOSURE_PLANS.md) for the full contract.
