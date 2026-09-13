@@ -42,6 +42,7 @@ from ..catalog.impl import _apply_approval_metadata, _trust_with_collection_migr
 from ..families import agent_variant_family_key, canonical_agent_variant_slug
 from ..exposure.drift import classify_exposure_target, scan_project_exposures
 from ..exposure.preview import removal_file_effects
+from ..exposure.identity import library_id, router_member_sources, router_sources_match, skill_source_key, source_key
 from ..exposure.target_state import matches_materialized_target, target_state_hash
 from ..index import build_index, find_skill, load_index
 from ..library.confirmation import confirmation_token, require_confirmation_token
@@ -4108,6 +4109,7 @@ def _compact_exposed_via(skill: dict[str, Any]) -> list[dict[str, Any]]:
         if kind not in {"native", "router", "stub"}:
             continue
         item: dict[str, Any] = {"kind": kind}
+        item["source_library_id"] = target.get("source_library_id")
         for key in ("agent", "scope", "router", "tag", "router_kind", "selection_kind"):
             value = target.get(key)
             if value:
@@ -4954,7 +4956,10 @@ def _with_project_inventory_fields(
 ) -> dict[str, Any]:
     item = dict(skill)
     item["availability"] = _skill_availability(item)
-    targets = list(exposure.get(item["id"], []))
+    targets = [target for target in exposure.get(item["id"], [])
+               if not str(item["id"]).startswith("lib/")
+               or (skill_source_key(item) is not None
+                   and source_key(str(item["id"]), target.get("source_library_id")) == skill_source_key(item))]
     unmanaged = _unmanaged_native_target(item, native_prefixes=native_prefixes)
     if unmanaged and not any(target.get("path") == unmanaged["path"] for target in targets):
         targets.append(unmanaged)
@@ -4980,23 +4985,37 @@ def _with_materialized_targets(item: dict[str, Any], targets: list[dict[str, Any
 
 def _approved_source_hashes(skills: list[dict[str, Any]]) -> dict[str, str]:
     return {
-        str(skill["id"]): str(skill["content_hash"])
+        str(skill_source_key(skill)): str(skill["content_hash"])
         for skill in skills
         if skill.get("id")
         and isinstance(skill.get("content_hash"), str)
         and skill.get("trust") in TRUSTED_STATES
         and not skill.get("identity_collision")
+        and skill_source_key(skill) is not None
     }
 
 
 def _filter_current_inventory_exposures(skills: list[dict[str, Any]]) -> list[dict[str, Any]]:
     current_source_hashes = _approved_source_hashes(skills)
     result: list[dict[str, Any]] = []
+    router_current: dict[tuple[int, str], bool] = {}
+
+    def current(target: dict[str, Any]) -> bool:
+        members = target.get("_member_sources")
+        if target.get("kind") != "router" or not isinstance(members, list):
+            return _exposure_source_is_current(target, current_source_hashes)
+        # Every member reference shares its captured sidecar's immutable list.
+        # Cache only within this inventory pass, never across observations.
+        key = (id(members), str(target.get("_source_hash")))
+        if key not in router_current:
+            router_current[key] = _exposure_source_is_current(target, current_source_hashes)
+        return router_current[key]
+
     for skill in skills:
         targets = [
             target
             for target in skill.get("materialized_targets") or []
-            if not target.get("managed") or _exposure_source_is_current(target, current_source_hashes)
+            if not target.get("managed") or current(target)
         ]
         result.append(_with_materialized_targets(skill, targets))
     return result
@@ -5004,15 +5023,17 @@ def _filter_current_inventory_exposures(skills: list[dict[str, Any]]) -> list[di
 
 def _exposure_source_is_current(target: dict[str, Any], current_source_hashes: dict[str, str]) -> bool:
     if target.get("kind") == "router":
-        skill_ids = [str(value) for value in target.get("_skill_ids") or []]
-        if not skill_ids or any(skill_id not in current_source_hashes for skill_id in skill_ids):
+        members = router_member_sources({"skill_ids": target.get("_skill_ids"), "member_sources": target.get("_member_sources")})
+        keys = {item["skill_id"]: source_key(item["skill_id"], item["source_library_id"]) for item in members}
+        if not keys or any(key not in current_source_hashes for key in keys.values()):
             return False
         expected = content_hashes(
-            [{"id": skill_id, "content_hash": current_source_hashes[skill_id]} for skill_id in skill_ids]
+            [{"id": skill_id, "content_hash": current_source_hashes[str(key)]} for skill_id, key in keys.items()]
         )
         return target.get("_source_hash") == expected
     skill_id = target.get("_source_id")
-    return bool(skill_id) and target.get("_source_hash") == current_source_hashes.get(str(skill_id))
+    key = source_key(str(skill_id), target.get("source_library_id")) if skill_id else None
+    return key is not None and target.get("_source_hash") == current_source_hashes.get(key)
 
 
 def _skill_availability(skill: dict[str, Any]) -> list[str]:
@@ -5040,13 +5061,14 @@ def _project_exposure(
                     data = load_mapping(sidecar)
                 except Exception:
                     continue
-                target = {
+                target: dict[str, Any] = {
                     "agent": data.get("agent") or agent,
                     "scope": data.get("scope") or "project",
                     "path": str(sidecar.parent),
                     "status": "materialized",
                     "managed": True,
                     "_source_hash": data.get("source_hash"),
+                    "source_library_id": library_id(data.get("source_library_id")),
                 }
                 if data.get("source_type") == "skillager-router":
                     target["kind"] = "router"
@@ -5056,10 +5078,11 @@ def _project_exposure(
                     target["selection_kind"] = data.get("selection_kind")
                     target["router_slug"] = data.get("router_slug")
                     target["_skill_ids"] = [str(value) for value in data.get("skill_ids") or []]
+                    target["_member_sources"] = router_member_sources(data)
                     if current_source_hashes is not None and not _exposure_source_is_current(target, current_source_hashes):
                         continue
-                    for skill_id in data.get("skill_ids") or []:
-                        exposure.setdefault(str(skill_id), []).append(dict(target))
+                    for member in target["_member_sources"]:
+                        exposure.setdefault(member["skill_id"], []).append({**target, "source_library_id": member["source_library_id"]})
                 elif data.get("source_type") == "skillager-stub":
                     target["kind"] = "stub"
                     skill_id = data.get("source_id") or data.get("id")
@@ -5219,7 +5242,11 @@ def _validate_router_sidecars(
         data = item.get("data") or {}
         skill_ids = data.get("skill_ids")
         if isinstance(skill_ids, list) and skill_ids:
-            authorizations.add(("ids", *sorted(str(skill_id) for skill_id in skill_ids)))
+            members = router_member_sources(data)
+            authorizations.add(("ids", *sorted(
+                source_key(member["skill_id"], member["source_library_id"]) or f"unproven\0{member['skill_id']}"
+                for member in members
+            )))
         elif data.get("tag"):
             authorizations.add(("tag", str(data["tag"])))
         elif data.get("router_kind") == "explicit" or data.get("selection_kind") == "explicit":
@@ -5232,10 +5259,12 @@ def _validate_router_sidecars(
     authorization = next(iter(authorizations), None)
     if authorization and authorization[0] == "ids":
         allowed = set(authorization[1:])
-        if skill["id"] in allowed:
+        if skill_source_key(skill) in allowed:
             return
         raise ValueError(f"skill {skill['id']} is not listed by router {router}")
     if authorization and authorization[0] == "tag":
+        if str(skill["id"]).startswith("lib/"):
+            raise ValueError("router does not record this canonical member library identity")
         _validate_router_tag_activation(state_root, catalog_root, router, authorization[1], skill)
         return
     if authorization and authorization[0] == "empty-explicit":
@@ -7103,6 +7132,7 @@ def _router_tag_is_current(
                 and data.get("tag") == tag
                 and data.get("source_hash") == expected_hash
                 and sorted(str(value) for value in data.get("skill_ids") or []) == expected_ids
+                and router_sources_match(data, skills)
                 and matches_materialized_target(sidecar.parent, data)
             ):
                 return True

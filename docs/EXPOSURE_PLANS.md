@@ -60,7 +60,7 @@ without a suffix or implicit adoption. Set-members refuses when independent tag
 curation differs or another agent/router shares that tag. Ungroup and managed
 router-only removal retain tag curation. Empty set-members removes the router and
 retains the reviewed empty tag. Legacy explicit-set routers can be ungrouped when
-all recorded members resolve to the selected canonical library, or removed through
+all recorded member UUIDs and IDs resolve to the selected canonical library, or removed through
 the existing managed-removal command; they cannot change membership in place.
 
 ## Exact copies
@@ -77,6 +77,39 @@ skillager expose lib/review --exposure-id review --mode stub --agent codex --sco
 bound apply. The selected ID joins the existing `skillager.exposure-preview.v1`
 payload as `selected_exposure_id` and its confirmation token. Missing, foreign or
 ambiguous copies refuse. This is an identity selector, never a path argument.
+
+## Public source identity
+
+`expose --list --json` and managed Remove records expose the recorded identity:
+
+- Direct native/stub records have `source_library_id: UUID | null` alongside
+  `skill_id`. A canonical association requires both the UUID and skill ID.
+- Router records have `member_sources: [{skill_id, source_library_id}]` alongside
+  `skill_ids`. New router sidecars persist these fields in the complete effects.
+  The array follows `skill_ids` order and must align uniquely and completely.
+- Missing legacy member metadata produces the same member IDs with null UUIDs.
+  A valid explicit null is an unknown qualifier for that member. A malformed
+  member array, duplicate/missing/extra member, unexpected field, or invalid
+  non-null UUID invalidates every qualifier in that array: all become null.
+  Invalid or duplicate `skill_ids` cannot supply member identity proof.
+- UUIDs must use their canonical lowercase spelling. Missing or invalid direct
+  UUIDs become null. No current library, tag, path, name or content hash fills a
+  missing identity. Existing non-library source policy stays unchanged.
+
+Drift, inventory and library status compare canonical UUID/ID before bytes. An
+old library's copy cannot count as the connected library's same-ID copy, even
+when both accepted hashes match. Foreign or unknown canonical sources report
+`source_unavailable` without a re-expose command. Same-UUID library relocation
+preserves association. Compact per-skill `exposed_via` and `exposure_targets`
+references contain only that member's `source_library_id`; the full member array
+is on the router record, avoiding repeated whole-router metadata per skill.
+
+Ungroup, retained members and Full/Stub departures refuse when recorded canonical
+identity is foreign or unproven. Router activation uses the same identity rule.
+Membership-only Remove departures and target-owned managed Remove still require
+no approval of the departing body. Legacy canonical routers without identity
+proof can be removed; their members cannot be restored by guessing the current
+library. Metadata reads neither migrate nor rewrite old sidecars.
 
 ## Complete public payload
 

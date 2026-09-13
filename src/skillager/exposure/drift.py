@@ -8,6 +8,7 @@ from ..simple_yaml import load_mapping
 from ..trust import content_hash
 from .impl import MATERIALIZED_SCHEMA, ROUTER_SCHEMA, WORKING_SKILL_ID, content_hashes
 from .target_state import matches_materialized_target
+from .identity import library_id, recorded_source_keys, router_member_sources
 
 EXPOSURE_CHANGES_SCHEMA = "skillager.exposure-changes.v1"
 ACTIONABLE_EXPOSURE_STATES = {
@@ -228,8 +229,11 @@ def _base_record(
                 "router_slug": data.get("router_slug") or target.name,
                 "tag": data.get("tag"),
                 "skill_ids": [str(value) for value in data.get("skill_ids") or []],
+                "member_sources": router_member_sources(data),
             }
         )
+    else:
+        record["source_library_id"] = library_id(data.get("source_library_id"))
     return record
 
 
@@ -239,16 +243,17 @@ def _source_change(data: dict[str, Any], current_source_hashes: dict[str, str] |
     source_type = data.get("source_type")
     if source_type == "skillager-router":
         skill_ids = [str(value) for value in data.get("skill_ids") or []]
-        missing = [skill_id for skill_id in skill_ids if skill_id not in current_source_hashes]
+        keys = recorded_source_keys(data)
+        missing = [skill_id for skill_id in skill_ids if keys.get(skill_id) not in current_source_hashes]
         if missing:
             return {
                 "_status": "source_unavailable",
                 "expected_source_hash": None,
-                "reason": "router members are no longer all in the current approved inventory",
+                "reason": "recorded router member identities are unavailable in the current approved inventory",
                 "unavailable_skill_ids": missing,
             }
         expected = content_hashes(
-            [{"id": skill_id, "content_hash": current_source_hashes[skill_id]} for skill_id in skill_ids]
+            [{"id": skill_id, "content_hash": current_source_hashes[str(keys[skill_id])]} for skill_id in skill_ids]
         )
         if data.get("source_hash") != expected:
             return {
@@ -259,12 +264,12 @@ def _source_change(data: dict[str, Any], current_source_hashes: dict[str, str] |
         return None
 
     skill_id = str(data.get("source_id") or data.get("id"))
-    expected_source_hash = current_source_hashes.get(skill_id)
+    expected_source_hash = current_source_hashes.get(recorded_source_keys(data).get(skill_id) or "")
     if expected_source_hash is None:
         return {
             "_status": "source_unavailable",
             "expected_source_hash": None,
-            "reason": "source is no longer in the current approved inventory",
+            "reason": "recorded source identity is unavailable in the current approved inventory",
         }
     if data.get("source_hash") != expected_source_hash:
         return {

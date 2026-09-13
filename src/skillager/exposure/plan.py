@@ -13,6 +13,7 @@ from .impl import (_collision_safe_target, _direct_projection_identity, _exposur
                    _project_agent_bases, _require_safe_project_projection_target,
                    _router_projection_identity, prepare_direct_candidate, prepare_router_candidate, slugify)
 from .management import _exposure_records
+from .identity import recorded_source_keys, source_key
 from .plan_request import MAX_EFFECTS, MAX_MEMBERS, MAX_OUTPUT_BYTES, MAX_REASON_BYTES, MAX_STAGED_BYTES, MAX_TARGETS, PLAN_SCHEMA, PlanRefusal, canonical_json, encode_plan_output, library_skill
 from .plan_sources import PlanSources
 from .plan_targets import PlanTarget, bounded_metadata, directory_state, file_state, managed_data, require_managed_metadata, result_identity, tree_state
@@ -108,6 +109,7 @@ class ExposurePlan:
         tag = str(data["tag"]) if data.get("tag") else ""
         before_tag = list((self.tag_state["tags"].get(tag) or {}).get("skills", [])) if tag else []
         if action == "ungroup":
+            self._require_member_sources(data, old)
             self.group = {"tag": tag, "before_members": sorted(old), "after_members": [], "tag_policy": "retained", "before_tag_members": before_tag, "after_tag_members": before_tag}
             for member in sorted(old):
                 self._direct(self.sources.skill(member), self.request["mode"])
@@ -125,6 +127,7 @@ class ExposurePlan:
             raise PlanRefusal("tag-changed", "Project tag curation differs from this router; preserve that curation before changing membership")
         self.shared_tag = tag
         self._require_unshared(router)
+        self._require_member_sources(data, [member for member in old if member in members or departures[member] != "remove"])
         skills = [self.sources.skill(member) for member in members]
         self.group = {"tag": tag, "before_members": sorted(old), "after_members": members, "tag_policy": "update", "before_tag_members": before_tag, "after_tag_members": members}
         if members:
@@ -136,6 +139,11 @@ class ExposurePlan:
                 self._direct(self.sources.skill(member), mode)
         self._replacements(set(members))
         self._tag(tag, members)
+
+    def _require_member_sources(self, data: dict[str, Any], members: list[str]) -> None:
+        keys = recorded_source_keys(data)
+        if any(keys.get(member) != source_key(member, self.sources.library_id) for member in members):
+            raise PlanRefusal("source-identity", "Recorded router member library identity is missing or differs from the connected library; remove without restoring instead")
 
     def _default_base(self) -> Path:
         return _project_agent_bases(self.project, self.agent)[0]

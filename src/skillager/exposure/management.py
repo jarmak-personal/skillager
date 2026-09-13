@@ -6,6 +6,7 @@ from typing import Any
 
 from ..simple_yaml import load_mapping
 from .impl import _project_agent_bases
+from .identity import library_id, router_member_sources
 
 
 def _exposure_records(project_dir: Path, *, agents: list[str], scope: str) -> list[dict[str, Any]]:
@@ -80,6 +81,10 @@ def _exposure_record(sidecar: Path, data: dict[str, Any], *, fallback_agent: str
         "reason": None,
         "restart_required": True,
     }
+    if mode == "router":
+        record["member_sources"] = router_member_sources(data)
+    else:
+        record["source_library_id"] = library_id(data.get("source_library_id"))
     if data.get("tag"):
         record["tag"] = data.get("tag")
     for key in ("router_kind", "selection_kind", "router_slug"):

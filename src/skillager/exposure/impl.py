@@ -12,6 +12,7 @@ from typing import Any, Callable
 from ..compatibility import compatibility_problem, compatibility_warnings
 from ..library.confirmation import require_confirmation_token
 from .preview import exposure_preview
+from .identity import member_sources
 from ..simple_yaml import load_mapping, loads
 from ..skills.tree import content_tree_fingerprint, iter_content_files
 from ..state.locking import resource_lock
@@ -1224,6 +1225,7 @@ def _router_sidecar(
         "selection_kind": router_kind,
         "router_slug": router_slug,
         "skill_ids": [skill["id"] for skill in skills],
+        "member_sources": member_sources(skills),
         "source_hash": content_hashes(skills),
         "materialized_hash": materialized_hash,
         "materialized_fingerprint": materialized_fingerprint,
