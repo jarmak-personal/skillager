@@ -8,7 +8,7 @@ from typing import Any
 
 from ..exposure.target_state import target_state_hash, target_state_manifest
 from ..skills.tree import require_canonical_content_tree
-from ..state.library_approval import approval_witness, public_approval
+from ..state.library_approval import approval_witness, public_approval, public_approval_evidence
 from ..state.trust import APPROVED_TRUST_STATES, _record_trust_info
 from .importing import _source_key
 
@@ -65,14 +65,17 @@ def lineage_status(
     observed: list[dict[str, Any]], records: dict[Path, dict[str, Any]],
     project_state: Path, catalog: Path, project_dir: Path | None, lint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    witness = stored["source_approval"]
+    evidence = stored["source_approval"]
+    derivation = (approval or {}).get("derived_from") or {}
+    private_witness = derivation.get("source_approval")
+    bound = derivation.get("lineage") == stored and isinstance(private_witness, dict) and public_approval(private_witness) == evidence
     accepted = approval.get("content_hash") if approval else None
     trust = _record_trust_info(approval, working_hash or "", lint=lint, scope="global") or {}
     preservation = "pending"
     reason: str | None = "canonical-pending"
     if working_hash is None:
         preservation, reason = "unavailable", "canonical-missing"
-    elif approval and approval.get("derived_from") == stored and accepted == working_hash == witness["record"]["content_hash"] and trust.get("state") in APPROVED_TRUST_STATES:
+    elif approval and bound and accepted == working_hash == evidence["content_hash"] and trust.get("state") in APPROVED_TRUST_STATES:
         try:
             if canonical_target_state(target) == stored["target_state"]:
                 preservation, reason = "verified", None
@@ -88,7 +91,7 @@ def lineage_status(
         item = origin(skill, project_dir, source_id=stored["source_identity"])
         current = approval_witness(skill, project_state, catalog, records)
         state = "current" if current else "blocked" if skill.get("trust") == "blocked" else "unapproved"
-        if current and skill["content_hash"] != witness["record"]["content_hash"]:
+        if current and skill["content_hash"] != evidence["content_hash"]:
             state = "changed"
         item["observation"] = {"status": state, "content_hash": skill["content_hash"],
                                "trust": current["record"]["state"] if current else skill.get("trust"),
@@ -96,7 +99,7 @@ def lineage_status(
         origins[item["origin_id"]] = item
     return {
         "schema": LINEAGE_SCHEMA, "lineage_id": stored["lineage_id"], "source_identity": stored["source_identity"],
-        "source_approval": public_approval(witness),
+        "source_approval": public_approval_evidence(evidence),
         "canonical": {"library_id": library["library_id"], "skill_id": f"lib/{target.name}", "path": str(target),
                       "accepted_hash": accepted, "working_hash": working_hash,
                       "acceptance": "accepted" if accepted == working_hash and trust.get("state") in APPROVED_TRUST_STATES else "pending" if working_hash else "missing",

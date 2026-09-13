@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..state.library_approval import derive_library_approvals
+from ..state.library_approval import derive_library_approvals, public_approval
 from ..state.locking import resource_locks
 from ..skills.tree import ContentTreeLimits, iter_content_files
 from .candidate import prepare_library_candidate
@@ -105,7 +105,7 @@ def apply_sync_chunks(
                         lineage = {"schema": "skillager.library-sync-lineage.v1",
                             "lineage_id": identity("lineage", value["item"]["source_identity"], registration.library_id, name),
                             "source_identity": item["source_identity"], "source_key": _source_key(value["source"]),
-                            "source_approval": value["witness"], "origins": value["origins"], "target_state": state}
+                            "source_approval": public_approval(value["witness"]), "origins": value["origins"], "target_state": state}
                         item.update(phase="prepared", lineage_id=lineage["lineage_id"])
                         value.update(candidate=entry, candidate_path=candidate, target=layout.skill_root(name),
                                      backup=temp_root / f"{name}.previous", approval_key=key, lineage=lineage,

@@ -217,6 +217,16 @@ def save(root: Path, data: dict[str, Any]) -> None:
         _replace(conn, _load(conn), data, action="replace")
 
 
+def _record_version(conn: sqlite3.Connection, key: str, after: dict[str, Any], version: dict[str, str]) -> None:
+    if version["source_key"] != key or version["content_hash"] != after.get("content_hash"):
+        raise ValueError("version reference does not match the approval identity and hash")
+    conn.execute("INSERT OR IGNORE INTO content_versions VALUES (?, ?, ?)",
+                 (key, version["content_hash"], datetime.now(timezone.utc).isoformat()))
+    if version.get("git_commit"):
+        conn.execute("INSERT OR IGNORE INTO version_references VALUES (?, ?, ?, ?, ?)",
+                     (key, version["content_hash"], version["repository"], version["git_commit"], version["skill_path"]))
+
+
 def mutate_record(root: Path, scope: str, key: str, mutation: Callable[[dict[str, Any] | None], dict[str, Any] | None], *, version: dict[str, str] | None = None) -> dict[str, Any] | None:
     with _writer(root) as conn:
         row = conn.execute("SELECT record FROM approvals WHERE scope = ? AND key = ?", (scope, key)).fetchone()
@@ -224,13 +234,7 @@ def mutate_record(root: Path, scope: str, key: str, mutation: Callable[[dict[str
         after = mutation(deepcopy(before))
         _write_record(conn, scope, key, before, after, action="decide", version=version)
         if version is not None and after is not None:
-            if version["source_key"] != key or version["content_hash"] != after.get("content_hash"):
-                raise ValueError("version reference does not match the approval identity and hash")
-            conn.execute("INSERT OR IGNORE INTO content_versions VALUES (?, ?, ?)",
-                         (key, version["content_hash"], datetime.now(timezone.utc).isoformat()))
-            if version.get("git_commit"):
-                conn.execute("INSERT OR IGNORE INTO version_references VALUES (?, ?, ?, ?, ?)",
-                             (key, version["content_hash"], version["repository"], version["git_commit"], version["skill_path"]))
+            _record_version(conn, key, after, version)
         return after
 
 
@@ -266,12 +270,6 @@ def derive_library_records(
                     records[project_root] = load(project_root)
             changes = derive(records)
             for key, after, version in changes:
-                if version["source_key"] != key or version["content_hash"] != after["content_hash"]:
-                    raise ValueError("derived version does not match its canonical approval")
                 before = canonical.get("global_approvals", {}).get(key)
                 _write_record(conn, "global_approvals", key, before, after, action="derive-library", version=version)
-                conn.execute("INSERT OR IGNORE INTO content_versions VALUES (?, ?, ?)",
-                             (key, version["content_hash"], datetime.now(timezone.utc).isoformat()))
-                if version.get("git_commit"):
-                    conn.execute("INSERT OR IGNORE INTO version_references VALUES (?, ?, ?, ?, ?)",
-                                 (key, version["content_hash"], version["repository"], version["git_commit"], version["skill_path"]))
+                _record_version(conn, key, after, version)

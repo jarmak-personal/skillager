@@ -363,15 +363,17 @@ def apply_review_action(
     return action
 
 
-def sync_reviewed_sources(state_root: Path, catalog_root: Path, skills: list[dict[str, Any]], *, inventory: dict[str, Any] | None = None) -> dict[str, Any]:
+def sync_reviewed_sources(state_root: Path, catalog_root: Path, skills: list[dict[str, Any]], *, inventory: dict[str, Any] | None = None, extra_paths: list[Path] | None = None) -> dict[str, Any]:
     # This is explicit approval/setup orchestration, never a side effect of set_trust
     # or an inventory read. The sync owner revalidates the actual current decision.
-    from ..library.sync import sync_approved, sync_refusal
+    from ..library.sync import LibraryBindingError, sync_approved, sync_refusal
     from ..paths import find_project_root
     try:
-        return sync_approved(state_root, catalog_root, skills=skills, project_dir=find_project_root(), inventory=inventory)
+        return sync_approved(state_root, catalog_root, skills=skills, project_dir=find_project_root(), inventory=inventory, extra_paths=extra_paths)
+    except LibraryBindingError:
+        return sync_refusal(False, "library-changed", discovery_error_count=len((inventory or {}).get("errors", [])))
     except Exception:
-        return sync_refusal(False)
+        return sync_refusal(False, discovery_error_count=len((inventory or {}).get("errors", [])))
 
 
 def _review_action_item(
@@ -520,8 +522,11 @@ def setup_environment(
         sync_library=False,
     )
     if approval_root is not None:
+        # This review index may contain only explicit roots or selected collections.
+        # Resolve one complete sync inventory, including unsaved current roots,
+        # while retaining the review selection as the only authorized write set.
         action["library_sync"] = sync_reviewed_sources(state_root, approval_root, skills,
-            inventory=data if include_packages and source is None and collection is None and include_blocked else None)
+            extra_paths=[*(paths or []), *(extra_paths or [])])
     refreshed = load_index(state_root, approval_root=approval_root)
     if extra_skills:
         extra_skills = _refresh_extra_skill_trust(state_root, extra_skills, approval_root=approval_root)

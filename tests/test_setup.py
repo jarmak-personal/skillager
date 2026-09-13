@@ -387,7 +387,8 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(searched):
                     self.assertEqual(main(["search", "spatial", "--json"]), 0)
                 searched_data = json.loads(searched.getvalue())
-                self.assertEqual(searched_data[0]["id"], "path/gis-domain")
+                self.assertIn("path/gis-domain", [skill["id"] for skill in searched_data])
+                self.assertTrue(any(skill["id"].startswith("lib/") for skill in searched_data))
 
                 shown = StringIO()
                 with redirect_stdout(shown):
@@ -402,8 +403,8 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(listed):
                     self.assertEqual(main(["list", "--no-packages", "--summary-json"]), 0)
                 inventory = json.loads(listed.getvalue())
-                self.assertEqual(inventory["total"], 1)
-                self.assertEqual(inventory["source_entry_count"], 1)
+                self.assertEqual(inventory["total"], 2)
+                self.assertEqual(inventory["source_entry_count"], 2)
                 status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
                 self.assertEqual(status_scope["selected_count"], 1)
 

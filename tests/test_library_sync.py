@@ -399,3 +399,105 @@ class LibrarySyncMutationTests(unittest.TestCase):
         self.assertEqual(relation["source_approval"]["scope"], "project")
         self.assertEqual(approvals.get_record(self.state, "skills", "personal/guide"), original)
         self.assertIsNone(approvals.get_record(self.state, "skills", observed["id"]))
+
+    def test_setup_explicit_clone_sees_conflicting_effective_clone_before_sync(self):
+        from skillager.skills.review import setup_environment
+        for include_blocked in (True, False):
+            with self.subTest(include_blocked=include_blocked):
+                default = self.project / f"default-clone-{include_blocked}"
+                explicit = self.root / f"explicit-clone-{include_blocked}"
+                for clone, body in ((default, "Use current project Python guidance."), (explicit, "Use distinct reviewed Python guidance.")):
+                    (clone / ".git").mkdir(parents=True)
+                    (clone / ".git" / "config").write_text('[remote "origin"]\nurl = https://example.invalid/shared-' + str(include_blocked) + '.git\n')
+                    (clone / "pyproject.toml").write_text('[project]\nname = "clone"\n')
+                    skill = clone / ".agents" / "skills" / "guide"
+                    skill.mkdir(parents=True)
+                    (skill / "SKILL.md").write_text("# Guide\n\n" + body + "\n")
+                current = next(skill for skill in import_inventory(self.state, self.catalog)["skills"] if Path(skill["root"]) == default / ".agents" / "skills" / "guide")
+                set_trust(self.state, current["id"], "reviewed", current["content_hash"], current["source"])
+                from skillager.library import sync
+                with patch.object(sync, "import_inventory", wraps=sync.import_inventory) as discovery:
+                    report = setup_environment(self.state, paths=[explicit / ".agents" / "skills"], include_packages=True,
+                        include_blocked=include_blocked, accept_low=True, approval_root=self.catalog)
+                result = report["action"]["library_sync"]
+                self.assertEqual(discovery.call_count, 1)
+                self.assertEqual(result["counts"]["conflict"], 1, result)
+                self.assertEqual(result["items"][0]["reason_code"], "source-version-conflict")
+                self.assertEqual(len(result["items"][0]["origin_ids"]), 2)
+                self.assertGreaterEqual(result["coverage"]["discovered_origins"], 3)
+                self.assertFalse((self.state / "status_scope.json").exists())
+                self.assertFalse(list((self.library / "skills").glob("*/SKILL.md")))
+
+    def test_setup_unsaved_explicit_root_syncs_only_its_approved_selection(self):
+        from skillager.skills.review import setup_environment
+        source = self.root / "explicit" / "guide"
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text("# Guide\n\nUse explicitly selected project guidance.\n")
+        report = setup_environment(self.state, paths=[source], accept_low=True, approval_root=self.catalog)
+        result = report["action"]["library_sync"]
+        self.assertEqual(result["counts"]["created"], 1, result)
+        self.assertEqual(result["coverage"]["discovered_origins"], 2)
+        self.assertEqual(result["coverage"]["selected_sources"], 1)
+        self.assertFalse((self.state / "status_scope.json").exists())
+
+    def test_unavailable_approval_state_retains_only_actual_discovery_error_count(self):
+        inventory = import_inventory(self.state, self.catalog)
+        inventory["errors"] = [{"path": "/fixture-missing", "error": "unreadable"}]
+        with patch("skillager.library.sync._load_state", side_effect=ValueError("approval storage unavailable")):
+            result = self.sync(inventory=inventory)
+        self.assertEqual(result["reason_code"], "sync-unavailable")
+        self.assertEqual(result["coverage"]["discovery_error_count"], 1)
+
+    def test_editable_provenance_cannot_retarget_catalog_bound_lineage(self):
+        from copy import deepcopy
+        from skillager.library.metadata import load_library_provenance, write_library_provenance
+        target = self.derived()
+        layout = LibraryLayout.from_root(self.library)
+        original = load_library_provenance(layout)
+        for field in ("lineage_id", "source_identity", "source_approval", "origins", "target_state"):
+            with self.subTest(field=field):
+                changed = deepcopy(original)
+                lineage = changed["skills"][target.name]["sync"]
+                if field == "source_approval":
+                    lineage[field]["evidence_id"] = "0" * 64
+                    lineage[field]["record"] = {"reason": "PRIVATE_RECORD_SENTINEL"}
+                elif field == "origins":
+                    lineage[field][0]["path"] = "/unpreserved-origin"
+                elif field == "target_state":
+                    lineage[field]["mode"] = 0
+                else:
+                    lineage[field] = "0" * 64
+                write_library_provenance(layout, changed)
+                observed = self.sync(status_only=True)
+                self.assertTrue(all(value["preservation"] != "verified" for value in observed["lineages"]))
+                self.assertNotIn("PRIVATE_RECORD_SENTINEL", str(observed))
+                result = self.sync()
+                self.assertEqual(result["counts"]["created"] + result["counts"]["updated"], 0)
+                write_library_provenance(layout, original)
+
+    def test_review_reused_inventory_preserves_collection_discovery_errors(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        import json
+        import os
+        from skillager.catalog.impl import add_collection
+        from skillager.cli import main
+        from skillager.library import sync
+        from skillager.catalog import impl as catalog_owner
+        collection = self.root / "unreadable-collection"
+        collection.mkdir()
+        add_collection(self.catalog, "broken", collection)
+        original = catalog_owner._load_or_refresh_collection_index
+        def load(state, name, **kwargs):
+            if name == "broken":
+                return {"skills": [], "errors": [{"path": str(collection), "error": "fixture read refused"}]}
+            return original(state, name, **kwargs)
+        output = StringIO()
+        with patch.dict(os.environ, {"SKILLAGER_STATE_DIR": str(self.state), "SKILLAGER_CATALOG_STATE_DIR": str(self.catalog)}), \
+             patch.object(catalog_owner, "_load_or_refresh_collection_index", side_effect=load), \
+             patch.object(sync, "import_inventory", side_effect=AssertionError("complete review inventory must be reused")), redirect_stdout(output):
+            self.assertEqual(main(["review", "approve", self.source["id"], "--include-blocked", "--json"]), 0)
+        result = json.loads(output.getvalue())["action"]["library_sync"]
+        self.assertEqual(result["counts"]["created"], 1, result)
+        self.assertEqual(result["coverage"]["discovery_error_count"], 1)
+        self.assertFalse(result["coverage"]["complete"])

@@ -218,7 +218,9 @@ Status returns `skillager.library-sync-status.v1`, compact candidate states, and
 including eligible ones; it never reconstructs an earlier operation's completion.
 Historical source approval, current
 origin observations, and current canonical acceptance are distinct. Full approval
-records and content bodies are never public sync metadata.
+records and content bodies are never public sync metadata. Private approval and
+override records stay in catalog authority; Git-tracked library provenance contains
+only compact evidence bound to the full catalog derivation.
 
 Preserve conflicts and recovery paths. Do not overwrite customizations, clear a
 block, downgrade a pin, or turn a pending original into approved content merely to

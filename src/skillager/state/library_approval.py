@@ -50,11 +50,14 @@ def approval_witness(
 
 def public_approval(witness: dict[str, Any]) -> dict[str, Any]:
     record = witness["record"]
-    return {
-        "evidence_id": witness["evidence_id"], "decision_skill_id": witness["decision_skill_id"],
-        "scope": witness["scope"], "state": record["state"], "content_hash": record["content_hash"],
-        "lint_override": bool(record.get("lint_override")), "risk_override": bool(record.get("risk_override")),
-    }
+    return public_approval_evidence({**record, "evidence_id": witness["evidence_id"],
+        "decision_skill_id": witness["decision_skill_id"], "scope": witness["scope"]})
+
+
+def public_approval_evidence(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Project public evidence without forwarding editable private/unknown fields."""
+    return {**{name: evidence[name] for name in ("evidence_id", "decision_skill_id", "scope", "state", "content_hash")},
+            "lint_override": bool(evidence.get("lint_override")), "risk_override": bool(evidence.get("risk_override"))}
 
 
 def derive_library_approvals(project: Path, catalog: Path, candidates: list[dict[str, Any]], publish: Callable[[], None]) -> None:
@@ -108,7 +111,7 @@ def derive_library_approvals(project: Path, catalog: Path, candidates: list[dict
             result = {
                 "state": state, "content_hash": digest, "source": candidate["source"],
                 "scope": "global", "approval_key": key, "skill_id": candidate["id"],
-                "derived_from": item["lineage"],
+                "derived_from": {"lineage": item["lineage"], "source_approval": expected},
                 "version": item["version"],
             }
             for name in ("lint_override", "risk_override", "reason"):

@@ -4700,6 +4700,7 @@ def _collection_inventory_skills(
     include_lint_blocked: bool = False,
     refresh_library: bool = True,
     defer_verification: bool = False,
+    discovery_errors: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     tag_membership = _project_tag_membership(project_dir)
     exposure = _project_exposure(project_dir)
@@ -4719,6 +4720,7 @@ def _collection_inventory_skills(
             include_blocked=include_blocked,
             include_lint_blocked=include_lint_blocked,
             refresh_library=refresh_library,
+            discovery_errors=discovery_errors,
         )
     for skill in candidates:
         item = _with_project_inventory_fields(skill, exposure, native_prefixes=native_prefixes)
@@ -5370,7 +5372,7 @@ def cmd_review(args: argparse.Namespace) -> int:
         extra_paths=_active_setup_paths(root(args)),
         persist=False,
     )
-    extra_skills = _review_extra_skills(args)
+    extra_skills = _review_extra_skills(args, discovery_errors=data.setdefault("errors", []))
     if extra_skills:
         data["skills"] = [*data.get("skills", []), *extra_skills]
     action_includes_blocked = review_action in {"block", "unblock"}
@@ -5459,7 +5461,7 @@ def cmd_review(args: argparse.Namespace) -> int:
     return 0
 
 
-def _review_extra_skills(args: argparse.Namespace) -> list[dict[str, Any]]:
+def _review_extra_skills(args: argparse.Namespace, *, discovery_errors: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
     source = _selection_source(args)
     if source not in {None, "collection"}:
         return []
@@ -5470,6 +5472,7 @@ def _review_extra_skills(args: argparse.Namespace) -> list[dict[str, Any]]:
         collection=_selection_collection(args),
         include_blocked=getattr(args, "include_blocked", False) or getattr(args, "_review_action", None) in {"block", "unblock"},
         include_lint_blocked=True,
+        discovery_errors=discovery_errors,
     )
 
 

@@ -14,7 +14,7 @@ from ..state.trust import _record_trust_info
 from ..exposure.target_state import MATERIALIZED_SIDECAR, matches_materialized_target
 from ..simple_yaml import load_mapping
 from .importing import import_inventory
-from .metadata import load_library_provenance
+from .metadata import load_library_identity, load_library_provenance
 from .model import normalize_skill_name
 from .paths import load_library_registration
 from .service import _library_first_use_plan, _require_library_identity, initialize_library
@@ -29,10 +29,14 @@ OUTCOMES = ("created", "updated", "unchanged", "conflict", "skipped", "failed", 
 SOFT_DEADLINE_SECONDS = 25.0
 
 
-def sync_refusal(status_only: bool, reason: str = "sync-unavailable") -> dict[str, Any]:
+class LibraryBindingError(ValueError):
+    """An observed library identity differs from the selected connection."""
+
+
+def sync_refusal(status_only: bool, reason: str = "sync-unavailable", *, discovery_error_count: int = 0) -> dict[str, Any]:
     return {"schema": SYNC_STATUS_SCHEMA if status_only else SYNC_SCHEMA, "status": "refused", "reason_code": reason,
             "library": None, "context": None, "coverage": {"discovered_origins": 0, "approved_origins": 0,
-            "selected_sources": 0, "processed_sources": 0, "complete": False, "discovery_error_count": 1},
+            "selected_sources": 0, "processed_sources": 0, "complete": False, "discovery_error_count": discovery_error_count},
             **({"lineages": [], "candidates": []} if status_only else {"counts": {name: 0 for name in OUTCOMES}, "items": []})}
 
 
@@ -51,9 +55,12 @@ def library_binding(catalog: Path, expected_id: str | None, expected_root: Path 
         raise ValueError("expected library ID and root must be supplied together")
     registration = load_library_registration(catalog)
     if expected_id and (registration is None or registration.library_id != expected_id or registration.layout.root != expected_root):
-        raise ValueError("sync library selection changed")
+        raise LibraryBindingError("sync library selection changed")
     if registration is None:
         return None
+    identity = load_library_identity(registration.layout)
+    if identity is not None and identity.library_id != registration.library_id:
+        raise LibraryBindingError("library identity does not match the catalog registration")
     registration, library_identity = _require_library_identity(catalog)
     return registration, library_identity
 
@@ -189,15 +196,19 @@ def sync_approved(
     project: Path, catalog: Path, *, status_only: bool = False, project_dir: Path | None = None,
     skills: list[dict[str, Any]] | None = None, expected_library_id: str | None = None,
     expected_library_root: Path | None = None, inventory: dict[str, Any] | None = None,
+    extra_paths: list[Path] | None = None,
 ) -> dict[str, Any]:
     """One explicit approved-source batch; observers never enter mutation owners."""
     deadline = time.monotonic() + SOFT_DEADLINE_SECONDS
     project, catalog = project.resolve(), catalog.resolve()
     binding = library_binding(catalog, expected_library_id, expected_library_root)
-    inventory = inventory if inventory is not None else import_inventory(project, catalog)
+    inventory = inventory if inventory is not None else import_inventory(project, catalog, extra_paths=extra_paths)
     groups = _group_sources(inventory["skills"], binding)
     admitted_origins = sum(map(len, groups.values()))
-    records, provenance, entries, mapping = _load_state(project, catalog, binding, inventory["skills"])
+    try:
+        records, provenance, entries, mapping = _load_state(project, catalog, binding, inventory["skills"])
+    except (OSError, ValueError):
+        return sync_refusal(status_only, discovery_error_count=len(inventory["errors"]))
     if admitted_origins + len(entries) > SYNC_INVENTORY_LIMIT:
         refused = sync_refusal(status_only, "inventory-limit")
         refused["library"] = _library(binding)
@@ -212,7 +223,10 @@ def sync_approved(
         groups = {key: values for key, values in groups.items()
                   if any((skill["id"], str(Path(skill["root"]).resolve())) in wanted for skill in values)}
         missing = {key: values for key, values in requested.items() if key not in groups}
-    items, selected, lineages = _plan(groups, binding, records, provenance, entries, mapping, project, catalog, project_dir)
+    try:
+        items, selected, lineages = _plan(groups, binding, records, provenance, entries, mapping, project, catalog, project_dir)
+    except (OSError, ValueError):
+        return sync_refusal(status_only, discovery_error_count=len(inventory["errors"]))
     for key, values in missing.items():
         items.append({**_item(key, values, project_dir), "outcome": "failed", "reason_code": "source-missing", "repair": "observe"})
     coverage = {"discovered_origins": admitted_origins,
@@ -222,7 +236,10 @@ def sync_approved(
     context = {"project_root": str(project_dir.resolve()) if project_dir else None, "discovery": "effective-local"}
     creates = [value for value in selected if value["previous"] is None]
     capacity_refused = admitted_origins + len(entries) + len(creates) > SYNC_INVENTORY_LIMIT
-    library_root = binding[0].layout.root if binding else _library_first_use_plan(catalog)[0].root
+    try:
+        library_root = binding[0].layout.root if binding else _library_first_use_plan(catalog)[0].root
+    except (OSError, ValueError):
+        return sync_refusal(status_only, discovery_error_count=len(inventory["errors"]))
     metadata_refusal = projected_metadata_limits(lineages, [value for value in selected if not capacity_refused or value["previous"]], items, library_root, observed_origin_ids, len(entries) + (0 if capacity_refused else len(creates)), SYNC_INVENTORY_LIMIT, SYNC_RESULT_BYTES)
     if metadata_refusal:
         refused = sync_refusal(status_only, metadata_refusal)
@@ -236,7 +253,7 @@ def sync_approved(
                 "lineages": lineages, "candidates": [{"source_identity": item["source_identity"],
                     "canonical_skill_id": item["canonical_skill_id"], "state": candidate_states.get(id(item), "current" if item["outcome"] == "unchanged" else item["outcome"]),
                     "reason_code": "inventory-limit" if capacity_refused and candidate_states.get(id(item)) == "unavailable" else item["reason_code"]} for item in items]}
-        return result if len(json.dumps(result).encode("utf-8")) <= SYNC_RESULT_BYTES else sync_refusal(True, "result-limit")
+        return result if len(json.dumps(result).encode("utf-8")) <= SYNC_RESULT_BYTES else sync_refusal(True, "result-limit", discovery_error_count=len(inventory["errors"]))
     if capacity_refused:
         for value in creates:
             value["item"].update(reason_code="inventory-limit", repair="observe")
@@ -271,7 +288,7 @@ def sync_approved(
                               expected_library_root=expected_library_root or binding[0].layout.root, deadline=deadline)
         except Exception:
             # Preserve earlier accepted outcomes when a later chunk cannot start.
-            coverage.update(complete=False, discovery_error_count=coverage["discovery_error_count"] + 1)
+            coverage["complete"] = False
             for value in selected:
                 item = value["item"]
                 if item["outcome"] == "skipped" and item["reason_code"] is None:
@@ -281,7 +298,7 @@ def sync_approved(
             if time.monotonic() < deadline:
                 refresh_collection(catalog, "lib")
         except Exception:
-            coverage.update(complete=False, discovery_error_count=coverage["discovery_error_count"] + 1)
+            coverage["complete"] = False
     counts = Counter(item["outcome"] for item in items)
     coverage["processed_sources"] = sum(item["reason_code"] not in {"time-limit", "inventory-limit", "recovery-required"} for item in items)
     coverage["complete"] = bool(coverage["complete"] and coverage["processed_sources"] == len(items))

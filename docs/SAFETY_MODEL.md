@@ -87,8 +87,11 @@ and canonical decisions remain locked from pre-publication checks through final
 acceptance; the owner checks the source bytes and complete destination again.
 Project-only source approval derives a separate globally reusable canonical
 approval for identical bytes. The original scope, key, state, hash, and actual
-approval/override evidence remain in lineage. No override reason is invented and
-no pin or block is cleared. Originals and exposure targets remain untouched.
+approval/override evidence remain in the catalog approval and append-only audit.
+Git-tracked library provenance contains only compact public approval evidence.
+The catalog derivation binds the entire public lineage and target to the full
+private source witness; editable provenance or equal hashes alone cannot establish
+preservation. No override reason is invented and no pin or block is cleared. Originals and exposure targets remain untouched.
 
 Each logical source has a stable relation to one canonical library UUID/skill.
 Different approved versions at simultaneously observed origins conflict. Only an
@@ -97,7 +100,9 @@ are protected, including files outside canonical hashing. Authored skills and ol
 explicit imports are not silently adopted into a sync relation. Original drift or
 revocation does not revoke an independently accepted canonical copy.
 
-Discovery and lineage are resolved once per batch; bounded chunks share Git
+Sync discovery includes the complete effective inventory plus current explicit
+setup paths, even before those paths are saved. Approval selection limits writes,
+not conflict/origin/capacity observation. Discovery and lineage are resolved once per batch; bounded chunks share Git
 commits and append-only approval transactions. Each copy admits at most 512
 entries, 8 MiB per file, and 32 MiB total; chunks admit 128 skills or 256 MiB.
 Effective external origins and canonical entries share a total limit of 10,000.

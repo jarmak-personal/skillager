@@ -219,13 +219,13 @@ def import_library_skill(
         }
 
 
-def import_inventory(project_state: Path, catalog_root: Path) -> dict[str, Any]:
+def import_inventory(project_state: Path, catalog_root: Path, *, extra_paths: list[Path] | None = None) -> dict[str, Any]:
     """Resolve the effective import inventory once, retaining discovery failures."""
     local = build_index(
         project_state,
         include_packages=True,
         approval_root=catalog_root,
-        extra_paths=_saved_setup_paths(project_state),
+        extra_paths=list(dict.fromkeys([*(_saved_setup_paths(project_state) or []), *(extra_paths or [])])),
         persist=False,
     )
     errors = list(local.get("errors", []))

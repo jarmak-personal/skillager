@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..library.model import normalize_library_id
-from ..library.sync import OUTCOMES, sync_approved, sync_refusal
+from ..library.sync import LibraryBindingError, OUTCOMES, sync_approved, sync_refusal
 from .context import catalog_root, current_project_dir, root
 
 
@@ -33,8 +33,10 @@ def cmd_library_sync(args: argparse.Namespace) -> int:
         result = sync_approved(root(args), catalog_root(args), status_only=args.status,
                               project_dir=current_project_dir(), expected_library_id=expected_id,
                               expected_library_root=expected_root)
+    except LibraryBindingError:
+        result = sync_refusal(args.status, "library-changed")
     except (OSError, ValueError):
-        result = sync_refusal(args.status, "library-changed" if expected_id else "sync-unavailable")
+        result = sync_refusal(args.status)
     if args.json:
         print(json.dumps(result, sort_keys=True))
     elif args.status:
