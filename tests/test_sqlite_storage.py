@@ -122,8 +122,8 @@ class SqliteConnectionTests(unittest.TestCase):
                     before = db.read_bytes()
                     sidecar = Path(str(db) + suffix)
                     sidecar.write_bytes(b"")
-                    real_validate, real_stat = database._assert_user_owned_regular_file, Path.stat
-                    validating, stat_calls = False, 0
+                    real_validate, real_is_file = database._assert_user_owned_regular_file, Path.is_file
+                    validating = False
                     errors = []
                     def validate(candidate):
                         nonlocal validating
@@ -137,16 +137,14 @@ class SqliteConnectionTests(unittest.TestCase):
                             raise
                         finally:
                             validating = False
-                    def stat(candidate, *args, **kwargs):
-                        nonlocal stat_calls
-                        if validating and moment == "ownership-stat" and candidate == sidecar and kwargs.get("follow_symlinks", True):
-                            stat_calls += 1
-                            if stat_calls == 2:
-                                sidecar.unlink()
-                        return real_stat(candidate, *args, **kwargs)
+                    def is_file(candidate, *args, **kwargs):
+                        result = real_is_file(candidate, *args, **kwargs)
+                        if result and validating and moment == "ownership-stat" and candidate == sidecar:
+                            sidecar.unlink()
+                        return result
                     if moment == "ownership-stat" and not hasattr(os, "geteuid"):
                         continue
-                    with patch.object(database, "_assert_user_owned_regular_file", side_effect=validate), patch.object(Path, "stat", stat):
+                    with patch.object(database, "_assert_user_owned_regular_file", side_effect=validate), patch.object(Path, "is_file", is_file):
                         with closing(database.connect_database(db)) as connection:
                             self.assertEqual(connection.execute("SELECT COUNT(*) FROM preserved").fetchone()[0], 0)
                     self.assertEqual(errors, [ValueError if moment == "before-is-file" else FileNotFoundError])
