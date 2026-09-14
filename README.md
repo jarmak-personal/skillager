@@ -96,6 +96,11 @@ Search accepted owned skills with `skillager search "database migration" --scope
 The default scope includes available workspace sources. Both return metadata only;
 see [search scope and freshness](docs/USER_GUIDE.md#search-the-personal-library).
 
+Opt into [known-skill search views](docs/SEARCH_VIEWS.md) with
+`skillager search --view skills --json -- "merge"`: group proven identities and hide
+skills already present in this project. Choose `--view copies` for separate
+occurrences; add `--include-installed` to retain skills present in the project.
+
 After you or your agent edits a personal skill, Skillager asks you to review the
 change before the skill can run.
 

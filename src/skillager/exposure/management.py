@@ -9,28 +9,49 @@ from .impl import _project_agent_bases
 from .identity import library_id, router_member_sources
 
 
-def _exposure_records(project_dir: Path, *, agents: list[str], scope: str) -> list[dict[str, Any]]:
+def _exposure_records(project_dir: Path, *, agents: list[str], scope: str, errors: list[str] | None = None) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     seen: set[Path] = set()
     for agent, roots in _exposure_roots(project_dir, agents=agents, scope=scope).items():
         for root_path in roots:
             if not root_path.is_dir():
+                if errors is not None and (root_path.exists() or root_path.is_symlink()):
+                    errors.append("unreadable-target-root")
                 continue
+            if errors is not None:
+                try:
+                    # Path.glob can suppress directory permission errors. Check
+                    # actual enumeration before claiming a complete observation.
+                    next(root_path.iterdir(), None)
+                except OSError:
+                    errors.append("unreadable-target-root")
+                    continue
             for sidecar in sorted(root_path.glob("*/skillager.materialized.yaml")):
                 try:
                     resolved = sidecar.resolve()
                 except OSError:
+                    if errors is not None:
+                        errors.append("unreadable-target")
                     continue
                 if resolved in seen:
                     continue
                 seen.add(resolved)
+                if errors is not None and (sidecar.is_symlink() or sidecar.parent.is_symlink()
+                        or (scope == "project" and not resolved.is_relative_to(project_dir.resolve()))
+                        or not (sidecar.parent / "SKILL.md").is_file()):
+                    errors.append("unreadable-target")
+                    continue
                 try:
                     data = load_mapping(sidecar)
                 except Exception:
+                    if errors is not None:
+                        errors.append("unreadable-target")
                     continue
                 record = _exposure_record(sidecar, data, fallback_agent=agent, fallback_scope=scope)
                 if record is not None:
                     records.append(record)
+                elif errors is not None and data.get("source_type") != "skillager-working":
+                    errors.append("unknown-target")
     return sorted(records, key=lambda item: (item["agent"], item["scope"], item["exposure_id"]))
 
 
