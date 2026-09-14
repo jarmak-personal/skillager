@@ -43,7 +43,12 @@ skillager search --scope library --view skills --installed-project /absolute/pro
 ```
 
 The path must resolve to that exact CLI project, not an ancestor or symlink alias.
-The project observation never supplies personal-library approval authority.
+Only its project-native roots are observed, through the existing discovery and
+indexing owners. Global, environment and package discovery errors do not describe
+project presence. The observation does not change cwd and never supplies
+personal-library approval authority. Personal rows retain top-level
+`exposure: unknown`; explicit presence lives in `search.installed` and the selected
+occurrence, rather than becoming a claim about that older metadata field.
 
 Alternatively `--scope library --installed-identities /absolute/input.json` reads
 a regular, non-symlink JSON file of at most 2 MiB and 10,000 unique identities:
@@ -105,6 +110,11 @@ sidecar was deleted. Its own source identity and native presence remain known, b
 its relationship to the library is unknown. Such a project needs explicit
 `--include-installed` until the relationship can be observed. Search never imports,
 synchronizes, or guesses a relationship to remove this uncertainty.
+
+An internal KeyError or TypeError exits 1 with `reason_code: internal-error` and a
+fixed diagnostic naming only the error class. Exception messages and tracebacks are
+never printed by this contract. Invalid deeply nested installed-identity JSON is
+an ordinary bounded `invalid-installed-input` refusal, not an internal error.
 
 The request admits at most 10,000 observed source/copy references and the result
 envelope is bounded to 4 MiB. Excess is an explicit refusal, never a silently

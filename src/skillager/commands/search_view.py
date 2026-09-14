@@ -5,17 +5,19 @@ import argparse
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 from typing import Any
 
 from ..exposure.management import _exposure_records
 from ..library.metadata import load_library_identity, load_library_provenance
 from ..library.paths import load_library_registration
+from ..skills.index import build_index
 from ..skills.search_view import (
     INSTALLED_INPUT_BYTES, SEARCH_INVENTORY_LIMIT, SEARCH_RESULT_BYTES, SEARCH_RESULT_LIMIT,
     SEARCH_VIEW_SCHEMA, SearchView, installed_keys, lineage_relations,
 )
-from ..state.paths import cache_root, find_project_root, state_root
+from ..state.paths import cache_root, find_project_root, project_state_root
 from ..state import approvals
 from .context import catalog_root, current_project_dir, root
 
@@ -69,21 +71,15 @@ def run_search_view(args: argparse.Namespace) -> int:
         records = approvals.load(catalog).get("global_approvals", {}) if registration else {}
         relations, lineage_complete = lineage_relations(provenance, identifier, records)
         supplied = _read_installed(args.installed_identities) if args.installed_identities else None
-        observation: dict[str, Any] = {}
-        skills = cli._search_inventory(args, deferred=True, observation=observation)
+        skills = cli._search_inventory(args, deferred=True)
         if any(skill.get("identity_collision") for skill in skills):
-            skills = cli._search_inventory(args, deferred=False, observation=observation)
+            skills = cli._search_inventory(args, deferred=False)
         if len(skills) > SEARCH_INVENTORY_LIMIT:
             raise SearchRefusal("inventory-limit")
-        if personal and project is not None:
-            # Explicit local project observation never borrows personal --state-dir.
-            previous = Path.cwd()
-            try:
-                os.chdir(project)
-                cli._base_project_skill_map(state_root(project), catalog_root=catalog,
-                                            project_dir=project, observation=observation)
-            finally:
-                os.chdir(previous)
+        # Presence is only project-native discovery, using the existing scanner
+        # and trust owner. It never borrows personal --state-dir or ambient roots.
+        observation = build_index(project_state_root(project) if personal else root(args), approval_root=catalog,
+                                  project_native_root=project, include_packages=False, persist=False) if project else {}
         errors: list[str] = []
         exposures = _exposure_records(project, agents=["codex", "claude"], scope="project", errors=errors) if project else []
         installed_complete = supplied is not None or (project is not None and not errors and not observation.get("errors"))
@@ -119,16 +115,21 @@ def run_search_view(args: argparse.Namespace) -> int:
         results = view.results(ranked, copies=args.view == "copies", limit=args.limit,
                                current=lambda skill: cli._search_result_is_current(skill, trust_root, catalog)
                                and (not args.compatible_only or cli.compatibility_problem(skill, args.agent) is None),
-                               public=cli._public_full_skill_metadata, agent=args.agent)
+                               public=lambda skill: cli._public_full_skill_metadata({**skill, "exposure": "unknown"} if personal else skill),
+                               agent=args.agent)
         payload.update(status="completed", results=results)
-    except (OSError, ValueError, KeyError, TypeError) as error:
+    except (OSError, ValueError) as error:
         payload.update(status="unavailable", reason_code=error.code if isinstance(error, SearchRefusal) else "observation-unavailable", results=[])
+    except (KeyError, TypeError) as error:
+        payload.update(status="unavailable", reason_code="internal-error", results=[])
+        kind = "KeyError" if isinstance(error, KeyError) else "TypeError"
+        print(f"skillager: internal search view error ({kind}).", file=sys.stderr)
     encoded = json.dumps(payload, sort_keys=True)
     if len(encoded.encode("utf-8")) > SEARCH_RESULT_BYTES:
         payload.update(status="unavailable", reason_code="result-limit", results=[])
         encoded = json.dumps(payload, sort_keys=True)
     print(encoded)
-    return 0 if payload["status"] == "completed" else 2
+    return 0 if payload["status"] == "completed" else 1 if payload["reason_code"] == "internal-error" else 2
 
 
 class SearchRefusal(ValueError):
@@ -145,4 +146,7 @@ def _read_installed(path: Path) -> set[str]:
         value = stream.read(INSTALLED_INPUT_BYTES + 1)
     if len(value) > INSTALLED_INPUT_BYTES:
         raise SearchRefusal("installed-input-limit")
-    return installed_keys(json.loads(value))
+    try:
+        return installed_keys(json.loads(value))
+    except RecursionError:
+        raise SearchRefusal("invalid-installed-input") from None

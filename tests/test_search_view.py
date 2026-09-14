@@ -1,9 +1,18 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
+import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
+from skillager.commands.impl import build_parser
+from skillager.commands.search_view import run_search_view
 from skillager.library.sync_lineage import identity
+from skillager.skills.discovery import discover
 from skillager.skills.search_view import installed_keys, lineage_relations
 
 
@@ -11,6 +20,27 @@ LIBRARY = "12345678-1234-1234-1234-123456789012"
 
 
 class SearchViewPolicyTests(unittest.TestCase):
+    def test_native_observation_cannot_be_broadened_by_other_discovery_inputs(self):
+        for options in ({"paths": []}, {"extra_paths": []}, {"include_packages": True}):
+            with self.subTest(options=options), self.assertRaisesRegex(ValueError, "project-native observation excludes"):
+                discover(project_native_root=Path("/not-read"), **{"include_packages": False, **options})
+
+    def test_internal_errors_are_distinct_and_never_expose_exception_messages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            args = build_parser().parse_args(["--catalog-state-dir", tmp, "search", "--scope", "library",
+                                             "--view", "skills", "--include-installed", "--json", "--", "query"])
+            for error in (KeyError("PRIVATE BODY"), TypeError("PRIVATE BODY"), OSError("PRIVATE BODY"), ValueError("PRIVATE BODY")):
+                with self.subTest(error=type(error).__name__):
+                    stdout, stderr = StringIO(), StringIO()
+                    with patch("skillager.commands.impl._search_inventory", side_effect=error), redirect_stdout(stdout), redirect_stderr(stderr):
+                        code = run_search_view(args)
+                    internal = isinstance(error, (KeyError, TypeError))
+                    self.assertEqual(code, 1 if internal else 2)
+                    self.assertEqual(json.loads(stdout.getvalue())["reason_code"], "internal-error" if internal else "observation-unavailable")
+                    expected = f"skillager: internal search view error ({type(error).__name__}).\n" if internal else ""
+                    self.assertEqual(stderr.getvalue(), expected)
+                    self.assertNotIn("PRIVATE BODY", stdout.getvalue() + stderr.getvalue())
+
     def test_installed_input_does_not_recover_ambiguous_or_unqualified_identities(self):
         canonical = {"library_id": LIBRARY, "skill_id": "lib/example"}
         valid = {"schema": "skillager.search-installed.v1", "identities": [canonical]}

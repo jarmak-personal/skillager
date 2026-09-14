@@ -121,16 +121,22 @@ def discover(
     *,
     include_packages: bool = True,
     extra_paths: Iterable[Path] | None = None,
+    project_native_root: Path | None = None,
 ) -> tuple[list[IndexableSkill], list[dict[str, str]]]:
     skills: list[IndexableSkill] = []
     errors: list[dict[str, str]] = []
     roots: list[tuple[Path, dict[str, Any]]] = []
-    if extra_paths:
-        roots.extend((path, {"type": "path"}) for path in extra_paths)
-    if paths is None:
-        roots.extend(default_source_roots())
+    if project_native_root is not None:
+        if paths is not None or extra_paths is not None or include_packages:
+            raise ValueError("project-native observation excludes paths, extra paths, and packages")
+        roots.extend(project_skill_roots(project_native_root, {"type": "project"}))
     else:
-        roots.extend((path, {"type": "path"}) for path in paths)
+        if extra_paths:
+            roots.extend((path, {"type": "path"}) for path in extra_paths)
+        if paths is None:
+            roots.extend(default_source_roots())
+        else:
+            roots.extend((path, {"type": "path"}) for path in paths)
     for root, source in roots:
         try:
             skill_dirs = _skill_dirs(root)

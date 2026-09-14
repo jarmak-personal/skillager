@@ -98,10 +98,14 @@ class SearchViewBehaviorTests(unittest.TestCase):
         personal = self.search("merge", "--scope", "library", "--include-installed")
         self.assertEqual(len(personal["results"]), 1)
         self.assertIsNone(personal["results"][0]["search"]["installed"])
+        self.assertEqual(personal["results"][0]["exposure"], "unknown")
         self.checked(self.cli.run("review", "block", self.canonical, "--project-only", "--json"))
         self.assertEqual(len(self.search("merge", "--scope", "library", "--include-installed")["results"]), 1)
         hidden = self.search("merge", "--scope", "library", "--installed-project", str(self.project))
         self.assertEqual(hidden["results"], [])
+        observed = self.search("merge", "--scope", "library", "--installed-project", str(self.project), "--include-installed")
+        self.assertEqual(observed["results"][0]["exposure"], "unknown")
+        self.assertTrue(observed["results"][0]["search"]["installed"])
         nested = self.project / "nested"
         nested.mkdir()
         refused = self.search("merge", "--scope", "library", "--installed-project", str(nested), code=2)
@@ -119,6 +123,46 @@ class SearchViewBehaviorTests(unittest.TestCase):
         path.write_text(json.dumps({"schema": "skillager.search-installed.v1", "identities": [
             {"library_id": identifier, "skill_id": self.canonical, "path": "/forbidden"}]}))
         self.search("merge", "--scope", "library", "--installed-identities", str(path), code=2)
+
+    def test_nonproject_discovery_errors_do_not_disable_project_presence(self):
+        roots = [self.root / "home" / ".claude" / "skills" / "bad-global",
+                 self.project / ".venv" / ".skillager" / "skills" / "bad-environment",
+                 self.project / ".venv" / "lib" / "python3.13" / "site-packages" / "example" / "skills" / "bad-package"]
+        for path in roots:
+            path.mkdir(parents=True)
+            (path / "SKILL.md").write_text("# Bad manifest example\n\nDescribe quarantine metadata.\n")
+            (path / "skillager.yaml").write_text("schema: invalid\n")
+        observed = self.checked(self.cli.run("review", "--include-global", "--include-blocked", "--include-lint-blocked", "--json"))
+        self.assertTrue({"global", "environment", "python-package"} <= {
+            row["source"]["type"] for row in observed["selected"] if row["trust"] == "lint_blocked"})
+        self.assertEqual(self.search()["results"], [])
+        self.assertEqual(self.search("merge", "--scope", "library", "--installed-project", str(self.project))["results"], [])
+        native = self.project / ".claude" / "skills" / "bad-native"
+        native.mkdir(parents=True)
+        (native / "SKILL.md").write_text("# Native quarantine\n\nDescribe quarantine metadata.\n")
+        (native / "skillager.yaml").write_text("schema: invalid\n")
+        self.assertEqual(self.search(code=2)["reason_code"], "installed-state-unknown")
+
+    def test_explicit_project_keeps_caller_context_and_state_untouched(self):
+        selected = self.project
+        caller = self.root / "private-caller"
+        caller.mkdir()
+        (caller / "pyproject.toml").write_text('[project]\nname = "caller"\n')
+        caller_state = self.root / "caller-state"
+        caller_state.mkdir()
+        (caller_state / "trust.sqlite3").write_bytes(b"NOT A TRUST DATABASE")
+        self.cli.project = caller
+        self.cli.env["SKILLAGER_STATE_DIR"] = str(caller_state)
+        before = {str(path): path.read_bytes() for parent in (caller, caller_state) for path in parent.rglob("*") if path.is_file()}
+        hidden = self.search("merge", "--scope", "library", "--installed-project", str(selected))
+        self.assertEqual(hidden["context"]["project_root"], str(selected))
+        self.assertEqual(hidden["results"], [])
+        self.assertEqual(before, {str(path): path.read_bytes() for parent in (caller, caller_state) for path in parent.rglob("*") if path.is_file()})
+        # A subsequent default project observation still describes the caller.
+        self.cli.env["SKILLAGER_STATE_DIR"] = str(self.root / "fresh-caller-state")
+        caller_result = self.search("merge", "--include-installed")
+        self.assertEqual(caller_result["context"]["project_root"], str(caller))
+        self.assertFalse(caller_result["results"][0]["search"]["installed"])
 
     def test_search_keeps_approvals_originals_and_library_bytes_unchanged(self):
         def snapshot():
@@ -161,6 +205,9 @@ class SearchViewBehaviorTests(unittest.TestCase):
         self.assertEqual(self.search("merge", "--agent", "codex")["results"], [])
         shown = self.search("merge", "--include-installed", "--view", "copies")["results"]
         self.assertEqual({row["search"]["occurrence"]["kind"] for row in shown}, {"library", "full", "stub", "router-member"})
+        personal = self.search("merge", "--scope", "library", "--installed-project", str(project), "--include-installed", "--view", "copies")["results"]
+        self.assertEqual({row["search"]["occurrence"]["kind"] for row in personal}, {"library", "full", "stub", "router-member"})
+        self.assertTrue(all(row["exposure"] == "unknown" and row["search"]["installed"] is True for row in personal))
         for row in shown:
             occurrence = row["search"]["occurrence"]
             if "exposure" in occurrence:
@@ -280,6 +327,30 @@ class SearchViewBehaviorTests(unittest.TestCase):
         path.write_text(json.dumps({"schema": "skillager.search-installed.v1", "identities": [entry, entry]}))
         self.search("merge", "--scope", "library", "--installed-identities", str(path), code=2)
 
+    def test_deep_presence_json_has_a_bounded_refusal(self):
+        path = self.root / "deep.json"
+        path.write_text("[" * 10_000 + "]" * 10_000)
+        result = self.cli.run("search", "--view", "skills", "--scope", "library", "--installed-identities", str(path), "--json", "--", "merge")
+        value = self.checked(result, 2)
+        self.assertEqual(value["reason_code"], "invalid-installed-input")
+        self.assertEqual(value["results"], [])
+        self.assertEqual(result.stderr, "")
+
+    def test_legacy_and_view_options_cannot_silently_mix(self):
+        path = str(self.root / "not-read.json")
+        for option in (("--include-installed",), ("--installed-identities", path), ("--installed-project", str(self.project))):
+            with self.subTest(legacy_option=option):
+                result = self.cli.run("search", "--json", *option, "--", "merge")
+                self.assertEqual(result.code, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertEqual(result.stderr, "skillager: error: search presentation controls require --view skills|copies\n")
+        for options in ((), ("--json", "--installed-identities", path),
+                        ("--json", "--scope", "library", "--installed-identities", path, "--installed-project", str(self.project))):
+            with self.subTest(view_options=options):
+                result = self.cli.run("search", "--view", "skills", *options, "--", "merge")
+                value = self.checked(result, 2)
+                self.assertEqual(value["reason_code"], "invalid-options")
+                self.assertEqual(result.stderr, "")
     def test_structurally_rewritten_provenance_does_not_retarget_approved_identity(self):
         path = self.library / ".skillager" / "provenance.json"
         data = json.loads(path.read_text())

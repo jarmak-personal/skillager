@@ -33,10 +33,12 @@ def build_index(
     extra_paths: list[Path] | None = None,
     persist: bool = True,
     reuse_cache: bool = True,
+    project_native_root: Path | None = None,
 ) -> dict[str, Any]:
     approval_root = approval_root or state_root
     cached = _load_cached_entries(state_root) if reuse_cache else {}
-    skills, errors = discover(paths, include_packages=include_packages, extra_paths=extra_paths)
+    skills, errors = discover(paths, include_packages=include_packages, extra_paths=extra_paths,
+                              project_native_root=project_native_root)
     entries = []
     for skill in skills:
         fingerprint = content_tree_fingerprint(skill.root)

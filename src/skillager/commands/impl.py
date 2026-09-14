@@ -3996,7 +3996,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
-def _search_inventory(args: argparse.Namespace, *, deferred: bool, observation: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def _search_inventory(args: argparse.Namespace, *, deferred: bool) -> list[dict[str, Any]]:
     if getattr(args, "scope", "workspace") == "library":
         if load_library_registration(catalog_root(args)) is None:
             return []
@@ -4013,14 +4013,13 @@ def _search_inventory(args: argparse.Namespace, *, deferred: bool, observation: 
         if not project_tags.tag_skills(_current_project_dir(), args.tag):
             return []
         skills = list(_all_taggable_skill_map(
-            root(args), catalog_root(args), _current_project_dir(), defer_verification=deferred, observation=observation,
+            root(args), catalog_root(args), _current_project_dir(), defer_verification=deferred,
         ).values())
     else:
         skills = _effective_project_skills(
             root(args),
             catalog_root=catalog_root(args),
             defer_collection_verification=deferred,
-            observation=observation,
         )
         if not args.include_global:
             skills = [skill for skill in skills if skill.get("source", {}).get("type") != "global"]
@@ -4661,11 +4660,10 @@ def _effective_project_skills(
     include_lint_blocked: bool = False,
     project_dir: Path | None = None,
     defer_collection_verification: bool = False,
-    observation: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     catalog_root = catalog_root or state_root
     project_dir = (project_dir or _current_project_dir()).resolve()
-    by_id = _base_project_skill_map(state_root, catalog_root=catalog_root, project_dir=project_dir, observation=observation)
+    by_id = _base_project_skill_map(state_root, catalog_root=catalog_root, project_dir=project_dir)
     tag_membership = _project_tag_membership(project_dir)
     for skill in _collection_inventory_skills(
         state_root,
@@ -4686,7 +4684,7 @@ def _effective_project_skills(
     return _filter_current_inventory_exposures([by_id[skill_id] for skill_id in sorted(by_id)])
 
 
-def _base_project_skill_map(state_root: Path, *, catalog_root: Path, project_dir: Path, observation: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
+def _base_project_skill_map(state_root: Path, *, catalog_root: Path, project_dir: Path) -> dict[str, dict[str, Any]]:
     exposure = _project_exposure(project_dir)
     native_prefixes = _native_root_prefixes(project_dir)
     extra_paths = _active_setup_paths(state_root)
@@ -4697,8 +4695,6 @@ def _base_project_skill_map(state_root: Path, *, catalog_root: Path, project_dir
         extra_paths=extra_paths,
         persist=False,
     )
-    if observation is not None:
-        observation.update(skills=data.get("skills", []), errors=data.get("errors", []))
     by_id: dict[str, dict[str, Any]] = {}
     for skill in data.get("skills", []):
         item = _with_project_inventory_fields(skill, exposure, native_prefixes=native_prefixes)
@@ -4760,8 +4756,8 @@ def _project_tag_names(project_dir: Path) -> list[str]:
     return sorted(project_tags.load_tags(project_dir).get("tags", {}))
 
 
-def _all_taggable_skill_map(state_root: Path, catalog_root: Path, project_dir: Path, *, defer_verification: bool = False, observation: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
-    by_id = _base_project_skill_map(state_root, catalog_root=catalog_root, project_dir=project_dir, observation=observation)
+def _all_taggable_skill_map(state_root: Path, catalog_root: Path, project_dir: Path, *, defer_verification: bool = False) -> dict[str, dict[str, Any]]:
+    by_id = _base_project_skill_map(state_root, catalog_root=catalog_root, project_dir=project_dir)
     exposure = _project_exposure(project_dir)
     native_prefixes = _native_root_prefixes(project_dir)
     candidates = collection_search_candidates(catalog_root, trust_root=state_root) if defer_verification else select_collection_skills(
