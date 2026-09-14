@@ -329,12 +329,14 @@ class SearchViewBehaviorTests(unittest.TestCase):
 
     def test_deep_presence_json_has_a_bounded_refusal(self):
         path = self.root / "deep.json"
-        path.write_text("[" * 10_000 + "]" * 10_000)
-        result = self.cli.run("search", "--view", "skills", "--scope", "library", "--installed-identities", str(path), "--json", "--", "merge")
-        value = self.checked(result, 2)
-        self.assertEqual(value["reason_code"], "invalid-installed-input")
-        self.assertEqual(value["results"], [])
-        self.assertEqual(result.stderr, "")
+        for value in ("[" * 10_000 + "]" * 10_000, "[]", "{"):
+            with self.subTest(size=len(value)):
+                path.write_text(value)
+                result = self.cli.run("search", "--view", "skills", "--scope", "library", "--installed-identities", str(path), "--json", "--", "merge")
+                payload = self.checked(result, 2)
+                self.assertEqual(payload["reason_code"], "invalid-installed-input")
+                self.assertEqual(payload["results"], [])
+                self.assertEqual(result.stderr, "")
 
     def test_legacy_and_view_options_cannot_silently_mix(self):
         path = str(self.root / "not-read.json")

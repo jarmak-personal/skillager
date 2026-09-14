@@ -148,5 +148,5 @@ def _read_installed(path: Path) -> set[str]:
         raise SearchRefusal("installed-input-limit")
     try:
         return installed_keys(json.loads(value))
-    except RecursionError:
+    except (RecursionError, ValueError):
         raise SearchRefusal("invalid-installed-input") from None
