@@ -373,8 +373,9 @@ class SkillagerDoctorTests(unittest.TestCase):
                 with redirect_stdout(human):
                     self.assertEqual(main(["doctor", "--no-packages"]), 11)
             data = json.loads(output.getvalue())
-            self.assertEqual(data["state"]["lint_overrides"], {"count": 1, "ids": ["project/linted"]})
-            self.assertIn("Lint overrides in effect: 1 (project/linted)", human.getvalue())
+            self.assertEqual(data["state"]["lint_overrides"]["count"], 2)
+            self.assertIn("project/linted", data["state"]["lint_overrides"]["ids"])
+            self.assertIn("Lint overrides in effect: 2", human.getvalue())
 
     def test_doctor_tracks_lint_override_across_collection_rename(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -403,7 +404,8 @@ class SkillagerDoctorTests(unittest.TestCase):
                 with redirect_stdout(output):
                     main(["doctor", "--no-packages", "--json"])
             data = json.loads(output.getvalue())
-            self.assertEqual(data["state"]["lint_overrides"], {"count": 1, "ids": ["newcol/lintbait"]})
+            self.assertEqual(data["state"]["lint_overrides"]["count"], 2)
+            self.assertIn("newcol/lintbait", data["state"]["lint_overrides"]["ids"])
 
     def test_doctor_migration_review_exits_thirteen(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

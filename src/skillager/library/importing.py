@@ -8,11 +8,10 @@ from typing import Any
 
 from ..catalog.impl import refresh_collection, select_collection_skills
 from ..skills.index import build_index
-from ..skills.tree import copy_content_tree
 from ..state.locking import resource_locks
 from ..state.statefiles import read_user_json
-from ..trust import APPROVED_TRUST_STATES, approval_key_for, content_hash, set_trust
-from .candidate import index_library_candidate
+from ..trust import APPROVED_TRUST_STATES, approval_key_for, set_trust
+from .candidate import prepare_library_candidate
 from .git import LibraryGitError, commit_paths, path_changes, repository_status, verified_version_reference
 from .metadata import load_library_provenance, set_import_provenance
 from .model import LIBRARY_NAMESPACE, normalize_skill_name
@@ -125,15 +124,9 @@ def import_library_skill(
         candidate_entry: dict[str, Any]
         with tempfile.TemporaryDirectory(prefix="skillager-import-", dir=layout.root.parent) as tmp:
             candidate = Path(tmp) / name
-            copied_files = copy_content_tree(source_root, candidate)
-            skill_file = candidate / "SKILL.md"
-            if skill_file.is_symlink() or not skill_file.is_file():
-                raise ValueError("import source does not contain a regular canonical SKILL.md")
-            if content_hash(source_root) != expected_hash:
-                raise ValueError("import source changed while it was being copied; no library files were written")
-            candidate_entry = index_library_candidate(candidate, layout, registration.library_id, name)
-            if candidate_entry["content_hash"] != expected_hash:
-                raise ValueError("filtered import tree does not reproduce the reviewed source content hash")
+            copied_files, candidate_entry = prepare_library_candidate(
+                source_root, candidate, layout, registration.library_id, name, expected_hash,
+            )
             lint_override, risk_override = _acceptance_overrides(
                 candidate_entry,
                 override_lint=override_lint,
@@ -226,24 +219,31 @@ def import_library_skill(
         }
 
 
-def _external_skill_candidates(project_state: Path, catalog_root: Path, skill_id: str) -> list[dict[str, Any]]:
+def import_inventory(project_state: Path, catalog_root: Path, *, extra_paths: list[Path] | None = None) -> dict[str, Any]:
+    """Resolve the effective import inventory once, retaining discovery failures."""
     local = build_index(
         project_state,
         include_packages=True,
         approval_root=catalog_root,
-        extra_paths=_saved_setup_paths(project_state),
+        extra_paths=list(dict.fromkeys([*(_saved_setup_paths(project_state) or []), *(extra_paths or [])])),
         persist=False,
-    ).get("skills", [])
+    )
+    errors = list(local.get("errors", []))
     collections = select_collection_skills(
         catalog_root,
         trust_root=project_state,
         approval_root=catalog_root,
         include_blocked=True,
         include_lint_blocked=True,
+        discovery_errors=errors,
     )
+    return {"skills": [*local.get("skills", []), *collections], "errors": errors}
+
+
+def _external_skill_candidates(project_state: Path, catalog_root: Path, skill_id: str) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
-    for skill in [*local, *collections]:
+    for skill in import_inventory(project_state, catalog_root)["skills"]:
         if skill.get("id") != skill_id and skill.get("_claimed_id") != skill_id:
             continue
         if (skill.get("source") or {}).get("ownership") == "library":

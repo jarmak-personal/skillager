@@ -381,13 +381,14 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(listed):
                     self.assertEqual(main(["list", "--json"]), 0)
                 listed_data = json.loads(listed.getvalue())
-                self.assertEqual([skill["id"] for skill in listed_data], ["path/gis-domain"])
+                self.assertEqual([skill["id"] for skill in listed_data if not skill["id"].startswith("lib/")], ["path/gis-domain"])
 
                 searched = StringIO()
                 with redirect_stdout(searched):
                     self.assertEqual(main(["search", "spatial", "--json"]), 0)
                 searched_data = json.loads(searched.getvalue())
-                self.assertEqual(searched_data[0]["id"], "path/gis-domain")
+                self.assertIn("path/gis-domain", [skill["id"] for skill in searched_data])
+                self.assertTrue(any(skill["id"].startswith("lib/") for skill in searched_data))
 
                 shown = StringIO()
                 with redirect_stdout(shown):
@@ -402,8 +403,8 @@ class SkillagerSetupTests(unittest.TestCase):
                 with redirect_stdout(listed):
                     self.assertEqual(main(["list", "--no-packages", "--summary-json"]), 0)
                 inventory = json.loads(listed.getvalue())
-                self.assertEqual(inventory["total"], 1)
-                self.assertEqual(inventory["source_entry_count"], 1)
+                self.assertEqual(inventory["total"], 2)
+                self.assertEqual(inventory["source_entry_count"], 2)
                 status_scope = json.loads((state / "status_scope.json").read_text(encoding="utf-8"))
                 self.assertEqual(status_scope["selected_count"], 1)
 
@@ -435,9 +436,9 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["list", "--no-packages", "--summary-json"]), 0)
             inventory = json.loads(listed.getvalue())
-            self.assertEqual(inventory["total"], 1)
-            self.assertEqual(inventory["source_entry_count"], 1)
-            self.assertEqual(inventory["sources"], [{"source": "vibespatial", "count": 1, "ids": ["vibespatial/gis-domain"]}])
+            self.assertEqual(inventory["total"], 2)
+            self.assertEqual(inventory["source_entry_count"], 2)
+            self.assertEqual([item for item in inventory["sources"] if item["source"] != "lib"], [{"source": "vibespatial", "count": 1, "ids": ["vibespatial/gis-domain"]}])
             self.assertNotIn("manifest_lint", inventory)
             self.assertNotIn("scan", inventory)
 
@@ -468,7 +469,7 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["setup", "--source", "project", "--no-packages"]), 0)
             trust_log = load_trust(catalog_state)
-            self.assertEqual(len(trust_log.get("global_approvals", {})), 1)
+            self.assertEqual(len(trust_log.get("global_approvals", {})), 2)
             self.assertFalse((state / "trust.sqlite3").exists())
 
             reset = StringIO()
@@ -484,7 +485,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertEqual(reset_data["global_approved"], 1)
             self.assertEqual(reset_data["review_needed"], 0)
             self.assertEqual(reset_data["approved"], 1)
-            self.assertEqual(reset_data["fresh_project_reset"]["retained_global_state"]["global_approvals"], 1)
+            self.assertEqual(reset_data["fresh_project_reset"]["retained_global_state"]["global_approvals"], 2)
             self.assertEqual(reset_data["approval_provenance"]["reused_global_exact_hash_approvals"], 1)
             self.assertEqual(reset_data["approval_provenance"]["reviewed_this_run"], 0)
             self.assertEqual(reset_data["approval_provenance"]["scanner"]["current_content_scanned"], 1)
@@ -515,7 +516,7 @@ class SkillagerSetupTests(unittest.TestCase):
             ):
                 self.assertEqual(main(["setup", "--source", "project", "--accept-low", "--summary-json", "--no-packages"]), 0)
             trust_log = load_trust(catalog_state)
-            self.assertEqual(len(trust_log.get("global_approvals", {})), 1)
+            self.assertEqual(len(trust_log.get("global_approvals", {})), 2)
 
             output = StringIO()
             with (
@@ -564,7 +565,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("Project tags detached=1", text)
             self.assertIn("sessions cleared=1", text)
             self.assertIn("saved setup scope cleared=1", text)
-            self.assertIn("Retained global state: 1 approval, 0 catalog tags, 0 tag members, 1 collection", text)
+            self.assertIn("Retained global state: 2 approvals, 0 catalog tags, 0 tag members, 2 collections", text)
             self.assertIn("exposed skill targets", text)
             self.assertFalse((state / "tags.json").exists())
             self.assertFalse((state / "sessions").exists())
@@ -838,8 +839,8 @@ class SkillagerSetupTests(unittest.TestCase):
                 self.assertEqual(main(["setup", "--no-packages", "--non-interactive", "--json"]), 0)
             payload = json.loads(json_output.getvalue())
             self.assertNotIn("_scope_inventory", payload)
-            self.assertEqual(payload["no_manifest_skills"]["count"], 2)
-            self.assertEqual([skill["id"] for skill in payload["selected"]], ["project/approved"])
+            self.assertEqual(payload["no_manifest_skills"]["count"], 3)
+            self.assertEqual([skill["id"] for skill in payload["selected"] if not skill["id"].startswith("lib/")], ["project/approved"])
 
     def test_interactive_setup_does_not_offer_to_reinstall_current_working_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -885,7 +886,7 @@ class SkillagerSetupTests(unittest.TestCase):
             self.assertIn("Working skill: current", text)
             self.assertNotIn("Stub candidates", text)
             self.assertIn("On-demand choices", text)
-            self.assertIn("1 Codex-ready choice remains available on demand", text)
+            self.assertIn("2 Codex-ready choices remain available on demand", text)
             self.assertIn("skillager list --agent codex", text)
 
     def test_interactive_setup_hides_skills_after_approval(self) -> None:

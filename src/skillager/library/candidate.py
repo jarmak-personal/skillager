@@ -8,6 +8,7 @@ from ..review_gates import apply_review_metadata
 from ..scan import scan_path
 from ..schema import QuarantinedSkill, SchemaError, load_skill_from_dir, quarantine_skill_from_dir
 from ..trust import content_hash
+from ..skills.tree import ContentTreeLimits, copy_content_tree
 from .model import LIBRARY_NAMESPACE, LibraryLayout
 
 
@@ -46,4 +47,21 @@ def index_library_candidate(
     return entry
 
 
-__all__ = ["index_library_candidate"]
+def prepare_library_candidate(
+    source: Path, candidate: Path, layout: LibraryLayout, library_id: str, name: str,
+    expected_hash: str, *, limits: ContentTreeLimits | None = None,
+) -> tuple[list[str], dict[str, Any]]:
+    """Shared verified-copy boundary for explicit import and approved synchronization."""
+    copied = copy_content_tree(source, candidate, limits=limits)
+    skill_file = candidate / "SKILL.md"
+    if skill_file.is_symlink() or not skill_file.is_file():
+        raise ValueError("import source does not contain a regular canonical SKILL.md")
+    if content_hash(source) != expected_hash:
+        raise ValueError("import source changed while it was being copied; no library files were written")
+    entry = index_library_candidate(candidate, layout, library_id, name)
+    if entry["content_hash"] != expected_hash:
+        raise ValueError("filtered import tree does not reproduce the reviewed source content hash")
+    return copied, entry
+
+
+__all__ = ["index_library_candidate", "prepare_library_candidate"]

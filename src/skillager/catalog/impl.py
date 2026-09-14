@@ -192,6 +192,7 @@ def select_collection_skills(
     include_blocked: bool = False,
     include_lint_blocked: bool = False,
     refresh_library: bool = True,
+    discovery_errors: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     return select_visible_skills(
         _collection_skills(
@@ -200,6 +201,7 @@ def select_collection_skills(
             trust_root=trust_root,
             approval_root=approval_root,
             refresh_library=refresh_library,
+            discovery_errors=discovery_errors,
         ),
         include_blocked=include_blocked,
         include_lint_blocked=include_lint_blocked,
@@ -213,9 +215,10 @@ def _collection_skills(
     trust_root: Path | None = None,
     approval_root: Path | None = None,
     refresh_library: bool = True,
+    discovery_errors: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     with trust_snapshot([trust_root or state_root, approval_root or trust_root or state_root]):
-        return _collection_skills_snapshot(state_root, name, trust_root=trust_root, approval_root=approval_root, refresh_library=refresh_library)
+        return _collection_skills_snapshot(state_root, name, trust_root=trust_root, approval_root=approval_root, refresh_library=refresh_library, discovery_errors=discovery_errors)
 
 
 def _collection_skills_snapshot(
@@ -225,6 +228,7 @@ def _collection_skills_snapshot(
     trust_root: Path | None = None,
     approval_root: Path | None = None,
     refresh_library: bool = True,
+    discovery_errors: list[dict[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     names = [_slug(name)] if name else sorted(load_collections(state_root).get("collections", {}))
     trust_root = trust_root or state_root
@@ -232,6 +236,8 @@ def _collection_skills_snapshot(
     skills: list[dict[str, Any]] = []
     for collection_name in names:
         data = _load_or_refresh_collection_index(state_root, collection_name, refresh_library=refresh_library)
+        if discovery_errors is not None:
+            discovery_errors.extend(data.get("errors", []))
         for skill in data.get("skills", []):
             skill = dict(skill)
             if skill.get("id") and skill.get("content_hash"):
@@ -287,6 +293,7 @@ def _trust_with_collection_migration_alias(
         if old_trust.get("state") in {"discovered", "lint_blocked"}:
             continue
         aliased = dict(old_trust)
+        aliased["_decision_skill_id"] = old_id
         aliased["reason"] = aliased.get("reason") or "collection-id-migration"
         return aliased
     return trust
@@ -626,6 +633,8 @@ def _apply_approval_metadata(entry: dict[str, Any], approval_key: str | None, tr
         entry["trust_reason"] = trust["reason"]
     if trust.get("scope"):
         entry["trust_scope"] = trust["scope"]
+    if trust.get("_decision_skill_id"):
+        entry["_decision_skill_id"] = trust["_decision_skill_id"]
 
 
 def _index_collection_skills(
@@ -711,6 +720,12 @@ def _apply_library_provenance(entry: dict[str, Any], provenance_skills: dict[str
         return
     if isinstance(record.get("imported_from"), dict):
         entry["imported_from"] = dict(record["imported_from"])
+    sync = record.get("sync")
+    if isinstance(sync, dict) and sync.get("schema") == "skillager.library-sync-lineage.v1":
+        # Compact references only; authoritative lineage is observed once through
+        # library sync --status, never recursively loaded for each inventory row.
+        entry["lineage_id"] = sync.get("lineage_id")
+        entry["source_identity"] = sync.get("source_identity")
 
 
 def _collection_skill(

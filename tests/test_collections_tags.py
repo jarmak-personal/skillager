@@ -88,14 +88,14 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(raw_collection_review):
                     self.assertEqual(main(["review", "--source", "collection", "--json"]), 0)
                 raw_collection_data = json.loads(raw_collection_review.getvalue())
-                self.assertEqual([skill["id"] for skill in raw_collection_data["selected"]], ["community/gis-domain"])
+                self.assertEqual([skill["id"] for skill in raw_collection_data["selected"] if not skill["id"].startswith("lib/")], ["community/gis-domain"])
 
                 compact_setup = StringIO()
                 with redirect_stdout(compact_setup):
                     self.assertEqual(main(["setup", "--no-packages", "--summary-json"]), 0)
                 compact_data = json.loads(compact_setup.getvalue())
-                self.assertEqual(compact_data["selected"], 1)
-                self.assertEqual(compact_data["selected_ids"], ["community/gis-domain"])
+                self.assertEqual(compact_data["selected"], 2)
+                self.assertIn("community/gis-domain", compact_data["selected_ids"])
                 self.assertNotIn("selected", compact_data.get("action", {}))
 
                 working = StringIO()
@@ -108,7 +108,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 working_human = StringIO()
                 with redirect_stdout(working_human):
                     self.assertEqual(main(["working"]), 0)
-                self.assertIn("0 exposed source entries, 1 on demand.", working_human.getvalue())
+                self.assertIn("0 exposed source entries, 2 on demand.", working_human.getvalue())
 
                 project_tags = StringIO()
                 with redirect_stdout(project_tags):
@@ -121,8 +121,8 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(inventory_output):
                     self.assertEqual(main(["list", "--summary-json", "--agent", "codex"]), 0)
                 inventory_data = json.loads(inventory_output.getvalue())
-                self.assertEqual(inventory_data["total"], 1)
-                self.assertEqual(inventory_data["counts"]["by_source"], {"collection": 1})
+                self.assertEqual(inventory_data["total"], 2)
+                self.assertEqual(inventory_data["counts"]["by_source"], {"collection": 2})
                 self.assertNotIn("by_risk", inventory_data["counts"])
                 self.assertNotIn("risk", inventory_data["skills"][0])
 
@@ -136,7 +136,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                 with redirect_stdout(search_output):
                     self.assertEqual(main(["search", "gis", "--json"]), 0)
                 search_data = json.loads(search_output.getvalue())
-                self.assertEqual([skill["id"] for skill in search_data], ["community/gis-domain"])
+                self.assertEqual([skill["id"] for skill in search_data if not skill["id"].startswith("lib/")], ["community/gis-domain"])
                 self.assertIn("gis", search_data[0]["tags"])
                 self.assertTrue(search_data[0]["available"])
                 self.assertNotIn("trust", search_data[0])
@@ -845,7 +845,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     with chdir(project_b), redirect_stdout(unattached):
                         self.assertEqual(main(["list", "--summary-json", "--agent", "codex"]), 0)
                     unattached_data = json.loads(unattached.getvalue())
-                    self.assertEqual(unattached_data["total"], 2)
+                    self.assertEqual(unattached_data["total"], 4)
                     project_b_working = StringIO()
                     with chdir(project_b), redirect_stdout(project_b_working):
                         self.assertEqual(main(["working", "--json"]), 0)
@@ -858,7 +858,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     project_b_search = StringIO()
                     with chdir(project_b), redirect_stdout(project_b_search):
                         self.assertEqual(main(["search", "gis", "--json"]), 0)
-                    self.assertEqual([skill["id"] for skill in json.loads(project_b_search.getvalue())], ["community/gis-domain"])
+                    self.assertEqual([skill["id"] for skill in json.loads(project_b_search.getvalue()) if not skill["id"].startswith("lib/")], ["community/gis-domain"])
 
                     with chdir(project_b), redirect_stdout(StringIO()):
                         self.assertEqual(main(["tag", "add", "gis", "community/gis-domain"]), 0)
@@ -869,13 +869,13 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     with chdir(project_b), redirect_stdout(review):
                         self.assertEqual(main(["setup", "--no-packages", "--source", "collection", "--accept-low", "--json"]), 0)
                     review_data = json.loads(review.getvalue())
-                    self.assertEqual(review_data["summary"]["by_trust"], {"reviewed": 2})
+                    self.assertEqual(review_data["summary"]["by_trust"], {"reviewed": 4})
 
                     raw_review = StringIO()
                     with chdir(project_a), redirect_stdout(raw_review):
                         self.assertEqual(main(["review", "--source", "collection", "--json"]), 0)
                     raw_review_data = json.loads(raw_review.getvalue())
-                    self.assertEqual({skill["id"] for skill in raw_review_data["selected"]}, {"community/gis-domain", "community/topology"})
+                    self.assertEqual({skill["id"] for skill in raw_review_data["selected"] if not skill["id"].startswith("lib/")}, {"community/gis-domain", "community/topology"})
 
                     project_b_status = StringIO()
                     with chdir(project_b), redirect_stdout(project_b_status):
@@ -887,7 +887,7 @@ class SkillagerCollectionsTagsTests(unittest.TestCase):
                     project_a_status = StringIO()
                     with chdir(project_a), redirect_stdout(project_a_status):
                         self.assertEqual(main(["list", "--summary-json", "--agent", "codex"]), 0)
-                    self.assertEqual(json.loads(project_a_status.getvalue())["total"], 2)
+                    self.assertEqual(json.loads(project_a_status.getvalue())["total"], 4)
 
     def test_project_tag_remembers_external_catalog_for_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

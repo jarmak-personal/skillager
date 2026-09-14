@@ -5,7 +5,7 @@ This repository builds Skillager, a local CLI approval and activation layer for 
 ## Working Rules
 
 - Treat the CLI as the public API. Prefer behavior-preserving changes and keep user-facing command contracts stable.
-- Treat the personal library as the canonical ownership path for skills the user creates or explicitly imports. Preserve in-place external discovery; never migrate a project, package, environment, native, or collection skill into the library automatically.
+- Treat the personal library as the canonical ownership path for authored, imported, and approved synchronized skills. Approval and setup preserve identical verified copies of every approved source type in the effective inventory, including project-only approvals, for reuse across projects. Preserve originals, original decision scope/evidence, pins, and customized destinations. Metadata reads never synchronize; existing approved inventories use explicit `library sync --approved`.
 - Treat discovery as part of the public product contract. Skillager should continue to find project skills, child skill repositories, project `.venv`/`venv` environment skills, installed package skills, and relevant native agent skill directories without users hand-wiring paths.
 - Keep approval and exposure separate: approval records reviewed content hashes; exposure writes native, stub, or router skills for an agent.
 - Do not expose full skill bodies in metadata commands. `working`, `list`, `search`, `show` without `--content`, `tag show`, `tag list`, and summary JSON outputs should stay metadata-only.

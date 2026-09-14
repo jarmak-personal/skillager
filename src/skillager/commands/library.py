@@ -24,6 +24,7 @@ from ..library.versioning import (
     restore_library_skill,
 )
 from .context import catalog_root, current_project_dir, terminal_can_prompt
+from .library_sync import add_sync_parser
 
 
 def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -53,6 +54,7 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         ),
     )
     library_sub = parser.add_subparsers(required=True)
+    add_sync_parser(library_sub)
     init = library_sub.add_parser("init", help="Initialize or register the personal library.")
     init.add_argument("--path", type=Path, help="Custom library root. Defaults to ~/.skillager/library.")
     init.add_argument("--no-git", action="store_true", help="Initialize without Git history support.")

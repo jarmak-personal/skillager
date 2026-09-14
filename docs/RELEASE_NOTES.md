@@ -1,5 +1,15 @@
 # Release Notes
 
+## Unreleased
+
+- Preserve identical reusable personal-library copies after source approval and
+  setup, including project-only approvals across every effectively discovered
+  source type. Keep original scope/evidence and origin files intact.
+- Add explicit `library sync --approved` backfill and metadata-only `--status`
+  reconciliation, exact-library binding, bounded batches, and public lineage.
+  Protect pinned, blocked, customized, and independently authored/imported copies;
+  report partial/pending/uncertain effects without automatic retry or exposure.
+
 ## skillager 0.9.0
 
 This release recenters Skillager on a canonical personal library for skills the user
