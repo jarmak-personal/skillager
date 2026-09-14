@@ -11,7 +11,13 @@ def connect_database(path: Path, *, writable: bool = False) -> sqlite3.Connectio
     """Open user-owned SQLite state without following file/sidecar symlinks."""
     for candidate in (path, *(Path(str(path) + suffix) for suffix in ("-journal", "-wal", "-shm"))):
         if candidate.exists() or candidate.is_symlink():
-            _assert_user_owned_regular_file(candidate)
+            try:
+                _assert_user_owned_regular_file(candidate)
+            except (FileNotFoundError, ValueError):
+                # SQLite can remove optional sidecars between validation stats.
+                # A missing main database or any still-present unsafe path fails.
+                if candidate == path or candidate.exists() or candidate.is_symlink():
+                    raise
     if writable:
         path.parent.mkdir(parents=True, exist_ok=True)
         try:

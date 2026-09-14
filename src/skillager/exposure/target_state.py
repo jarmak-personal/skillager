@@ -100,10 +100,14 @@ def matches_materialized_target(root: Path, sidecar: dict[str, Any]) -> bool:
         return False
 
 
-def target_state_manifest(root: Path) -> dict[str, dict[str, Any]]:
+def target_state_manifest(root: Path, *, max_entries: int | None = None, max_bytes: int | None = None) -> dict[str, dict[str, Any]]:
     """Describe every target entry without returning file content or following links."""
     result: dict[str, dict[str, Any]] = {}
+    total_bytes = 0
     for relative, path, entry_stat in _walk_entries(root):
+        total_bytes += entry_stat.st_size if stat.S_ISREG(entry_stat.st_mode) else 0
+        if (max_entries is not None and len(result) >= max_entries) or (max_bytes is not None and total_bytes > max_bytes):
+            raise ValueError("exposure target exceeds complete effect limits")
         item: dict[str, Any] = {"mode": stat.S_IMODE(entry_stat.st_mode)}
         if stat.S_ISDIR(entry_stat.st_mode):
             item["type"] = "directory"

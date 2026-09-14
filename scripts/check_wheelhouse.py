@@ -94,6 +94,7 @@ def _assert_core_wheel_docs(wheel: Path) -> None:
     required = {
         "skillager/docs/RELEASE_NOTES.md",
         "skillager/docs/USER_GUIDE.md",
+        "skillager/docs/EXPOSURE_PLANS.md",
     }
     missing = sorted(required - names)
     if missing:

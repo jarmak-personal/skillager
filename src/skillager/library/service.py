@@ -17,6 +17,7 @@ from ..catalog.impl import (
     relocate_library_collection,
     select_collection_skills,
 )
+from ..exposure.identity import library_id, recorded_source_keys, source_key
 from ..lint import blocking_findings
 from ..scan import scan_text
 from ..simple_yaml import load_mapping
@@ -759,6 +760,7 @@ def _skill_status(
         "exposures": _library_exposures(
             project_dir,
             str(skill["id"]),
+            source_library_id=identity.library_id,
             current_approved_hash=(
                 str(accepted_hash)
                 if acceptance == "accepted" and isinstance(accepted_hash, str)
@@ -821,7 +823,7 @@ def _missing_skill_status(
         "scan": _compact_scan(None),
         "git": git_paths,
         "history": _history_availability(identity, git, registration.layout),
-        "exposures": _library_exposures(project_dir, skill_id, current_approved_hash=None),
+        "exposures": _library_exposures(project_dir, skill_id, source_library_id=identity.library_id, current_approved_hash=None),
     }
 
 
@@ -1050,6 +1052,7 @@ def _library_exposures(
     skill_id: str,
     *,
     current_approved_hash: str | None,
+    source_library_id: str,
 ) -> list[dict[str, Any]]:
     if project_dir is None:
         return []
@@ -1071,7 +1074,7 @@ def _library_exposures(
                 source_type = data.get("source_type")
                 is_router_member = source_type == "skillager-router" and skill_id in set(data.get("skill_ids") or [])
                 is_direct = (data.get("source_id") or data.get("id")) == skill_id
-                if not (is_router_member or is_direct):
+                if not (is_router_member or is_direct) or recorded_source_keys(data).get(skill_id) != source_key(skill_id, source_library_id):
                     continue
                 kind = "router" if is_router_member else "stub" if source_type == "skillager-stub" else "native"
                 item = {
@@ -1080,6 +1083,7 @@ def _library_exposures(
                     "kind": kind,
                     "path": str(sidecar.parent.resolve()),
                     "source_hash": None if is_router_member else data.get("source_hash"),
+                    "source_library_id": library_id(source_library_id),
                     "router": data.get("router_slug") if is_router_member else None,
                 }
                 if is_direct:

@@ -105,6 +105,11 @@ The preview lists all projected file changes and returns a confirmation command
 bound to that source and target. See the [agent CLI guide](docs/AGENT_CLI_GUIDE.md#respect-owner-boundaries)
 for confirmation and refusal handling.
 
+Local native adoption, named router grouping/membership/ungrouping, and preserved
+native removal use complete `expose --request-json` plans. Exact-copy Full/Stub
+changes use optional `--exposure-id`. See [local exposure plans](docs/EXPOSURE_PLANS.md)
+for the closed request schema, preservation rules, complete effects and recovery.
+
 Removal previews use `skillager expose --remove <exposure-id> --agent codex --json`
 and disclose the complete removed tree and target-folder permissions before confirmation.
 

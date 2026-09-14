@@ -27,6 +27,14 @@ def _legacy_path(root: Path) -> Path:
     return root / "trust.json"
 
 
+@contextmanager
+def locked_records(roots: list[Path]) -> Iterator[dict[Path, dict[str, Any]]]:
+    """Hold existing decision writer locks while reading; never initialize state."""
+    canonical = sorted({root.resolve() for root in roots}, key=str)
+    with resource_locks([_legacy_path(root) for root in canonical]):
+        yield {root: load(root) for root in canonical}
+
+
 def _backup_path(root: Path) -> Path:
     return root / "trust.json.migrated"
 
