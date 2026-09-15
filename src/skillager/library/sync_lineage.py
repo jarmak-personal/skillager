@@ -59,6 +59,19 @@ def canonical_approval_key(library_id: str, name: str) -> str:
     return f"library:{library_id}#{name}"
 
 
+def lineage_is_bound(stored: dict[str, Any], approval: dict[str, Any] | None) -> bool:
+    """An editable provenance record alone does not establish an approved derivation."""
+    derivation = (approval or {}).get("derived_from") or {}
+    if not isinstance(derivation, dict):
+        return False
+    private_witness = derivation.get("source_approval")
+    try:
+        return (derivation.get("lineage") == stored and isinstance(private_witness, dict)
+                and public_approval(private_witness) == stored["source_approval"])
+    except (KeyError, TypeError):
+        return False
+
+
 def lineage_status(
     stored: dict[str, Any], library: dict[str, Any], target: Path,
     approval: dict[str, Any] | None, working_hash: str | None,
@@ -66,9 +79,7 @@ def lineage_status(
     project_state: Path, catalog: Path, project_dir: Path | None, lint: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     evidence = stored["source_approval"]
-    derivation = (approval or {}).get("derived_from") or {}
-    private_witness = derivation.get("source_approval")
-    bound = derivation.get("lineage") == stored and isinstance(private_witness, dict) and public_approval(private_witness) == evidence
+    bound = lineage_is_bound(stored, approval)
     accepted = approval.get("content_hash") if approval else None
     trust = _record_trust_info(approval, working_hash or "", lint=lint, scope="global") or {}
     preservation = "pending"

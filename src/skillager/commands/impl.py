@@ -245,6 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-session-record", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--json", action="store_true", help="Emit search results as JSON.")
     p.add_argument("--full-json", action="store_true", help="Emit full indexed metadata instead of compact agent-facing search results.")
+    from .search_view import add_search_view_options
+    add_search_view_options(p)
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser(
@@ -3938,6 +3940,11 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
+    if args.view:
+        from .search_view import run_search_view
+        return run_search_view(args)
+    if args.include_installed or args.installed_identities or args.installed_project:
+        raise ValueError("search presentation controls require --view skills|copies")
     if args.limit < 0:
         raise ValueError("--limit must be 0 or greater")
     if args.compatible_only and not args.agent:

@@ -45,6 +45,7 @@ packages = ["src/skillager"]
 "docs/SAFETY_MODEL.md" = "skillager/docs/SAFETY_MODEL.md"
 "docs/SKILL_REPOSITORIES.md" = "skillager/docs/SKILL_REPOSITORIES.md"
 "docs/USER_GUIDE.md" = "skillager/docs/USER_GUIDE.md"
+"docs/SEARCH_VIEWS.md" = "skillager/docs/SEARCH_VIEWS.md"
 "examples" = "skillager/examples"
 
 [tool.hatch.build.targets.sdist]

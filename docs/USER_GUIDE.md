@@ -105,6 +105,10 @@ and returns metadata only, using the existing 50,000-character body search windo
 
 ## Search The Personal Library
 
+For opt-in grouped results and explicit installed/copy controls, see
+[known-skill search views](SEARCH_VIEWS.md). The existing search defaults below
+remain unchanged without `--view`.
+
 ```bash
 skillager search "database migration" --scope library --limit 20 --json
 ```
