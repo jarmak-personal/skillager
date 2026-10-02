@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import platform
 import shutil
@@ -145,13 +146,21 @@ def run_measurements(catalog: OwnedLibraryCatalog, args: argparse.Namespace, rep
         summarize(case)
     progress("All timing samples complete; starting exhaustive correctness traversals")
     started = time.perf_counter()
-    list_ids = {row["id"] for page in catalog.pages("list", limit=page_size) for row in page}
-    search_ids = {row["id"] for page in catalog.pages("search", limit=page_size) for row in page}
+    ids, page_counts = {}, {}
+    for command in ("list", "search"):
+        ids[command] = set()
+        page_counts[command] = 0
+        for page in catalog.pages(command, limit=page_size):
+            page_counts[command] += 1
+            ids[command].update(row["id"] for row in page)
+        if page_counts[command] != (args.size + page_size - 1) // page_size:
+            raise AssertionError("observed traversal page count does not match owned inventory")
+    list_ids, search_ids = ids["list"], ids["search"]
     if len(list_ids) != args.size or search_ids != list_ids:
         raise AssertionError("complete library/search traversals must contain the same exact owned inventory")
     report["traversal_proof"] = {"owned_count": len(list_ids), "search_count": len(search_ids),
-                                 "list_pages": (args.size + page_size - 1) // page_size,
-                                 "search_pages": (args.size + page_size - 1) // page_size,
+                                 "list_pages": page_counts["list"],
+                                 "search_pages": page_counts["search"],
                                  "seconds": time.perf_counter() - started}
 
 
@@ -192,6 +201,14 @@ def main() -> int:
     try:
         catalog = OwnedLibraryCatalog.open(size=args.size, seed=args.seed, resume=args.resume, timeout=args.timeout)
         report["fixture"] = str(catalog.root)
+        report["source"] = {
+            "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+            "product_trees": catalog.state["source_tree"].splitlines(),
+            "harness_sha256": {path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest() for path in (
+                "scripts/benchmark_library.py", "scripts/benchmark_measurement.py",
+                "tests/behavior/library_catalog.py", "tests/behavior/search_catalog.py", "tests/behavior/support.py",
+            )},
+        }
         write_report(args.output, report)
         progress(f"Fixture: {catalog.root}")
         catalog.build(progress)

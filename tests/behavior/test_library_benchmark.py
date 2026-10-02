@@ -6,10 +6,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from tests.behavior.support import REPO_ROOT
-from tests.behavior.library_catalog import source_tree
+from tests.behavior.library_catalog import OwnedLibraryCatalog, source_tree
 
 
 class OwnedLibraryBenchmarkBehaviorTests(unittest.TestCase):
@@ -51,6 +53,10 @@ class OwnedLibraryBenchmarkBehaviorTests(unittest.TestCase):
             self.assertEqual(payload["status"], "passed")
             self.assertEqual(payload["traversal_proof"]["owned_count"], 4)
             self.assertEqual(payload["traversal_proof"]["search_count"], 4)
+            self.assertEqual(payload["traversal_proof"]["list_pages"], 2)
+            self.assertEqual(payload["traversal_proof"]["search_pages"], 2)
+            self.assertEqual(payload["fixture_proof"]["list_pages"], 2)
+            self.assertEqual(payload["final_fixture_proof"]["list_pages"], 2)
             self.assertFalse(Path(payload["fixture"]).exists())
             commands = {item["name"]: item for item in payload["commands"]}
             self.assertEqual(len(commands), 14)
@@ -60,6 +66,38 @@ class OwnedLibraryBenchmarkBehaviorTests(unittest.TestCase):
                 self.assertTrue(all(sample["exit_code"] == 0 for sample in item["samples"]))
             self.assertTrue(all(sample["commit"] and sample["accepted_hash"] != sample["before_hash"] for sample in commands["accept_changed"]["samples"]))
             self.assertTrue(all(sample["commit"] is None and sample["accepted_hash"] == sample["before_hash"] for sample in commands["accept_unchanged"]["samples"]))
+
+    def test_iterator_refuses_short_public_cli_pages_even_when_all_ids_would_arrive(self):
+        catalog = OwnedLibraryCatalog.open(size=4, seed=1729)
+        try:
+            catalog.build()
+            run = catalog.run
+
+            def smaller_public_page(*argv):
+                argv = list(argv)
+                argv[argv.index("--limit") + 1] = "1"
+                return run(*argv)
+
+            for command in ("list", "search"):
+                with self.subTest(command=command):
+                    self.assertEqual(len(list(catalog.pages(command, limit=2))), 2)
+                    with patch.object(catalog, "run", side_effect=smaller_public_page):
+                        with self.assertRaisesRegex(AssertionError, "page row count"):
+                            list(catalog.pages(command, limit=2))
+                for early_end in (True, False):
+                    with self.subTest(command=command, early_end=early_end):
+                        def wrong_continuation(*argv):
+                            result = run(*argv)
+                            payload = result.json()
+                            if early_end or payload["next_cursor"] is None:
+                                payload["next_cursor"] = None if early_end else "unexpected-extra-page"
+                            return replace(result, stdout=json.dumps(payload))
+
+                        with patch.object(catalog, "run", side_effect=wrong_continuation):
+                            with self.assertRaisesRegex(AssertionError, "continuation"):
+                                list(catalog.pages(command, limit=2))
+        finally:
+            shutil.rmtree(catalog.root)
 
     def test_public_cli_fixture_has_owned_accepted_git_history_and_refuses_changed_resume(self):
         with tempfile.TemporaryDirectory() as tmp:

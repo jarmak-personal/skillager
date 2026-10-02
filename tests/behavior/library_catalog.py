@@ -213,6 +213,7 @@ class OwnedLibraryCatalog:
     def pages(self, command: str, *, limit: int):
         cursor = ""
         seen = set()
+        remaining = self.state["size"]
         while True:
             argv = ["list"] if command == "list" else ["search", QUERY]
             result = self.run(*argv, "--scope", "library", "--json", "--limit", str(limit), "--cursor", cursor)
@@ -220,12 +221,17 @@ class OwnedLibraryCatalog:
                 raise AssertionError("metadata page leaked a skill body")
             payload = result.json()
             rows = payload["skills" if command == "list" else "results"]
+            if len(rows) != min(limit, remaining):
+                raise AssertionError("page row count does not match remaining owned inventory")
             for row in rows:
                 if row["id"] in seen:
                     raise AssertionError("duplicate skill across pages")
                 seen.add(row["id"])
-            yield rows
+            remaining -= len(rows)
             cursor = payload["next_cursor"]
+            if (cursor is None) != (remaining == 0):
+                raise AssertionError("continuation does not match remaining owned inventory")
+            yield rows
             if cursor is None:
                 break
 
@@ -235,10 +241,13 @@ class OwnedLibraryCatalog:
         if library != self.root / "library" or status["counts"]["skills"] != self.state["size"] or status["git"]["mode"] != "system" or not status["git"]["clean"]:
             raise AssertionError("benchmark must have the exact clean Git-backed owned library")
         rows = []
-        for index, page in enumerate(self.pages("list", limit=page_size), 1):
+        page_count = 0
+        for page_count, page in enumerate(self.pages("list", limit=page_size), 1):
             rows.extend(page)
-            if index % 10 == 0:
+            if page_count % 10 == 0:
                 progress(f"Owned inventory proof: {len(rows)}/{self.state['size']} accepted rows traversed")
+        if page_count != (self.state["size"] + page_size - 1) // page_size:
+            raise AssertionError("observed list page count does not match owned inventory")
         paths = {Path(row["skill_file"]) for row in rows}
         actual = set((library / "skills").glob("*/SKILL.md"))
         if len(rows) != self.state["size"] or paths != actual or any(path.is_symlink() for path in paths):
@@ -262,7 +271,7 @@ class OwnedLibraryCatalog:
         self.state["proof"] = {"owned_files": len(actual), "accepted_count": len(rows), "owned_skill_md_bytes": sum(path.stat().st_size for path in actual), "library": status["library"],
                               "git": status["git"], "git_tracked_skills": tracked_skills, "git_commit_count": commit_count,
                               "history_versions": len(history["versions"]),
-                              "synced_history_versions": len(synced_history["versions"]), "list_pages": (len(rows) + page_size - 1) // page_size,
+                              "synced_history_versions": len(synced_history["versions"]), "list_pages": page_count,
                               "source_registrations": self.run("collection", "list", "--json").json(),
                               "previous_probe_hash": history["versions"][1]["content_hash"]}
         self.save()
