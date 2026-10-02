@@ -150,6 +150,29 @@ class SearchPaginationBehaviorTests(unittest.TestCase):
             {"library_id": identifier, "skill_id": "lib/summary"}]}))
         self.assertEqual(self.page(token, *options, code=15)["error"]["code"], "stale_cursor")
 
+    def test_unavailable_view_never_exposes_results_or_a_continuation_cursor(self) -> None:
+        # An unsynchronized native source makes canonical installed absence
+        # unknown in workspace scope; library scope has no presence observation.
+        earlier = {view: self.page("", "--view", view)["next_cursor"] for view in ("skills", "copies")}
+        source = self.project / ".skills" / "unrelated-original"
+        source.mkdir(parents=True)
+        (source / "SKILL.md").write_text("---\nname: Separate original\ndescription: Explain unrelated guidance.\n---\n\nInspect the source.\n")
+        for scope in ("workspace", "library"):
+            for view in ("skills", "copies"):
+                with self.subTest(scope=scope, view=view):
+                    options = ("--scope", scope, "--view", view)
+                    if scope == "workspace":
+                        stale = self.page(earlier[view], *options, code=15)
+                        self.assertEqual(stale["error"]["code"], "stale_cursor")
+                    refused = self.page("", *options, code=2)
+                    self.assertEqual(refused["status"], "unavailable")
+                    self.assertEqual(refused["reason_code"], "installed-state-unknown")
+                    self.assertEqual(refused["results"], [])
+                    self.assertIsNone(refused["next_cursor"])
+                    admitted = self.page("", *options, "--include-installed")
+                    self.assertEqual(len(admitted["results"]), 1)
+                    self.assertIsNotNone(admitted["next_cursor"])
+
     def test_quarantined_nonmatching_inventory_remains_snapshot_only(self) -> None:
         blocked = self.library / "skills" / "unmatched" / "skillager.yaml"
         blocked.write_text("schema: invalid\n")

@@ -107,6 +107,9 @@ def run_search_view(args: argparse.Namespace) -> int:
                                        presence=observation, exposures=exposures,
                                        supplied=sorted(supplied) if supplied is not None else None,
                                        context=payload["context"])
+        # A changed observation must invalidate an earlier traversal even when it
+        # now prevents proving installed absence. Cursor pages remain unadmitted
+        # until the same refusal check below has passed.
         if not paginated and not view.installed_complete and not args.include_installed:
             raise SearchRefusal("installed-state-unknown")
         candidates = cli._available_skills(view.candidates(args.include_installed))
@@ -142,9 +145,13 @@ def run_search_view(args: argparse.Namespace) -> int:
         payload.update(status="unavailable", reason_code="internal-error", results=[])
         kind = "KeyError" if isinstance(error, KeyError) else "TypeError"
         print(f"skillager: internal search view error ({kind}).", file=sys.stderr)
+    if paginated and payload["status"] != "completed":
+        payload["next_cursor"] = None
     encoded = json.dumps(payload, sort_keys=True)
     if len(encoded.encode("utf-8")) > SEARCH_RESULT_BYTES:
         payload.update(status="unavailable", reason_code="result-limit", results=[])
+        if paginated:
+            payload["next_cursor"] = None
         encoded = json.dumps(payload, sort_keys=True)
     print(encoded)
     return 0 if payload["status"] == "completed" else 1 if payload["reason_code"] == "internal-error" else 2
