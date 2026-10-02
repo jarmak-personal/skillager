@@ -40,7 +40,7 @@ def page_metadata(
         if decoded["request"] != request_hash:
             raise CursorError("invalid_cursor", "cursor belongs to a different request")
         if decoded["snapshot"] != snapshot:
-            raise CursorError("stale_cursor", "inventory changed; restart without --cursor")
+            raise CursorError("stale_cursor", "inventory changed; restart from the first page")
         offset = decoded["offset"]
         if offset >= len(rows):
             raise CursorError("invalid_cursor", "cursor offset is outside the inventory")

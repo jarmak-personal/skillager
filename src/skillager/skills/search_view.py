@@ -187,7 +187,7 @@ class SearchView:
         return [row.skill for row in self.sources.values()
                 if include_installed or row.group not in self.present]
 
-    def results(self, ranked: list[dict[str, Any]], *, copies: bool, limit: int,
+    def results(self, ranked: list[dict[str, Any]], *, copies: bool, limit: int | None,
                 current: Callable[[dict[str, Any]], bool], public: Callable[[dict[str, Any]], dict[str, Any]],
                 agent: str | None) -> list[dict[str, Any]]:
         by_identity = {(row.skill["id"], row.skill["root"]): row for row in self.sources.values()}
@@ -236,6 +236,6 @@ class SearchView:
                               "content_hash": match["content_hash"], "score": match["score"], "reasons": match["reasons"]},
                 }
                 result.append(payload)
-                if len(result) >= limit:
+                if limit is not None and len(result) >= limit:
                     return result
         return result
