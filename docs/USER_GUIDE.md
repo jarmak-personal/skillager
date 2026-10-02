@@ -103,6 +103,59 @@ other metadata/readiness commands remain read-only. Deleting these caches while
 Skillager is idle does not revoke approvals. Search still validates current content
 and returns metadata only, using the existing 50,000-character body search window.
 
+## Browse The Personal Library
+
+`list` keeps its existing workspace scope and output by default. To browse all owned
+skills from any directory, including pending drafts and blocked skills, use:
+
+```bash
+skillager list --scope library --json --limit 100
+```
+
+The response is a `skillager.list.v1` object with `scope: "library"`, `skills`,
+`next_cursor`, and `discovery_error_count`. The count is a bounded summary of
+indexing diagnostics for represented library rows; detailed exceptions and body
+text are omitted. Each row contains `id`, `name`, `description`, `status` (`accepted`,
+`pending`, or `blocked`), `accepted_hash`, and the canonical `SKILL.md` path in
+`skill_file`. `accepted_hash` is null before acceptance; after an edit it retains
+the previously accepted hash while the status becomes pending. Lint quarantine is
+reported as blocked. Names and descriptions use declared frontmatter metadata;
+the name falls back to the library directory name and a missing description is
+null. Unterminated frontmatter is ignored. Body paragraphs and headings are never
+used as metadata in this response.
+
+Library scope reads the personal catalog selected by `--catalog-state-dir`,
+`SKILLAGER_CATALOG_STATE_DIR`, or the user's default catalog. It does not consult
+project catalog bindings, discover project/package/native skills, or report
+workspace exposure. An uninitialized library returns an empty page. Library scope
+requires `--json`; workspace filters, `--summary-json`, and `--full-json` do not
+apply to this inventory.
+
+If the registered skills root cannot be completely traversed, or a skill fails
+indexing without a represented row, the command exits with **2** and emits the
+`skillager.error.v1` envelope with `code: "inventory_unavailable"` instead of a
+page. A missing registered skills root is unavailable, rather than an empty
+library. Preserve previously loaded rows until the library can be read again.
+Readable quarantined skills remain visible with their existing acceptance status;
+discovery diagnostics are part of cursor state even when row metadata is unchanged.
+Cached failure diagnostics are reobserved before paging, so recovered or removed
+failures cannot make an otherwise complete inventory remain unavailable.
+
+Rows are ordered lexically by skill ID. `--limit` defaults to 100 and must be
+greater than zero. Pass the opaque `next_cursor` unchanged to `--cursor`, using the
+same scope and limit. Null means the last page. Omitting the cursor (or passing an
+empty string) starts a new traversal. `list --limit` and `list --cursor` require
+library scope and do not change ordinary workspace list output.
+
+Any changed skill tree, inventory membership, acceptance state, or library
+registration invalidates an existing cursor. The CLI exits with **15** and emits
+`{"schema":"skillager.error.v1","error":{"code":"stale_cursor","message":"..."}}`
+instead of a page. Restart without a cursor and replace previously loaded rows.
+A malformed cursor or one used with a different request exits with **2** and the
+same error envelope with `code: "invalid_cursor"`. Cursors are traversal tokens,
+not approval or content-access grants. Paging bounds the output size; verifying
+the complete current library state still requires reading the inventory.
+
 ## Search The Personal Library
 
 For opt-in grouped results and explicit installed/copy controls, see

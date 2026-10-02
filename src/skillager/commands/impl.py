@@ -90,6 +90,8 @@ from .context import (
     root,
 )
 from .library import add_library_parser
+from .library_inventory import cmd_list_library
+from .pagination import CursorError
 from .importing import add_import_parser
 
 
@@ -143,6 +145,12 @@ def main(argv: list[str] | None = None) -> int:
         return args.func(args)
     except BrokenPipeError:
         return 1
+    except CursorError as exc:
+        if getattr(args, "json", False):
+            print(json.dumps(exc.payload(), indent=2, sort_keys=True))
+        else:
+            print(f"skillager: error: {exc.code}: {exc}", file=sys.stderr)
+        return exc.exit_code
     except Exception as exc:
         print(f"skillager: error: {exc}", file=sys.stderr)
         return 2
@@ -204,12 +212,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "list",
-        help="List effective project skill metadata.",
+        help="List workspace or personal-library skill metadata.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="List available effective project skills, including attached collection-tag skills.",
-        epilog="Examples:\n  skillager list\n  skillager list --summary-json --agent codex\n  skillager list --no-packages --json\n  skillager list --include-global\n  skillager list --source python-package --json\n  skillager list --source npm-package --json\n  skillager list --source cargo-package --json\n  skillager list --json --full-json",
+        description="List available effective workspace skills, including attached collection-tag skills. Library scope lists every owned skill as paginated JSON, including pending and blocked skills, without project discovery.",
+        epilog="Examples:\n  skillager list\n  skillager list --scope library --json --limit 100\n  skillager list --scope library --json --limit 100 --cursor TOKEN\n  skillager list --summary-json --agent codex\n  skillager list --no-packages --json\n  skillager list --include-global\n  skillager list --source python-package --json\n  skillager list --source npm-package --json\n  skillager list --source cargo-package --json\n  skillager list --json --full-json",
     )
     p.add_argument("--source")
+    p.add_argument("--scope", choices=["workspace", "library"], default="workspace", help="List effective workspace skills (default), or page all personal-library skill metadata without project discovery.")
+    p.add_argument("--limit", type=int, help="Personal-library page size (default: 100; greater than 0).")
+    p.add_argument("--cursor", help="Opaque cursor from the preceding personal-library JSON page.")
     p.add_argument("--activation")
     p.add_argument("--audience")
     p.add_argument("--package")
@@ -3898,6 +3909,10 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
+    if getattr(args, "scope", "workspace") == "library":
+        return cmd_list_library(args)
+    if getattr(args, "limit", None) is not None or getattr(args, "cursor", None) is not None:
+        raise ValueError("list --limit and --cursor require --scope library")
     if args.full_json:
         args.json = True
     if args.json and args.summary_json:
