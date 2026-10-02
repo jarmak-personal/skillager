@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import io
+import os
 import shutil
+import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
+
+from skillager.catalog import impl as catalog_impl
+from skillager.commands.impl import main
+from skillager.library.inventory import LibraryInventoryUnavailable, library_inventory
 
 from tests.behavior.support import BODY_SENTINEL, CliResult, SkillagerCli, make_basic_workspace
 
@@ -33,6 +42,12 @@ class LibraryInventoryBehaviorTests(unittest.TestCase):
             args.extend(["--cursor", cursor])
         return cli.run(*args)
 
+    def in_process_cli(self, cli: SkillagerCli, *argv: str) -> CliResult:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, cli.env, clear=True), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = main(list(argv))
+        return CliResult(code, stdout.getvalue(), stderr.getvalue())
+
     def test_every_owned_skill_appears_once_with_acceptance_and_metadata_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             library, cli = self.library(Path(tmp))
@@ -47,6 +62,7 @@ class LibraryInventoryBehaviorTests(unittest.TestCase):
                 self.assertEqual(data["schema"], "skillager.list.v1")
                 self.assertEqual(data["scope"], "library")
                 self.assertEqual(len(data["skills"]), 1)
+                self.assertEqual(data["discovery_error_count"], 1)
                 rows.extend(data["skills"])
                 cursor = data["next_cursor"]
                 if cursor is None:
@@ -59,6 +75,91 @@ class LibraryInventoryBehaviorTests(unittest.TestCase):
                 self.assertEqual(set(row), {"id", "name", "description", "status", "accepted_hash", "skill_file"})
                 self.assertEqual(Path(row["skill_file"]), (library / "skills" / row["id"].split("/")[1] / "SKILL.md").resolve())
                 self.assertNotIn("exposure", row)
+
+    @unittest.skipUnless(os.name == "posix" and os.geteuid() != 0, "requires POSIX permission enforcement")
+    def test_unreadable_roots_directories_and_files_refuse_live_and_cached_inventory(self) -> None:
+        for cached in (False, True):
+            for failed in ("root", "directory", "file"):
+                with self.subTest(cached=cached, failed=failed), tempfile.TemporaryDirectory() as tmp:
+                    library, cli = self.library(Path(tmp))
+                    if cached:
+                        self.checked(cli.run("collection", "refresh", "lib", "--json"))
+                    first = self.checked(self.page(cli))
+                    target = library / "skills"
+                    if failed != "root":
+                        target /= "zulu"
+                    if failed == "file":
+                        target /= "SKILL.md"
+                    mode = stat.S_IMODE(target.stat().st_mode)
+                    target.chmod(0)
+                    try:
+                        for cursor in (None, first["next_cursor"]):
+                            error = self.checked(self.page(cli, cursor), 2)
+                            self.assertEqual(error["schema"], "skillager.error.v1")
+                            self.assertEqual(error["error"]["code"], "inventory_unavailable")
+                            self.assertNotIn("skills", error)
+                    finally:
+                        target.chmod(mode)
+                    self.assertEqual(self.checked(self.page(cli)), first)
+
+    def test_disappearing_registered_skills_root_refuses_inventory_then_recovers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            library, cli = self.library(Path(tmp))
+            self.checked(cli.run("collection", "refresh", "lib", "--json"))
+            first = self.checked(self.page(cli))
+            skills = library / "skills"
+            moved = library / "skills-away"
+            skills.rename(moved)
+            try:
+                for cursor in (None, first["next_cursor"]):
+                    error = self.checked(self.page(cli, cursor), 2)
+                    self.assertEqual(error["error"]["code"], "inventory_unavailable")
+                    self.assertNotIn("skills", error)
+            finally:
+                moved.rename(skills)
+            self.assertEqual(self.checked(self.page(cli)), first)
+
+    def test_skill_disappearing_after_discovery_cannot_be_silently_omitted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            library, cli = self.library(Path(tmp))
+            entrypoint = library / "skills" / "zulu" / "SKILL.md"
+            original = entrypoint.read_bytes()
+            real_load = catalog_impl.load_skill_from_dir
+
+            def disappear(root, source):
+                if root == entrypoint.parent.resolve():
+                    entrypoint.unlink()
+                return real_load(root, source)
+
+            try:
+                with mock.patch.object(catalog_impl, "load_skill_from_dir", side_effect=disappear):
+                    with self.assertRaises(LibraryInventoryUnavailable) as error:
+                        library_inventory(Path(cli.env["SKILLAGER_CATALOG_STATE_DIR"]))
+                self.assertNotIn(BODY_SENTINEL, str(error.exception))
+            finally:
+                entrypoint.write_bytes(original)
+            self.assertEqual(len(self.checked(self.page(cli, limit="10"))["skills"]), 3)
+
+    def test_represented_discovery_error_changes_stale_cursor_without_body_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            library, cli = self.library(Path(tmp))
+            blocked = library / "skills" / "middle"
+            (blocked / "skillager.yaml").write_text("schema: unsupported-schema\n")
+            first = self.checked(self.page(cli))
+            real_select = catalog_impl.select_collection_skills
+
+            def additional_error(*args, **kwargs):
+                rows = real_select(*args, **kwargs)
+                kwargs["discovery_errors"].append({"path": str(blocked), "error": BODY_SENTINEL})
+                return rows
+
+            with mock.patch("skillager.library.inventory.select_collection_skills", side_effect=additional_error):
+                argv = ["list", "--scope", "library", "--json", "--limit", "1"]
+                page = self.checked(self.in_process_cli(cli, *argv))
+                self.assertEqual(page["skills"], first["skills"])
+                self.assertEqual(page["discovery_error_count"], first["discovery_error_count"] + 1)
+                stale = self.checked(self.in_process_cli(cli, *argv, "--cursor", first["next_cursor"]), 15)
+                self.assertEqual(stale["error"]["code"], "stale_cursor")
 
     def test_missing_description_never_uses_body_as_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
