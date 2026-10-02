@@ -189,7 +189,7 @@ Whole-library status is compact and comparatively quick. Other metadata reads ta
 pages take about 6.2–7.0 seconds; building their cache takes over 11 seconds. These reads
 need visible asynchronous loading and bounded pages. Avoid fetching all 50 pages on
 each interaction or invoking search on every keystroke. The measured page outputs
-are approximately 45–54 KiB; they are bounded, unlike a full inventory response.
+are approximately 44–53 KiB; they are bounded, unlike a full inventory response.
 
 Confirmed acceptance is too slow for a short synchronous interaction: changed
 acceptance takes roughly 72 seconds warm, with one observed sample taking 80.702
