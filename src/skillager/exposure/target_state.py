@@ -149,7 +149,7 @@ def write_materialized_sidecar(path: Path, sidecar: dict[str, Any], *, directory
         path.write_text(dumps(payload), encoding="utf-8")
     else:
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
-        with os.fdopen(os.open(path.name, flags, 0o644, dir_fd=directory_fd), "w", encoding="utf-8") as handle:
+        with os.fdopen(os.open(path.name, flags, 0o666, dir_fd=directory_fd), "w", encoding="utf-8") as handle:
             created = os.fstat(handle.fileno())
             if owned_entries is not None:
                 owned_entries[path.name] = (created.st_dev, created.st_ino)

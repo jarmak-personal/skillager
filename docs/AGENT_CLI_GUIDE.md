@@ -325,7 +325,7 @@ or historical restoration. The authenticated sidecar retains `scope: export`.
 Refusals preserve pending/blocked/lint gates and distinguish unaccepted versions
 from previously accepted versions that differ from current bytes. Do not bypass a
 refusal by exporting another hash or restoring a version without user direction.
-Preserve concurrent destination files and inspect a refused staging directory
+Preserve concurrent destination files and inspect a refused destination
 before retrying. See [Full export](USER_GUIDE.md#export-an-accepted-full-payload).
 
 ## Plan local native and router changes

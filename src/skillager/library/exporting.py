@@ -7,13 +7,11 @@ import re
 import stat
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from ..catalog.impl import select_collection_skills
 from ..compatibility import compatibility_problem
 from ..exposure.impl import prepare_direct_candidate, _verify_materialized_projection
-from ..exposure.native_payload import copy_native_tree_to_fd
-from ..exposure.target_state import target_state_manifest, write_materialized_sidecar
+from ..exposure.target_state import target_state_manifest
 from ..skills.tree import iter_content_files
 from ..state import approvals
 from ..trust import APPROVED_TRUST_STATES, approval_key_for, content_hash
@@ -46,7 +44,7 @@ def _observe(catalog: Path, skill_id: str, version: str, agent: str) -> tuple[di
     if skill.get("trust") == "lint_blocked":
         raise ExportRefusal("lint_blocked_content", "the selected skill is lint quarantined")
     accepted = record.get("content_hash") if record.get("state") in APPROVED_TRUST_STATES else None
-    if accepted is None and version == skill["content_hash"]:
+    if version == skill["content_hash"] and (accepted != version or skill.get("trust") not in APPROVED_TRUST_STATES):
         raise ExportRefusal("pending_content", "the current skill has not been accepted")
     if not approvals.version_was_accepted(catalog, key, version):
         raise ExportRefusal("version_not_accepted", "the requested version has no accepted-version evidence")
@@ -68,13 +66,17 @@ def _identity(metadata: os.stat_result) -> tuple[int, int]:
     return metadata.st_dev, metadata.st_ino
 
 
-def _open_directory(path: Path) -> int:
+def _open_directory(path: Path, *, identities: set[tuple[int, int]] | None = None) -> int:
     descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
+        if identities is not None:
+            identities.add(_identity(os.fstat(descriptor)))
         for name in path.parts[1:]:
             next_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = next_fd
+            if identities is not None:
+                identities.add(_identity(os.fstat(descriptor)))
         return descriptor
     except BaseException:
         os.close(descriptor)
@@ -123,18 +125,27 @@ def export_skill(catalog: Path, skill_id: str, *, version: str, agent: str, dest
     for protected in (catalog, library):
         if destination == protected or destination in protected.parents or protected in destination.parents:
             raise ExportRefusal("unsafe_destination", "the export destination must not overlap library or catalog state")
+    protected_roots: set[tuple[int, int]] = set()
+    protected_ancestors: set[tuple[int, int]] = set()
+    for protected in (catalog, library):
+        protected_fd = _open_directory(protected, identities=protected_ancestors)
+        try:
+            protected_roots.add(_identity(os.fstat(protected_fd)))
+        finally:
+            os.close(protected_fd)
+    parent_ancestors: set[tuple[int, int]] = set()
     try:
-        parent_fd = _open_directory(destination.parent)
+        parent_fd = _open_directory(destination.parent, identities=parent_ancestors)
     except OSError as error:
         raise ExportRefusal("unsafe_destination", "the existing parent must have only non-symlink directory components") from error
-    destination_fd = stage_fd = payload_fd = None
-    destination_identity = stage_identity = payload_identity = None
+    destination_fd = None
+    destination_identity = None
     created_destination = False
-    stage_name = f".skillager-export-{uuid4().hex}"
-    staged: dict[str, tuple[int, int]] = {}
     published: dict[str, tuple[int, int]] = {}
     completed = False
     try:
+        if parent_ancestors & protected_roots:
+            raise ExportRefusal("unsafe_destination", "the export destination must not overlap library or catalog state")
         try:
             os.mkdir(destination.name, dir_fd=parent_fd)
             created_destination = True
@@ -145,6 +156,8 @@ def export_skill(catalog: Path, skill_id: str, *, version: str, agent: str, dest
         except OSError as error:
             raise ExportRefusal("unsafe_destination", "the destination must be a non-symlink directory") from error
         destination_identity = _identity(os.fstat(destination_fd))
+        if destination_identity in protected_ancestors:
+            raise ExportRefusal("unsafe_destination", "the export destination must not overlap library or catalog state")
         if os.listdir(destination_fd):
             raise ExportRefusal("destination_not_empty", "the existing destination must be empty")
 
@@ -159,42 +172,25 @@ def export_skill(catalog: Path, skill_id: str, *, version: str, agent: str, dest
             except OSError as error:
                 raise ExportRefusal("destination_changed", "the destination changed during export") from error
 
-        os.mkdir(stage_name, mode=0o700, dir_fd=destination_fd)
-        stage_fd = os.open(stage_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=destination_fd)
-        stage_identity = _identity(os.fstat(stage_fd))
-        os.mkdir("payload", dir_fd=stage_fd)
-        payload_fd = os.open("payload", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=stage_fd)
-        payload_identity = _identity(os.fstat(payload_fd))
-        payload = destination / stage_name / "payload"
         require_destination()
-        metadata = prepare_direct_candidate(skill, candidate=payload, target=destination, agent=agent,
-                                            scope="export", mode="native", decisions={},
-                                            candidate_fd=payload_fd, owned_entries=staged)
+        prepare_direct_candidate(skill, candidate=destination, target=destination, agent=agent,
+                                 scope="export", mode="native", decisions={},
+                                 candidate_fd=destination_fd, owned_entries=published)
         require_destination()
-        _verify_materialized_projection(payload, expected_hash=version)
-        manifest = target_state_manifest(payload)
+        manifest = target_state_manifest(destination)
+        if set(manifest) != set(published):
+            raise ExportRefusal("destination_changed", "another writer changed the empty destination")
         fresh, current = _observe(catalog, skill_id, version, agent)
         if current != observed or fresh["content_hash"] != version:
             raise ExportRefusal("source_changed", "source identity or acceptance changed during preparation")
-        if os.listdir(destination_fd) != [stage_name]:
-            raise ExportRefusal("destination_changed", "another writer changed the empty destination")
-        require_destination()
-        # Publication uses the same descriptor-bound native copier. Exclusive file
-        # creation preserves anything another writer adds, including directories.
-        copy_native_tree_to_fd(payload, destination_fd, owned_entries=published)
-        write_materialized_sidecar(destination / "skillager.materialized.yaml", metadata,
-                                   directory_fd=destination_fd, owned_entries=published)
-        require_destination()
-        _remove_owned(payload_fd, staged)
-        if _identity(os.stat("payload", dir_fd=stage_fd, follow_symlinks=False)) == payload_identity:
-            os.rmdir("payload", dir_fd=stage_fd)
-        if _identity(os.stat(stage_name, dir_fd=destination_fd, follow_symlinks=False)) == stage_identity:
-            os.rmdir(stage_name, dir_fd=destination_fd)
         require_destination()
         _verify_materialized_projection(destination, expected_hash=version)
         final_manifest = target_state_manifest(destination)
         if final_manifest != manifest or content_hash(destination) != version:
             raise ExportRefusal("verification_failed", "the exported bytes, modes, or provenance changed")
+        if any(_identity(os.stat(relative, dir_fd=destination_fd, follow_symlinks=False)) != expected
+               for relative, expected in published.items()):
+            raise ExportRefusal("destination_changed", "created destination objects were replaced during export")
         _fresh, current = _observe(catalog, skill_id, version, agent)
         if current != observed:
             raise ExportRefusal("source_changed", "source identity or acceptance changed before completion")
@@ -212,18 +208,7 @@ def export_skill(catalog: Path, skill_id: str, *, version: str, agent: str, dest
     finally:
         if not completed and destination_fd is not None:
             _remove_owned(destination_fd, published)
-        if payload_fd is not None:
-            _remove_owned(payload_fd, staged)
-            os.close(payload_fd)
-        if stage_fd is not None:
-            with contextlib.suppress(OSError):
-                if payload_identity is not None and _identity(os.stat("payload", dir_fd=stage_fd, follow_symlinks=False)) == payload_identity:
-                    os.rmdir("payload", dir_fd=stage_fd)
-            os.close(stage_fd)
         if destination_fd is not None:
-            with contextlib.suppress(OSError):
-                if stage_identity is not None and _identity(os.stat(stage_name, dir_fd=destination_fd, follow_symlinks=False)) == stage_identity:
-                    os.rmdir(stage_name, dir_fd=destination_fd)
             os.close(destination_fd)
             if created_destination and not completed:
                 with contextlib.suppress(OSError):
