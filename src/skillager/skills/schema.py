@@ -31,6 +31,9 @@ canonical_cargo_package_name = _validators.canonical_cargo_package_name
 
 def skill_frontmatter_metadata(text: str) -> dict[str, str]:
     """Return declared identity metadata without inferred body prose."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---" or not any(line.strip() == "---" for line in lines[1:]):
+        return {}
     return _validators._frontmatter(text)
 
 

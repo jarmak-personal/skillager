@@ -68,5 +68,5 @@ def _decode_cursor(token: str) -> dict[str, Any]:
         ):
             raise ValueError("invalid cursor shape")
         return value
-    except (ValueError, UnicodeDecodeError, binascii.Error) as exc:
+    except (ValueError, UnicodeDecodeError, binascii.Error, RecursionError) as exc:
         raise CursorError("invalid_cursor", "invalid paging cursor") from exc

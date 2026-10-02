@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import shutil
 import tempfile
 import unittest
@@ -66,6 +67,7 @@ class LibraryInventoryBehaviorTests(unittest.TestCase):
                 f"---\nname: alpha\n---\n\n{BODY_SENTINEL}\n",
                 f"# Alpha\n\n{BODY_SENTINEL}\n",
                 f"# {BODY_SENTINEL}\n\nGuidance follows.\n",
+                f"---\nname: alpha\n\n# Body\ndescription: {BODY_SENTINEL}\n",
             ):
                 (library / "skills" / "alpha" / "SKILL.md").write_text(content, encoding="utf-8")
                 row = self.checked(self.page(cli))["skills"][0]
@@ -101,7 +103,8 @@ class LibraryInventoryBehaviorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             _, cli = self.library(Path(tmp))
             first = self.checked(self.page(cli))
-            for token in ("not a cursor!", "e30", "a" * 5000):
+            deeply_nested = base64.urlsafe_b64encode(("[" * 1200 + "]" * 1200).encode()).decode()
+            for token in ("not a cursor!", "e30", "a" * 5000, deeply_nested):
                 invalid = self.checked(self.page(cli, token), 2)
                 self.assertEqual(invalid["error"]["code"], "invalid_cursor")
                 self.assertNotIn(token, str(invalid))

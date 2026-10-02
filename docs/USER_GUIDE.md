@@ -119,7 +119,8 @@ The response is a `skillager.list.v1` object with `scope: "library"`, `skills`, 
 the previously accepted hash while the status becomes pending. Lint quarantine is
 reported as blocked. Names and descriptions use declared frontmatter metadata;
 the name falls back to the library directory name and a missing description is
-null. Body paragraphs and headings are never used as metadata in this response.
+null. Unterminated frontmatter is ignored. Body paragraphs and headings are never
+used as metadata in this response.
 
 Library scope reads the personal catalog selected by `--catalog-state-dir`,
 `SKILLAGER_CATALOG_STATE_DIR`, or the user's default catalog. It does not consult
