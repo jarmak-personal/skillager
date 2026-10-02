@@ -5,15 +5,27 @@ import argparse
 from typing import Any
 
 from .. import project_tags
+from ..catalog.impl import load_collections, select_collection_skills
+from ..library.inventory import library_inventory
 from .context import catalog_root, current_project_dir, root
 from .pagination import fingerprint, page_metadata
 
 
 def search_snapshot(args: argparse.Namespace, skills: list[dict[str, Any]], **observations: Any) -> str:
-    # Bind the complete observed inventory, including nonmatches and pending rows,
-    # before presentation mutates metadata or filters it down to a ranked window.
+    # Observe hidden rows separately: merging them into the ranking inventory can
+    # turn an otherwise available same-ID source into an identity collision.
+    catalog = catalog_root(args)
+    _rows, library_state = library_inventory(catalog)
+    collections = load_collections(catalog).get("collections", {}) if args.scope == "workspace" else {}
+    other_errors: list[dict[str, str]] = []
+    other_inventory = [skill for name in sorted(collections) if name != "lib"
+                       for skill in select_collection_skills(catalog, name, trust_root=root(args),
+                                                             approval_root=catalog, include_blocked=True,
+                                                             include_lint_blocked=True, discovery_errors=other_errors)]
     tag_members = sorted(project_tags.tag_skills(current_project_dir(), args.tag)) if args.tag else None
-    return fingerprint({"skills": skills, "tag_members": tag_members, "observations": observations})
+    return fingerprint({"skills": skills, "library": library_state, "collections": collections,
+                        "other_inventory": other_inventory, "other_errors": other_errors,
+                        "tag_members": tag_members, "observations": observations})
 
 
 def search_page(

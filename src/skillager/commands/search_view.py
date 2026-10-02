@@ -95,8 +95,7 @@ def run_search_view(args: argparse.Namespace) -> int:
         # Include pending originals only in the presence map, never in ranking.
         presence = SearchView(presence_skills, relations=relations, exposures=[], present=set(),
                               installed_complete=installed_complete, project=project)
-        view_skills = [skill for skill in skills if skill.get("entrypoint")] if paginated else skills
-        view = SearchView(view_skills, relations=relations, exposures=exposures,
+        view = SearchView(skills, relations=relations, exposures=exposures,
                           present=presence.present | (supplied or set()),
                           installed_complete=presence.installed_complete, project=project)
         payload["context"] = {"project_root": str(project) if project else None,
