@@ -57,6 +57,15 @@ Start with the user’s actual goal:
 skillager search "<user goal>" --agent codex --json
 ```
 
+For a client that needs more than one result window, add `--cursor ''` with a
+positive `--limit` to receive a `skillager.search-page.v1` object containing `results`
+and `next_cursor`. Pass that cursor unchanged with the same request until it is
+null. Omitting `--cursor` keeps the existing JSON array. This works in workspace
+and library scopes; explicit search views retain their `skillager.search.v1`
+envelope and add `next_cursor`. A `stale_cursor` error exits
+15: discard the traversal and restart with `--cursor ''`. An `invalid_cursor`
+error exits 2. See [search paging](USER_GUIDE.md#search-the-personal-library).
+
 Use a few focused searches when the task has distinct parts. Use the summary list
 only when you need orientation before searching:
 

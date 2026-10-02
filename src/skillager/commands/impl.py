@@ -253,6 +253,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--agent", choices=["codex", "claude"], help="Include compatibility warnings for this agent.")
     p.add_argument("--compatible-only", action="store_true", help="Hide skills explicitly marked incompatible with --agent. Skills without metadata are assumed compatible.")
     p.add_argument("--limit", type=int, default=10, help="Maximum search results to return. Use 0 for no limit.")
+    p.add_argument("--cursor", help="Opt in to paginated JSON: an empty string starts the first page; otherwise pass the preceding next_cursor unchanged.")
     p.add_argument("--no-session-record", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--json", action="store_true", help="Emit search results as JSON.")
     p.add_argument("--full-json", action="store_true", help="Emit full indexed metadata instead of compact agent-facing search results.")
@@ -3962,15 +3963,21 @@ def cmd_search(args: argparse.Namespace) -> int:
         raise ValueError("search presentation controls require --view skills|copies")
     if args.limit < 0:
         raise ValueError("--limit must be 0 or greater")
+    paginated = args.cursor is not None
+    if paginated and (not args.json or args.limit < 1):
+        raise ValueError("search --cursor requires --json and a --limit greater than 0")
     if args.compatible_only and not args.agent:
         raise ValueError("--compatible-only requires --agent")
     library_only = getattr(args, "scope", "workspace") == "library"
     if library_only and (args.tag or args.include_global):
         raise ValueError("--scope library cannot be combined with --tag or --include-global")
-    skills = _search_inventory(args, deferred=True)
+    skills = _search_inventory(args, deferred=not paginated)
     # Ambiguous identities need live metadata from every claimant before merging.
     if any(skill.get("identity_collision") for skill in skills):
         skills = _search_inventory(args, deferred=False)
+    if paginated:
+        from .search_pagination import search_page, search_snapshot
+        snapshot = search_snapshot(args, skills)
     trust_root = catalog_root(args) if library_only else root(args)
     families = Counter(_agent_variant_family_key(skill) for skill in skills) if args.agent else Counter()
     for skill in skills:
@@ -4000,11 +4007,16 @@ def cmd_search(args: argparse.Namespace) -> int:
         if library_only:
             skill["exposure"] = "unknown"
         verified.append(skill)
-        if args.limit and len(verified) >= args.limit:
+        if not paginated and args.limit and len(verified) >= args.limit:
             break
     if args.json or args.full_json:
         payload = [_public_full_skill_metadata(skill) for skill in verified] if args.full_json else [_compact_search_result(skill, agent=args.agent) for skill in verified]
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        if paginated:
+            page, next_cursor = search_page(args, payload, snapshot=snapshot)
+            print(json.dumps({"schema": "skillager.search-page.v1", "scope": args.scope,
+                              "results": page, "next_cursor": next_cursor}, indent=2, sort_keys=True))
+        else:
+            print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         for skill in verified:
             print(f"{skill['score']}\t{skill['id']}\t{skill['summary']}")

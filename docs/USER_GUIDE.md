@@ -177,8 +177,31 @@ in either scope. An uninitialized library returns an empty result list.
 Search covers titles, descriptions, tags, and approved entrypoint bodies, returning
 metadata and match reasons without body excerpts. Pending drafts remain visible
 through library metadata commands, but do not match body searches. `--limit` defaults
-to 10; `0` returns all matches. Results remain a JSON list with no total count or
-paging cursor. A full result window does not establish how many more matches exist.
+to 10; `0` returns all matches. Without `--cursor`, results remain the existing JSON
+list. A full result window does not establish how many more matches exist.
+
+To traverse a larger ranked result set, explicitly start paging with an empty cursor:
+
+```bash
+skillager search "database migration" --scope library --limit 20 --json --cursor ''
+skillager search "database migration" --scope library --limit 20 --json --cursor TOKEN
+```
+
+The paginated response is a `skillager.search-page.v1` object with `scope`, `results`, and
+`next_cursor`. Pass its opaque cursor unchanged with the same query, scope, limit,
+and filters; null means the last page. Paging also works in workspace scope and with
+[known-skill search views](SEARCH_VIEWS.md). It requires `--json` and a positive
+limit. Omitting `--cursor` preserves the existing output even when `--limit` is set.
+
+The shared library-list cursor format binds the complete current search inventory
+and request. A changed source tree, membership, approval, or relevant presentation
+observation invalidates the traversal, including a change to a nonmatching skill.
+The CLI returns the `skillager.error.v1` envelope with `error.code: "stale_cursor"`
+and exits **15**. Replace previously loaded rows and restart with `--cursor ''`.
+Malformed cursors and cursors used with a different command, query, context, or
+filter return `invalid_cursor` and exit **2**. Cursors never grant approval or body
+access. Each page bounds output; observing and verifying the complete inventory and
+ranked matches still takes work for every cursor request.
 
 Warm searches reuse collection metadata and indexed prose, then verify the exact
 current content tree and approval for ranked candidates before filling the result

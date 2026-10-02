@@ -21,28 +21,7 @@ sys.path.insert(0, str(ROOT))
 
 from tests.behavior.search_catalog import CASES, SearchCase, build_catalog, require_success  # noqa: E402
 from tests.behavior.support import CliResult  # noqa: E402
-
-
-# A fresh interpreter runs the real module entrypoint. Peak RSS comes from that
-# one child, not the cumulative high-water mark of earlier benchmark children.
-MEASURE_CLI = """\
-import json, runpy, sys
-metrics_path = sys.argv.pop(1)
-sys.argv[0] = 'skillager'
-try:
-    runpy.run_module('skillager', run_name='__main__')
-finally:
-    peak = None
-    try:
-        import resource
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        if sys.platform != 'darwin':
-            peak *= 1024
-    except ImportError:
-        pass
-    with open(metrics_path, 'w', encoding='utf-8') as handle:
-        json.dump({'peak_rss_bytes': peak}, handle)
-"""
+from benchmark_measurement import measure_cli  # noqa: E402
 
 
 def progress(message: str) -> None:
@@ -50,27 +29,8 @@ def progress(message: str) -> None:
 
 
 def measure(catalog, case: SearchCase) -> tuple[CliResult, dict]:
-    metrics = catalog.root / "child-metrics.json"
-    metrics.unlink(missing_ok=True)
-    started = time.perf_counter()
-    completed = subprocess.run(
-        [sys.executable, "-c", MEASURE_CLI, str(metrics), *case.argv],
-        cwd=catalog.cli.project,
-        env=catalog.cli.env,
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        timeout=catalog.cli.timeout,
-        check=False,
-    )
-    elapsed = time.perf_counter() - started
-    result = CliResult(completed.returncode, completed.stdout.decode("utf-8"), completed.stderr.decode("utf-8"))
+    result, sample = measure_cli(catalog.cli, case.argv, catalog.root / "child-metrics.json")
     require_success(result)
-    sample = {
-        "seconds": elapsed,
-        "stdout_bytes": len(completed.stdout),
-        "stderr_bytes": len(completed.stderr),
-        **json.loads(metrics.read_text(encoding="utf-8")),
-    }
     return result, sample
 
 

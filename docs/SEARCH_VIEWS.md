@@ -78,6 +78,22 @@ The JSON envelope has `schema`, `status`, `reason_code`, `policy`, `context`,
 path only when explicitly observed; `installed_observation` is `observed`,
 `provided` or `unknown`.
 
+An explicit `--cursor ''` starts paging; pass each non-null `next_cursor` unchanged
+with the same request to continue. Only cursor requests add `next_cursor` to the
+envelope. Omitting the cursor preserves the existing representation. The page limit
+remains 1 through 50. Grouping, current verification, installed exclusion, and copy
+projection happen before the page slice, so a copies traversal can continue through
+all occurrences of one group without repeating a row or dropping the remaining
+copies. The complete observed inventory still has its 10,000-reference bound, and
+each returned page retains the 4 MiB envelope bound.
+
+Cursor format and errors match `list --scope library`: a changed inventory,
+approval, lineage, presence observation, or supplied installed identity set returns
+`skillager.error.v1` with `error.code: "stale_cursor"` and exits 15. Discard prior
+rows and restart with `--cursor ''`. A malformed or mismatched request cursor
+returns `invalid_cursor` and exits 2. These errors are distinct from an unavailable
+search observation. All request controls must remain fixed during traversal.
+
 Each result preserves existing public full metadata and adds `search`:
 
 - `group_id`: opaque stable logical identity.

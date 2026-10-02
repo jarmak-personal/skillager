@@ -197,10 +197,11 @@ failure, completed samples remain available in the failed report.
 
 ## Coverage limits
 
-The current search CLI supports personal-library and tag scope before the limit,
-but has no paging/total contract. This workload also does not measure
-5,000 individually accepted owned skills, library Git history, or package discovery
-at scale. Its large collections exercise approved-body search in a mixed catalog.
+This workload measures personal-library and tag filtering before the result limit,
+without exercising cursor paging. The companion [owned-library benchmark](LIBRARY_BENCHMARK.md)
+measures list/search pages, 5,000 owned accepted skills, and library Git history.
+This mixed-source workload does not measure package discovery at scale. Its large
+collections exercise approved-body search in a mixed catalog.
 
 The benchmark separately records whether a term placed beyond character 50,000 of
 `SKILL.md` is found. The current implementation searches only the first 50,000

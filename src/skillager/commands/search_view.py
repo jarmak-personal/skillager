@@ -20,6 +20,8 @@ from ..skills.search_view import (
 from ..state.paths import cache_root, find_project_root, project_state_root
 from ..state import approvals
 from .context import catalog_root, current_project_dir, root
+from .pagination import CursorError
+from .search_pagination import search_page, search_snapshot
 
 
 def add_search_view_options(parser: argparse.ArgumentParser) -> None:
@@ -32,6 +34,7 @@ def add_search_view_options(parser: argparse.ArgumentParser) -> None:
 def run_search_view(args: argparse.Namespace) -> int:
     # This command composes existing CLI operations; policy has no command imports.
     from . import impl as cli
+    paginated = args.cursor is not None
 
     payload: dict[str, Any] = {
         "schema": SEARCH_VIEW_SCHEMA, "status": "unavailable", "reason_code": None,
@@ -40,6 +43,8 @@ def run_search_view(args: argparse.Namespace) -> int:
         "context": {"project_root": None, "installed_observation": "unknown"},
         "limit": args.limit, "results": [],
     }
+    if paginated:
+        payload["next_cursor"] = None
     try:
         if not args.json or args.limit < 1 or args.limit > SEARCH_RESULT_LIMIT:
             raise SearchRefusal("invalid-options")
@@ -71,7 +76,7 @@ def run_search_view(args: argparse.Namespace) -> int:
         records = approvals.load(catalog).get("global_approvals", {}) if registration else {}
         relations, lineage_complete = lineage_relations(provenance, identifier, records)
         supplied = _read_installed(args.installed_identities) if args.installed_identities else None
-        skills = cli._search_inventory(args, deferred=True)
+        skills = cli._search_inventory(args, deferred=not paginated)
         if any(skill.get("identity_collision") for skill in skills):
             skills = cli._search_inventory(args, deferred=False)
         if len(skills) > SEARCH_INVENTORY_LIMIT:
@@ -95,7 +100,16 @@ def run_search_view(args: argparse.Namespace) -> int:
                           installed_complete=presence.installed_complete, project=project)
         payload["context"] = {"project_root": str(project) if project else None,
                               "installed_observation": "provided" if supplied is not None else "observed" if view.installed_complete else "unknown"}
-        if not view.installed_complete and not args.include_installed:
+        if paginated:
+            snapshot = search_snapshot(args, skills, registration=registration.to_mapping() if registration else None,
+                                       provenance=provenance, relations=relations,
+                                       presence=observation, exposures=exposures,
+                                       supplied=sorted(supplied) if supplied is not None else None,
+                                       context=payload["context"])
+        # A changed observation must invalidate an earlier traversal even when it
+        # now prevents proving installed absence. Cursor pages remain unadmitted
+        # until the same refusal check below has passed.
+        if not paginated and not view.installed_complete and not args.include_installed:
             raise SearchRefusal("installed-state-unknown")
         candidates = cli._available_skills(view.candidates(args.include_installed))
         if args.tag:
@@ -112,21 +126,31 @@ def run_search_view(args: argparse.Namespace) -> int:
         if args.agent:
             ranked = cli._sort_agent_variant_search(ranked, args.agent)
         trust_root = catalog if personal else root(args)
-        results = view.results(ranked, copies=args.view == "copies", limit=args.limit,
+        results = view.results(ranked, copies=args.view == "copies", limit=None if paginated else args.limit,
                                current=lambda skill: cli._search_result_is_current(skill, trust_root, catalog)
                                and (not args.compatible_only or cli.compatibility_problem(skill, args.agent) is None),
                                public=lambda skill: cli._public_full_skill_metadata({**skill, "exposure": "unknown"} if personal else skill),
                                agent=args.agent)
+        if paginated:
+            results, payload["next_cursor"] = search_page(args, results, snapshot=snapshot)
+        if not view.installed_complete and not args.include_installed:
+            raise SearchRefusal("installed-state-unknown")
         payload.update(status="completed", results=results)
+    except CursorError:
+        raise
     except (OSError, ValueError) as error:
         payload.update(status="unavailable", reason_code=error.code if isinstance(error, SearchRefusal) else "observation-unavailable", results=[])
     except (KeyError, TypeError) as error:
         payload.update(status="unavailable", reason_code="internal-error", results=[])
         kind = "KeyError" if isinstance(error, KeyError) else "TypeError"
         print(f"skillager: internal search view error ({kind}).", file=sys.stderr)
+    if paginated and payload["status"] != "completed":
+        payload["next_cursor"] = None
     encoded = json.dumps(payload, sort_keys=True)
     if len(encoded.encode("utf-8")) > SEARCH_RESULT_BYTES:
         payload.update(status="unavailable", reason_code="result-limit", results=[])
+        if paginated:
+            payload["next_cursor"] = None
         encoded = json.dumps(payload, sort_keys=True)
     print(encoded)
     return 0 if payload["status"] == "completed" else 1 if payload["reason_code"] == "internal-error" else 2
