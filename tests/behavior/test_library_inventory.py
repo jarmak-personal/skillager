@@ -140,6 +140,33 @@ class LibraryInventoryBehaviorTests(unittest.TestCase):
                 entrypoint.write_bytes(original)
             self.assertEqual(len(self.checked(self.page(cli, limit="10"))["skills"]), 3)
 
+    def test_cached_unrepresented_error_is_reobserved_after_skill_disappears(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            library, cli = self.library(Path(tmp))
+            first = self.checked(self.page(cli))
+            entrypoint = library / "skills" / "zulu" / "SKILL.md"
+            original = entrypoint.read_bytes()
+            real_load = catalog_impl.load_skill_from_dir
+
+            def disappear(root, source):
+                if root == entrypoint.parent.resolve():
+                    entrypoint.unlink()
+                return real_load(root, source)
+
+            try:
+                with mock.patch.object(catalog_impl, "load_skill_from_dir", side_effect=disappear):
+                    refreshed = self.checked(self.in_process_cli(cli, "collection", "refresh", "lib", "--json"))
+                self.assertEqual(len(refreshed["skills"]), 2)
+                self.assertEqual(len(refreshed["errors"]), 1)
+                current = self.checked(self.page(cli, limit="10"))
+                self.assertEqual([row["id"] for row in current["skills"]], ["lib/alpha", "lib/middle"])
+                self.assertEqual(current["discovery_error_count"], 0)
+                stale = self.checked(self.page(cli, first["next_cursor"]), 15)
+                self.assertEqual(stale["error"]["code"], "stale_cursor")
+            finally:
+                entrypoint.write_bytes(original)
+            self.assertEqual(len(self.checked(self.page(cli, limit="10"))["skills"]), 3)
+
     def test_represented_discovery_error_changes_stale_cursor_without_body_output(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             library, cli = self.library(Path(tmp))

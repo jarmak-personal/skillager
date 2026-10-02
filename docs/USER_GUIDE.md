@@ -138,6 +138,8 @@ page. A missing registered skills root is unavailable, rather than an empty
 library. Preserve previously loaded rows until the library can be read again.
 Readable quarantined skills remain visible with their existing acceptance status;
 discovery diagnostics are part of cursor state even when row metadata is unchanged.
+Cached failure diagnostics are reobserved before paging, so recovered or removed
+failures cannot make an otherwise complete inventory remain unavailable.
 
 Rows are ordered lexically by skill ID. `--limit` defaults to 100 and must be
 greater than zero. Pass the opaque `next_cursor` unchanged to `--cursor`, using the

@@ -811,6 +811,8 @@ def _collection_index_hashes_current(
 ) -> bool:
     """Require exact current hashes before cached collection trust is reused."""
 
+    if require_complete and data.get("errors"):
+        return False
     indexed_roots = {
         str(Path(skill["root"]).expanduser().resolve())
         for skill in data.get("skills", [])
