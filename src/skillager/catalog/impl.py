@@ -193,6 +193,7 @@ def select_collection_skills(
     include_lint_blocked: bool = False,
     refresh_library: bool = True,
     discovery_errors: list[dict[str, str]] | None = None,
+    require_complete_library: bool = False,
 ) -> list[dict[str, Any]]:
     return select_visible_skills(
         _collection_skills(
@@ -202,6 +203,7 @@ def select_collection_skills(
             approval_root=approval_root,
             refresh_library=refresh_library,
             discovery_errors=discovery_errors,
+            require_complete_library=require_complete_library,
         ),
         include_blocked=include_blocked,
         include_lint_blocked=include_lint_blocked,
@@ -216,9 +218,10 @@ def _collection_skills(
     approval_root: Path | None = None,
     refresh_library: bool = True,
     discovery_errors: list[dict[str, str]] | None = None,
+    require_complete_library: bool = False,
 ) -> list[dict[str, Any]]:
     with trust_snapshot([trust_root or state_root, approval_root or trust_root or state_root]):
-        return _collection_skills_snapshot(state_root, name, trust_root=trust_root, approval_root=approval_root, refresh_library=refresh_library, discovery_errors=discovery_errors)
+        return _collection_skills_snapshot(state_root, name, trust_root=trust_root, approval_root=approval_root, refresh_library=refresh_library, discovery_errors=discovery_errors, require_complete_library=require_complete_library)
 
 
 def _collection_skills_snapshot(
@@ -229,13 +232,14 @@ def _collection_skills_snapshot(
     approval_root: Path | None = None,
     refresh_library: bool = True,
     discovery_errors: list[dict[str, str]] | None = None,
+    require_complete_library: bool = False,
 ) -> list[dict[str, Any]]:
     names = [_slug(name)] if name else sorted(load_collections(state_root).get("collections", {}))
     trust_root = trust_root or state_root
     approval_root = approval_root or trust_root
     skills: list[dict[str, Any]] = []
     for collection_name in names:
-        data = _load_or_refresh_collection_index(state_root, collection_name, refresh_library=refresh_library)
+        data = _load_or_refresh_collection_index(state_root, collection_name, refresh_library=refresh_library, require_complete_library=require_complete_library)
         if discovery_errors is not None:
             discovery_errors.extend(data.get("errors", []))
         for skill in data.get("skills", []):
@@ -644,6 +648,7 @@ def _index_collection_skills(
     *,
     collection: dict[str, Any] | None = None,
     skill_dirs: list[Path] | None = None,
+    require_complete: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     skills: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
@@ -657,7 +662,7 @@ def _index_collection_skills(
             provenance_skills = provenance.get("skills", {})
     try:
         if skill_dirs is None:
-            skill_dirs = _skill_dirs(root)
+            skill_dirs = _skill_dirs(root, require_complete=require_complete)
     except OSError as exc:
         return [], [{"path": str(root), "error": str(exc)}]
     for skill_dir in skill_dirs:
@@ -762,12 +767,13 @@ def _collection_quarantined(
     return replace(skill, id=f"{collection}/{relative_id}", source=source)
 
 
-def _load_or_refresh_collection_index(state_root: Path, name: str, *, refresh_library: bool = True) -> dict[str, Any]:
+def _load_or_refresh_collection_index(state_root: Path, name: str, *, refresh_library: bool = True, require_complete_library: bool = False) -> dict[str, Any]:
     collection = load_collections(state_root).get("collections", {}).get(name)
     if not isinstance(collection, dict):
         raise KeyError(f"collection not found: {name}")
+    require_complete = require_complete_library and collection.get("kind") == LIBRARY_COLLECTION_KIND
     if isinstance(collection, dict) and collection.get("kind") == LIBRARY_COLLECTION_KIND:
-        if not refresh_library:
+        if not refresh_library and not require_complete:
             return _load_collection_index(state_root, name) or {
                 "schema": "skillager.collection-index.v1",
                 "name": name,
@@ -785,11 +791,11 @@ def _load_or_refresh_collection_index(state_root: Path, name: str, *, refresh_li
             or data.get("path") != str(collection_root)
             or data.get("provenance_hash") != _library_provenance_hash(collection)
         ):
-            return _live_collection_index(state_root, name, collection)
-        if _collection_index_hashes_current(data, collection_root=collection_root):
+            return _live_collection_index(state_root, name, collection, require_complete=require_complete)
+        if _collection_index_hashes_current(data, collection_root=collection_root, require_complete=require_complete):
             return data
-        return _live_collection_index(state_root, name, collection)
-    return _live_collection_index(state_root, name, collection)
+        return _live_collection_index(state_root, name, collection, require_complete=require_complete)
+    return _live_collection_index(state_root, name, collection, require_complete=require_complete)
 
 
 def _library_provenance_hash(collection: dict[str, Any]) -> str:
@@ -801,15 +807,23 @@ def _collection_index_hashes_current(
     data: dict[str, Any],
     *,
     collection_root: Path,
+    require_complete: bool = False,
 ) -> bool:
     """Require exact current hashes before cached collection trust is reused."""
 
+    if require_complete and data.get("errors"):
+        return False
     indexed_roots = {
         str(Path(skill["root"]).expanduser().resolve())
         for skill in data.get("skills", [])
         if isinstance(skill, dict) and isinstance(skill.get("root"), str)
     }
-    live_roots = {str(path.expanduser().resolve()) for path in _skill_dirs(collection_root)}
+    try:
+        live_roots = {str(path.expanduser().resolve()) for path in _skill_dirs(collection_root, require_complete=require_complete)}
+    except OSError:
+        if not require_complete:
+            raise
+        return False
     if indexed_roots != live_roots:
         return False
     for skill in data.get("skills", []):
@@ -829,11 +843,13 @@ def _live_collection_index(
     state_root: Path,
     name: str,
     collection: dict[str, Any],
+    *,
+    require_complete: bool = False,
 ) -> dict[str, Any]:
     """Reindex changed collection content in memory without mutating catalog state."""
 
     root = Path(collection["path"]).expanduser().resolve()
-    skills, errors = _index_collection_skills(state_root, name, root, collection=collection)
+    skills, errors = _index_collection_skills(state_root, name, root, collection=collection, require_complete=require_complete)
     data: dict[str, Any] = {
         "schema": "skillager.collection-index.v1",
         "name": name,
@@ -861,7 +877,9 @@ def _collection_index_path(state_root: Path, name: str) -> Path:
     return collection_index_dir(state_root) / f"{_slug(name)}.json"
 
 
-def _skill_dirs(root: Path) -> list[Path]:
+def _skill_dirs(root: Path, *, require_complete: bool = False) -> list[Path]:
+    if require_complete:
+        root.stat()
     if not root.exists():
         return []
     if (root / "skillager.materialized.yaml").exists():
@@ -869,7 +887,10 @@ def _skill_dirs(root: Path) -> list[Path]:
     if (root / "SKILL.md").exists():
         return [root]
     result: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root):
+    def report_error(error: OSError) -> None:
+        raise error
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=report_error if require_complete else None):
         dirnames[:] = sorted(dirname for dirname in dirnames if dirname not in IGNORED_SKILL_DIR_NAMES)
         current = Path(dirpath)
         if "skillager.materialized.yaml" in filenames:

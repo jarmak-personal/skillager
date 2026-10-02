@@ -8,8 +8,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from skillager.catalog import storage
+
 from .search_catalog import require_success
-from .support import BODY_SENTINEL, CliResult, make_basic_workspace
+from .support import BODY_SENTINEL, CliResult, SkillagerCli, make_basic_workspace
 
 
 class SearchPaginationBehaviorTests(unittest.TestCase):
@@ -69,6 +71,36 @@ class SearchPaginationBehaviorTests(unittest.TestCase):
                 full_expected = self.checked(self.cli.run("search", "pageneedle", "--json", "--full-json", "--limit", "0", *options))
                 self.assertEqual(full, full_expected)
 
+    def test_same_id_hidden_library_draft_preserves_trusted_workspace_search(self) -> None:
+        source = self.library / "skills" / "title"
+        workspace = self.project / "lib" / ".skills" / "title"
+        workspace.mkdir(parents=True)
+        (workspace / "SKILL.md").write_bytes((source / "SKILL.md").read_bytes())
+        # A child repository named lib derives the same public ID, but retains
+        # independent source identity and a project-scoped accepted decision.
+        independent = SkillagerCli(self.project, state=self.root / "state/project",
+                                  catalog_state=self.root / "independent-catalog",
+                                  home=self.root / "independent-home", cache=self.root / "independent-cache")
+        self.checked(independent.run("review", "approve", "lib/title", "--project-only", "--json"))
+        with (source / "SKILL.md").open("a") as handle:
+            handle.write("\nAn unaccepted library edit.\n")
+        for trust in ("pending", "lint_blocked"):
+            if trust == "lint_blocked":
+                (source / "skillager.yaml").write_text("schema: invalid\n")
+            for view in (None, "skills", "copies"):
+                with self.subTest(trust=trust, view=view):
+                    options = ("--view", view, "--include-installed") if view else ()
+                    legacy = self.checked(self.cli.run("search", "pageneedle", "--json", "--limit", "50", *options))
+                    expected = legacy["results"] if view else legacy
+                    if trust == "lint_blocked":
+                        self.assertIn("lib/title", [row["id"] for row in expected])
+                    self.assertEqual(self.traverse(*options), expected)
+                    first = self.page("", *options)
+                    self.assertIsNotNone(first["next_cursor"])
+                    with (source / "SKILL.md").open("a") as handle:
+                        handle.write(f"\nHidden draft changed for {trust}/{view}.\n")
+                    self.assertEqual(self.page(first["next_cursor"], *options, code=15)["error"]["code"], "stale_cursor")
+
     def test_nonmatching_exact_tree_and_authority_changes_are_stale(self) -> None:
         path = self.library / "skills" / "unmatched" / "SKILL.md"
         for scope in ("workspace", "library"):
@@ -116,6 +148,26 @@ class SearchPaginationBehaviorTests(unittest.TestCase):
             self.assertEqual(self.page(value, code=2)["error"]["code"], "invalid_cursor")
         listed = self.checked(self.cli.run("list", "--scope", "library", "--limit", "1", "--json"))
         self.assertEqual(self.page(listed["next_cursor"], "--scope", "library", code=2)["error"]["code"], "invalid_cursor")
+
+    def test_other_collection_diagnostic_only_change_invalidates_workspace_without_body_leak(self) -> None:
+        outside = self.root / "diagnostics"
+        outside.mkdir()
+        self.checked(self.cli.run("collection", "add", str(outside), "--name", "diagnostics", "--json"))
+        workspace = self.page()
+        personal = self.page("", "--scope", "library")
+        catalog = self.root / "state/catalog"
+        cached = storage.read_collection(catalog, "diagnostics")
+        self.assertIsNotNone(cached)
+        assert cached is not None
+        self.assertEqual(cached["skills"], [])
+        # Inject a failure-only observation through the real cache owner: no
+        # registry or skill row changes can account for the cursor invalidation.
+        storage.write_collection(catalog, "diagnostics", {**cached, "errors": [
+            {"path": str(outside), "error": f"{BODY_SENTINEL} private discovery diagnostic"},
+        ]})
+        self.assertEqual(self.page(workspace["next_cursor"], code=15)["error"]["code"], "stale_cursor")
+        self.assertEqual(self.page()["results"], workspace["results"])
+        self.page(personal["next_cursor"], "--scope", "library")
 
     def test_grouping_and_copy_projection_precede_each_page(self) -> None:
         source = self.project / ".skills" / "original"

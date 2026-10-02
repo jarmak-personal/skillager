@@ -4024,15 +4024,13 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 
 def _search_inventory(args: argparse.Namespace, *, deferred: bool) -> list[dict[str, Any]]:
-    paginated = getattr(args, "cursor", None) is not None
     if getattr(args, "scope", "workspace") == "library":
         if load_library_registration(catalog_root(args)) is None:
             return []
         if deferred:
             skills = collection_search_candidates(catalog_root(args), trust_root=catalog_root(args), name="lib")
         else:
-            skills = select_collection_skills(catalog_root(args), "lib", trust_root=catalog_root(args), approval_root=catalog_root(args),
-                                             include_blocked=paginated, include_lint_blocked=paginated)
+            skills = select_collection_skills(catalog_root(args), "lib", trust_root=catalog_root(args), approval_root=catalog_root(args))
         by_id: dict[str, dict[str, Any]] = {}
         for skill in skills:
             _merge_skill_inventory(by_id, {**skill, "availability": ["collection"], "exposure": "hidden", "materialized_targets": []})
@@ -4049,8 +4047,6 @@ def _search_inventory(args: argparse.Namespace, *, deferred: bool) -> list[dict[
             root(args),
             catalog_root=catalog_root(args),
             defer_collection_verification=deferred,
-            include_blocked=paginated,
-            include_lint_blocked=paginated,
         )
         if not args.include_global:
             skills = [skill for skill in skills if skill.get("source", {}).get("type") != "global"]
