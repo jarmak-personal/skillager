@@ -307,6 +307,27 @@ skillager library restore lib/<name> --to <hash> --json
 
 Explain the selected version and ask before running the returned command.
 
+## Prepare An Explicitly Requested Full Artifact
+
+For a user-requested delivery workflow, prepare the exact accepted Full payload:
+
+```bash
+skillager export lib/<name> --version <full-content-hash> --agent codex --dest /absolute/empty-directory --json
+```
+
+Use the complete accepted hash, an explicit Codex or Claude agent, and a missing or
+empty destination with an existing non-symlink parent. The metadata-only result
+lists every file's path, numeric mode, size, and hash. Export writes accepted bodies
+into that artifact; it never prints them in JSON or establishes project exposure.
+Artifact preparation does not authorize installation, remote writes, acceptance,
+or historical restoration. The authenticated sidecar retains `scope: export`.
+
+Refusals preserve pending/blocked/lint gates and distinguish unaccepted versions
+from previously accepted versions that differ from current bytes. Do not bypass a
+refusal by exporting another hash or restoring a version without user direction.
+Preserve concurrent destination files and inspect a refused staging directory
+before retrying. See [Full export](USER_GUIDE.md#export-an-accepted-full-payload).
+
 ## Plan local native and router changes
 
 Use the closed `expose --request-json` lifecycle contract for preserved native

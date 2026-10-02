@@ -24,6 +24,32 @@ Acceptance previews body-safe scanner and lint metadata, recomputes the hash und
 
 The user catalog and its approvals are user-owned authority. Repository-controlled tag metadata may retain a portable catalog hint, but Skillager honors it only when matching user state has bound that exact project and catalog through an authorized tag operation. Explicit command-line or environment configuration takes precedence. A repository cannot substitute its own library registration or approval files by committing a catalog path.
 
+## Standalone Full Export
+
+An explicit `export` prepares one current accepted owned Full payload into a
+missing or empty directory. Both the full accepted hash and native agent are
+required. The existing native payload and provenance owners select canonical
+files, preserve file modes, and authenticate the sidecar; export provenance uses
+`scope: export`, with no claim that a project or agent has installed the artifact.
+The JSON manifest includes the sidecar, relative paths, modes, sizes and hashes,
+never bodies. Export neither approves nor activates content.
+
+All preparation and publication writes use held directory descriptors with
+no-follow component traversal and exclusive file creation. Destination components
+and protected library/catalog overlap are checked before mutation; source,
+approval, destination identity, full bytes/modes and provenance are rechecked
+before success. Changed or inserted destination objects cannot be overwritten or
+removed as our staged files. Only exact created entry identities are eligible for
+cleanup; a preserved concurrent entry can leave a private staging directory for
+inspection. This cooperative protection does not make Skillager a same-user
+security boundary.
+
+Export reads current personal authority and immutable accepted-version evidence
+without initializing databases, taking writer locks, or writing any approval,
+catalog, cache, library, or exposure records. Historical acceptance can explain a
+version mismatch but never restores historical bytes or grants current approval.
+Pending, blocked, lint-blocked, changed and unaccepted inputs remain refusals.
+
 ## Approval Storage and Search Caches
 
 Each state root stores current approval decisions in `trust.sqlite3`. Updates append

@@ -735,17 +735,28 @@ def prepare_direct_candidate(
     skill: dict[str, Any], *, candidate: Path, target: Path, agent: str, scope: str,
     mode: str, decisions: dict[str, Any], verify_source: bool = True,
     root_mode: int | None = None,
+    candidate_fd: int | None = None,
+    owned_entries: dict[str, tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """One renderer/sidecar owner for ordinary and aggregate direct exposures."""
+    if candidate_fd is not None and mode != "native":
+        raise ValueError("descriptor-bound candidates support native Full payloads only")
     source_root = Path(skill.get("root") or ".").resolve()
     if mode == "native":
         _require_native_skill_frontmatter(source_root / "SKILL.md")
-    candidate.mkdir()
+    if candidate_fd is None:
+        candidate.mkdir()
     if root_mode is not None:
-        candidate.chmod(root_mode)
+        if candidate_fd is None:
+            candidate.chmod(root_mode)
+        else:
+            os.fchmod(candidate_fd, root_mode)
     rendered = render_stub_skill(skill, stub_slug=target.name) if mode == "stub" else None
     if rendered is None:
-        _copy_skill_tree(source_root, candidate)
+        if candidate_fd is None:
+            _copy_skill_tree(source_root, candidate)
+        else:
+            _copy_skill_tree(source_root, candidate, target_fd=candidate_fd, owned_entries=owned_entries)
     else:
         (candidate / "SKILL.md").write_text(rendered, encoding="utf-8")
     materialized_hash = content_hash(candidate)
@@ -757,7 +768,10 @@ def prepare_direct_candidate(
         materialized_fingerprint=content_tree_fingerprint(candidate),
         materialized_target_hash=target_state_hash(candidate, include_sidecar=False))
     metadata.update(decisions)
-    write_materialized_sidecar(candidate / "skillager.materialized.yaml", metadata)
+    if candidate_fd is None:
+        write_materialized_sidecar(candidate / "skillager.materialized.yaml", metadata)
+    else:
+        write_materialized_sidecar(candidate / "skillager.materialized.yaml", metadata, directory_fd=candidate_fd, owned_entries=owned_entries)
     return metadata
 
 
@@ -1281,7 +1295,12 @@ def _add_source_library_id(data: dict[str, Any], skill: dict[str, Any]) -> None:
         data["source_library_id"] = library_id
 
 
-def _copy_skill_tree(source: Path, target: Path) -> None:
+def _copy_skill_tree(source: Path, target: Path, *, target_fd: int | None = None,
+                     owned_entries: dict[str, tuple[int, int]] | None = None) -> None:
+    if target_fd is not None:
+        from .native_payload import copy_native_tree_to_fd
+        copy_native_tree_to_fd(source, target_fd, owned_entries=owned_entries)
+        return
     source = source.resolve()
     for path in iter_content_files(source):
         relative = path.relative_to(source)

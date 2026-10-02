@@ -96,6 +96,11 @@ Search accepted owned skills with `skillager search "database migration" --scope
 The default scope includes available workspace sources. Both return metadata only;
 see [search scope and freshness](docs/USER_GUIDE.md#search-the-personal-library).
 
+Prepare one current accepted Full payload outside a project with
+`skillager export lib/<name> --version <full-content-hash> --agent codex --dest <empty-dir> --json`.
+The artifact includes native file bytes, modes, and provenance; it does not install
+or approve a skill. See [Full export](docs/USER_GUIDE.md#export-an-accepted-full-payload).
+
 Opt into [known-skill search views](docs/SEARCH_VIEWS.md) with
 `skillager search --view skills --json -- "merge"`: group proven identities and hide
 skills already present in this project. Choose `--view copies` for separate
