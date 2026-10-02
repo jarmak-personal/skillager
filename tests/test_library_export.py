@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import unittest
 from unittest.mock import patch
 
@@ -98,7 +99,7 @@ class LibraryExportRaceTests(unittest.TestCase):
         self.assertEqual(self.fixture.files(outside), expected)
         self.assertFalse(self.destination.exists())
 
-    def test_added_destination_file_is_preserved_and_only_staged_objects_are_removed(self):
+    def test_added_destination_file_is_preserved_and_only_created_objects_are_removed(self):
         original = exporting.prepare_direct_candidate
 
         def addition(*args, **kwargs):
@@ -110,6 +111,36 @@ class LibraryExportRaceTests(unittest.TestCase):
             self.run_export()
         self.assertEqual(raised.exception.code, "destination_changed")
         self.assertEqual(self.fixture.files(self.destination), {"keep.txt": (b"New concurrent user bytes.\n", 0o644)})
+
+    def test_noncanonical_foreign_entry_before_sidecar_is_refused_and_preserved(self):
+        original = exposure.write_materialized_sidecar
+
+        def addition(*args, **kwargs):
+            excluded = self.destination / ".git"
+            excluded.mkdir()
+            (excluded / "keep.txt").write_text("Foreign bytes outside the canonical content hash.\n")
+            return original(*args, **kwargs)
+
+        with patch.object(exposure, "write_materialized_sidecar", addition), self.assertRaises(exporting.ExportRefusal) as raised:
+            self.run_export()
+        self.assertEqual(raised.exception.code, "destination_changed")
+        self.assertEqual(self.fixture.files(self.destination), {".git/keep.txt": (b"Foreign bytes outside the canonical content hash.\n", 0o644)})
+
+    def test_replaced_created_file_with_identical_bytes_modes_and_times_is_preserved(self):
+        original = exporting.prepare_direct_candidate
+
+        def replacement(*args, **kwargs):
+            result = original(*args, **kwargs)
+            path = self.destination / "reference.txt"
+            other = self.root / "replacement.txt"
+            shutil.copy2(path, other)
+            os.replace(other, path)
+            return result
+
+        with patch.object(exporting, "prepare_direct_candidate", replacement), self.assertRaises(exporting.ExportRefusal) as raised:
+            self.run_export()
+        self.assertEqual(raised.exception.code, "destination_changed")
+        self.assertEqual(self.fixture.files(self.destination), {"reference.txt": (b"Reviewed reference bytes.\n", 0o640)})
 
     def test_source_changed_through_hardlink_after_preparation_cannot_report_success(self):
         original = exporting.prepare_direct_candidate

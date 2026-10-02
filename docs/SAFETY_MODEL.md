@@ -39,9 +39,10 @@ no-follow component traversal and exclusive file creation. Destination component
 and protected library/catalog overlap are checked before mutation; source,
 approval, destination identity, full bytes/modes and provenance are rechecked
 before success. Changed or inserted destination objects cannot be overwritten or
-removed as our staged files. Only exact created entry identities are eligible for
-cleanup; a preserved concurrent entry can leave a private staging directory for
-inspection. This cooperative protection does not make Skillager a same-user
+removed as our created files. Only exact created entry identities are eligible for
+cleanup; a preserved concurrent entry can leave the refused destination nonempty
+for inspection. Preparation writes once directly into the held destination;
+protected root and ancestor identities reject case/normalization overlap aliases. This cooperative protection does not make Skillager a same-user
 security boundary.
 
 Export reads current personal authority and immutable accepted-version evidence

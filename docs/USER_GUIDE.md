@@ -228,7 +228,8 @@ skillager export lib/<name> --version <full-content-hash> --agent codex --dest /
 ```
 
 `--version` and `--agent codex|claude` are required. Export copies the same canonical
-files and modes as native Full exposure, including nested executable files, and
+files and modes as native Full exposure, including nested executable files and
+sidecar permissions under the current umask, and
 adds authenticated `skillager.materialized.yaml` provenance with `scope: export`.
 It requires current accepted content for that exact hash. It does not restore
 historical bytes, install into an agent directory, or write approval, exposure,
@@ -241,11 +242,13 @@ library or catalog in either direction. Canonical file selection matches native
 exposure: regular hardlinked files are copied independently, while existing source
 symlinks and non-files are excluded. A selected file replaced by a symlink during
 copying is refused. A nonempty destination is refused without changes.
-Preparation stays inside the selected destination, using descriptor-bound writes.
+Preparation writes once directly into the selected destination using held
+directory descriptors. Filesystem identities protect library/catalog overlap even
+when path spellings differ by case or Unicode normalization.
 Changed paths cannot redirect writes to another directory. A competing writer's
 files are preserved; cleanup removes only the exact objects created by export.
-If another writer changes staged objects, preserved entries may prevent removing
-the private staging directory; inspect the refused destination before retrying.
+Preserved concurrent entries may leave a refused destination nonempty; inspect
+it before retrying.
 
 Success exits 0 with `skillager.export.v1`, `status: exported`, the owned ID and
 library UUID, `agent`, `scope: export`, `destination`, `content_hash`, and `files`.

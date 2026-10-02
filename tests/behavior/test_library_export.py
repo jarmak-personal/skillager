@@ -50,6 +50,8 @@ class LibraryExportBehaviorTests(unittest.TestCase):
                 for path in parent.rglob("*") if path.is_file()}
 
     def test_both_agents_reproduce_native_bytes_modes_and_authenticated_provenance(self) -> None:
+        previous_umask = os.umask(0o002)
+        self.addCleanup(os.umask, previous_umask)
         # An accepted regular file gaining a hardlink does not change its hash.
         # Canonical selection also excludes existing source symlinks for both paths.
         outside = self.root / "outside-hardlink.txt"
@@ -73,8 +75,10 @@ class LibraryExportBehaviorTests(unittest.TestCase):
                 preview = self.checked(self.cli.run("expose", "lib/payload", "--agent", agent, "--mode", "native", "--dry-run", "--json"))[0]
                 installed = self.checked(self.cli.run(*preview["next_command_argv"][1:]))[0]
                 native = self.files(Path(installed["target"]))
-                sidecar = actual.pop("skillager.materialized.yaml")[0].decode()
-                native.pop("skillager.materialized.yaml")
+                sidecar_bytes, sidecar_mode = actual.pop("skillager.materialized.yaml")
+                self.assertEqual(sidecar_mode, native.pop("skillager.materialized.yaml")[1])
+                self.assertEqual(sidecar_mode, 0o664)
+                sidecar = sidecar_bytes.decode()
                 self.assertEqual(actual, native)
                 self.assertEqual((outside.read_bytes(), stat.S_IMODE(outside.stat().st_mode)), expected_outside)
                 self.assertNotEqual((destination / "reference.txt").stat().st_ino, outside.stat().st_ino)
@@ -90,7 +94,7 @@ class LibraryExportBehaviorTests(unittest.TestCase):
             handle.write("\nUnaccepted change.\n")
         self.assertEqual(self.export(destination, code=2)["error"]["code"], "changed_content")
         where = self.checked(self.cli.run("library", "status", "payload", "--json"))["skill"]
-        self.assertEqual(self.export(destination, version=where["working_hash"], code=2)["error"]["code"], "version_not_accepted")
+        self.assertEqual(self.export(destination, version=where["working_hash"], code=2)["error"]["code"], "pending_content")
         self.checked(self.cli.run("--state-dir", str(self.root / "state/catalog"), "review", "block", "lib/payload", "--json"))
         self.assertEqual(self.export(destination, code=2)["error"]["code"], "blocked_content")
         self.assertFalse(destination.exists())
@@ -132,6 +136,21 @@ class LibraryExportBehaviorTests(unittest.TestCase):
         damaged.write_bytes(b"damaged project authority")
         self.export(destination)
         self.assertTrue((destination / "SKILL.md").is_file())
+
+    def test_case_aliases_of_protected_roots_and_ancestors_are_refused_before_writes(self) -> None:
+        library_alias = self.library.with_name("LIBRARY")
+        if not library_alias.exists():
+            self.skipTest("filesystem has case-sensitive directory names")
+        self.assertTrue(os.path.samefile(library_alias, self.library))
+        before = self.state()
+        root_alias = self.root.with_name(self.root.name.upper())
+        for destination in (library_alias, library_alias / "SKILLS" / "new-export",
+                            self.root / "STATE" / "CATALOG" / "new-export", root_alias):
+            with self.subTest(destination=destination):
+                self.assertEqual(self.export(destination, code=2)["error"]["code"], "unsafe_destination")
+                self.assertEqual(self.state(), before)
+        self.assertFalse((self.library / "skills" / "new-export").exists())
+        self.assertFalse((self.root / "state/catalog/new-export").exists())
 
     def test_lint_quarantine_is_refused_without_export_effects(self) -> None:
         metadata = self.source / "skillager.yaml"
