@@ -139,12 +139,21 @@ def materialized_sidecar_hash(sidecar: dict[str, Any]) -> str:
     return digest.hexdigest()
 
 
-def write_materialized_sidecar(path: Path, sidecar: dict[str, Any]) -> None:
+def write_materialized_sidecar(path: Path, sidecar: dict[str, Any], *, directory_fd: int | None = None,
+                               owned_entries: dict[str, tuple[int, int]] | None = None) -> None:
     """Write canonical managed metadata with a self-authenticating payload hash."""
 
     payload = dict(sidecar)
     payload[MATERIALIZED_SIDECAR_HASH] = materialized_sidecar_hash(payload)
-    path.write_text(dumps(payload), encoding="utf-8")
+    if directory_fd is None:
+        path.write_text(dumps(payload), encoding="utf-8")
+    else:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        with os.fdopen(os.open(path.name, flags, 0o644, dir_fd=directory_fd), "w", encoding="utf-8") as handle:
+            created = os.fstat(handle.fileno())
+            if owned_entries is not None:
+                owned_entries[path.name] = (created.st_dev, created.st_ino)
+            handle.write(dumps(payload))
 
 
 def target_has_entries(target: Path) -> bool:

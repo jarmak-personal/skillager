@@ -206,6 +206,8 @@ def build_parser() -> argparse.ArgumentParser:
     add_doctor_parser(sub)
     add_working_parser(sub)
     add_library_parser(sub)
+    from .exporting import add_export_parser
+    add_export_parser(sub)
     add_import_parser(sub)
     add_collection_parser(sub)
     add_tag_parser(sub)

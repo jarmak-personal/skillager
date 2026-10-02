@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add explicit `export lib/<name> --version <full-hash> --agent codex|claude`
+  to prepare a verified current accepted native Full artifact in a missing or
+  empty directory. Return metadata-only file hashes/modes and export provenance;
+  preserve approval, library and exposure state and refuse unsafe destinations,
+  unaccepted changes, and historical content mismatches.
+
 - Add bounded, complete token-bound local exposure plans for preserved native
   adoption/removal and named router grouping, membership changes and ungrouping.
   Preserve unselected copies and tag curation; report partial recovery explicitly.

@@ -120,6 +120,24 @@ def get_record(root: Path, scope: str, key: str) -> dict[str, Any] | None:
         raise ValueError(f"cannot read approval database {database_path(root)}: {exc}") from exc
 
 
+def version_was_accepted(root: Path, source_key: str, content_hash: str) -> bool:
+    """Observe existing version evidence without creating state or taking writer locks."""
+    record = get_record(root, "global_approvals", source_key) or {}
+    if record.get("state") == "blocked":
+        record = record.get("previous_approval") or {}
+    if record.get("state") in {"reviewed", "trusted", "pinned"} and record.get("content_hash") == content_hash:
+        return True
+    if not _has_database(root):
+        return False
+    try:
+        with closing(connect_database(database_path(root))) as conn:
+            _check_schema(conn)
+            return conn.execute("SELECT 1 FROM content_versions WHERE source_key = ? AND content_hash = ?",
+                                (source_key, content_hash)).fetchone() is not None
+    except sqlite3.Error as exc:
+        raise ValueError(f"cannot read approval database {database_path(root)}: {exc}") from exc
+
+
 def _initialize(conn: sqlite3.Connection, root: Path) -> None:
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version:

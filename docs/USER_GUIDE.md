@@ -218,6 +218,54 @@ perform the work needed to verify every returned source. UI integrations should 
 the CLI asynchronously, cancel obsolete requests, and refresh after acceptance or
 other relevant changes; search is not a watcher or an update notification service.
 
+## Export An Accepted Full Payload
+
+To prepare an artifact for a separately authorized delivery, select an accepted
+owned skill's full content hash from `list --scope library --json`, then run:
+
+```bash
+skillager export lib/<name> --version <full-content-hash> --agent codex --dest /absolute/empty-directory --json
+```
+
+`--version` and `--agent codex|claude` are required. Export copies the same canonical
+files and modes as native Full exposure, including nested executable files, and
+adds authenticated `skillager.materialized.yaml` provenance with `scope: export`.
+It requires current accepted content for that exact hash. It does not restore
+historical bytes, install into an agent directory, or write approval, exposure,
+library, index, cache, or lock state. Personal catalog selection ignores project
+catalog hints and project approval state.
+
+The destination may be missing or empty, with an existing parent. Its components
+must be directories without symlink aliases or `..`; it must not overlap the
+library or catalog in either direction. Canonical file selection matches native
+exposure: regular hardlinked files are copied independently, while existing source
+symlinks and non-files are excluded. A selected file replaced by a symlink during
+copying is refused. A nonempty destination is refused without changes.
+Preparation stays inside the selected destination, using descriptor-bound writes.
+Changed paths cannot redirect writes to another directory. A competing writer's
+files are preserved; cleanup removes only the exact objects created by export.
+If another writer changes staged objects, preserved entries may prevent removing
+the private staging directory; inspect the refused destination before retrying.
+
+Success exits 0 with `skillager.export.v1`, `status: exported`, the owned ID and
+library UUID, `agent`, `scope: export`, `destination`, `content_hash`, and `files`.
+Each file has relative `path`, numeric permission `mode`, byte `size`, and `sha256`.
+The file list includes provenance. JSON contains no skill bodies. Written bytes,
+modes, provenance, current source, and current approval are rechecked before success.
+
+Refusal exits 2 with the same schema, `status: refused`, empty `files`, and an
+`error` containing a bounded `code` and message. `pending_content` means the current
+hash lacks current acceptance; `blocked_content` and `lint_blocked_content` preserve
+their respective gates. `version_not_accepted` means the requested hash lacks
+accepted-version evidence. `changed_content` means the currently accepted version
+differs from the working tree; `version_content_mismatch` means a previously
+accepted historical hash differs from current bytes. Historical acceptance is not
+current approval. `incompatible_agent`, `unsafe_destination`,
+`destination_not_empty`, `destination_changed`, `source_changed`, `export_changed`,
+and `verification_failed` distinguish other preparation refusals. Repair or review
+the reported condition before making a fresh request; do not infer an installation
+from artifact provenance.
+
 ## Create A Personal Skill
 
 Ask your agent:
