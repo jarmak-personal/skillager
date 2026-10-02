@@ -29,6 +29,11 @@ canonical_npm_package_name = _validators.canonical_npm_package_name
 canonical_cargo_package_name = _validators.canonical_cargo_package_name
 
 
+def skill_frontmatter_metadata(text: str) -> dict[str, str]:
+    """Return declared identity metadata without inferred body prose."""
+    return _validators._frontmatter(text)
+
+
 @_dataclass(frozen=True)
 class Skill:
     id: str
@@ -238,4 +243,5 @@ __all__ = [
     "manifest_for_skill",
     "parse_skill",
     "quarantine_skill_from_dir",
+    "skill_frontmatter_metadata",
 ]

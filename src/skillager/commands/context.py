@@ -62,6 +62,13 @@ def catalog_root(args: argparse.Namespace) -> Path:
     return resolved
 
 
+def personal_catalog_root(args: argparse.Namespace) -> Path:
+    """Resolve user library authority without consulting project catalog bindings."""
+    if getattr(args, "catalog_state_dir", None):
+        return args.catalog_state_dir.expanduser().resolve()
+    return catalog_state_root().resolve()
+
+
 def remember_project_catalog(args: argparse.Namespace, catalog: Path) -> None:
     """Bind a repository catalog hint to user-owned per-project state."""
 
