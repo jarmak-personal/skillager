@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add opt-in `library accept --review-manifest --json` with a complete finite
+  metadata-only current-tree manifest bound to the existing acceptance token and
+  registered library identity. Support first/no-Git acceptance and edited trees;
+  preserve scanner/lint overrides, ordinary body gates and Git commit-before-trust.
+
 - Add explicit `export lib/<name> --version <full-hash> --agent codex|claude`
   to prepare a verified current accepted native Full artifact in a missing or
   empty directory. Return metadata-only file hashes/modes and export provenance;

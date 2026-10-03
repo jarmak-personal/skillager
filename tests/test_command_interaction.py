@@ -25,6 +25,7 @@ class MutationPromptTests(unittest.TestCase):
                     reason=None,
                     confirmation_token=None,
                     json=False,
+                    review_manifest=False,
                 ),
                 "skillager.commands.library.library_acceptance_preview",
                 self.accept_preview(),
@@ -94,6 +95,13 @@ class MutationPromptTests(unittest.TestCase):
             "scan": {"risk": "low", "finding_count": 0, "findings": []},
             "requires_override": False,
             "git": {"mode": "disabled"},
+            "_library_binding": {
+                "registration": {"name": "lib", "kind": "library", "library_root": "/library",
+                                 "path": "/library/skills", "library_id": "00000000-0000-0000-0000-000000000000"},
+                "identity": {"schema": "skillager.library.v1", "namespace": "lib",
+                             "library_id": "00000000-0000-0000-0000-000000000000",
+                             "created_at": "2026-10-03T00:00:00Z", "git": {"mode": "disabled"}},
+            },
         }
 
     @staticmethod

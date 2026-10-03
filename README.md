@@ -88,6 +88,11 @@ skillager library init --no-git
 
 Run `skillager library status` to see the library location and health.
 
+For complete human review before acceptance, use
+`skillager library accept lib/<name> --review-manifest --json`. The bounded
+metadata manifest identifies every eligible file and its exact acceptance token;
+see [the review sequence and limits](docs/LIBRARY_REVIEW.md).
+
 Git keeps library content history; SQLite keeps approvals and their decision history.
 Search reuses a persistent SQLite index. Back up the library and approval state
 together; see [storage and recovery](docs/USER_GUIDE.md#storage-and-backups).

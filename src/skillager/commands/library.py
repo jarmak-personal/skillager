@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..library.confirmation import confirmation_token, require_confirmation_token
+from ..library.review import REVIEW_LIMITS, ReviewRefusal, limit_refusal
 from ..library.service import (
     accept_library_skill,
     initialize_library,
@@ -94,6 +95,7 @@ def add_library_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser])
         help="Opaque token from the current acceptance preview.",
     )
     accept.add_argument("--json", action="store_true", help="Emit versioned preview or acceptance metadata as JSON.")
+    accept.add_argument("--review-manifest", action="store_true", help="Include a bounded exact-tree human review manifest; requires --json.")
     accept.set_defaults(func=cmd_library_accept)
     history = library_sub.add_parser("history", help="List verified content-addressed versions without bodies.")
     history.add_argument("skill", help="Library skill name or lib/<name> ID.")
@@ -222,16 +224,30 @@ def cmd_library_new(args: argparse.Namespace) -> int:
 
 
 def cmd_library_accept(args: argparse.Namespace) -> int:
+    if args.review_manifest and not args.json:
+        raise ValueError("--review-manifest requires --json")
+    try:
+        return _run_library_accept(args)
+    except ReviewRefusal as error:
+        result = {"schema": "skillager.library-accept.v1", "status": "refused",
+                  "error": {"code": error.code, "message": str(error)}, "limits": dict(REVIEW_LIMITS)}
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 2
+
+
+def _run_library_accept(args: argparse.Namespace) -> int:
     if args.override_lint and not (args.reason or "").strip():
         raise ValueError("--reason is required with --override-lint")
     if args.reason and not args.override_lint:
         raise ValueError("--reason can only be used with --override-lint")
-    preview = library_acceptance_preview(catalog_root(args), args.skill)
+    preview = library_acceptance_preview(catalog_root(args), args.skill, review_manifest=args.review_manifest)
     token = confirmation_token(
         "library-accept",
         skill_id=preview["skill"]["id"],
         working_hash=preview["skill"]["working_hash"],
         provenance_fingerprint=preview.get("_provenance_fingerprint"),
+        library_binding=preview["_library_binding"],
+        review_manifest=preview.get("review_manifest"),
         override_lint=args.override_lint,
         reason=(args.reason or "").strip() or None,
     )
@@ -245,7 +261,12 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
             override_lint=args.override_lint,
             reason=args.reason,
             json_output=args.json,
+            review_manifest=args.review_manifest,
         )
+    if args.review_manifest:
+        preview["review_manifest"]["confirmation_token"] = token
+        if len((json.dumps(_public_payload(preview), indent=2, sort_keys=True) + "\n").encode("utf-8")) > REVIEW_LIMITS["response_bytes"]:
+            raise limit_refusal()
     if not args.yes:
         if args.json:
             print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
@@ -271,6 +292,9 @@ def cmd_library_accept(args: argparse.Namespace) -> int:
         catalog_root(args),
         args.skill,
         expected_hash=str(preview["skill"]["working_hash"]),
+        expected_library=preview["_library_binding"],
+        expected_provenance=preview.get("_provenance_fingerprint"),
+        review_manifest=args.review_manifest,
         override_lint=args.override_lint,
         reason=args.reason,
         project_dir=current_project_dir(),
@@ -474,6 +498,7 @@ def _accept_argv(
     override_lint: bool,
     reason: str | None,
     json_output: bool,
+    review_manifest: bool = False,
 ) -> list[str]:
     command = [
         "skillager",
@@ -482,6 +507,8 @@ def _accept_argv(
         skill_id,
     ]
     _with_override(command, override_lint=override_lint, reason=reason)
+    if review_manifest:
+        command.append("--review-manifest")
     if json_output:
         command.append("--json")
     command.extend(["--yes", "--confirmation-token", token])
