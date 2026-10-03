@@ -18,6 +18,17 @@ Setup always scans the current selected content locally. A reusable global appro
 
 ## Personal Library Acceptance
 
+Opt-in `library accept --review-manifest --json` binds a complete bounded metadata
+manifest to the existing token and exact registered library identity. Private
+captured bytes pass through the existing candidate/scanner/lint/hash owners;
+bounded live recapture detects drift before a confirmation command or trust write.
+Access-time updates do not change approval identity. Finite admission or response
+failure returns no partial tree or usable command; enumeration and existing
+post-acceptance catalog refresh are not a hard work/time cap. Ordinary body gates,
+audited overrides and Git protections remain authoritative. See
+[Exact current library review](LIBRARY_REVIEW.md) for human file-read verification,
+binary handling, exclusions and limits.
+
 Library ownership does not grant body availability. Every new or edited `lib/<name>` skill remains pending until `skillager library accept` records its exact current tree hash. Pending bodies stay unavailable through `show --content`, activation, native/stub exposure, and routers; generic force or include-unreviewed flags do not bypass this boundary.
 
 Acceptance previews body-safe scanner and lint metadata, recomputes the hash under a bounded lock, and requires explicit confirmation. Metadata findings include rule identity and location but never the matched instruction text, including on full diagnostic list/search/show JSON. The non-interactive command carries an opaque token bound to the exact previewed hash, relevant shared-provenance state, and any audited reason; missing or stale tokens fail before mutation. Blocking lint or high scanner risk requires a real `--override-lint --reason "..."` before a confirmation command is emitted. Git-backed libraries commit the selected skill path before trust is recorded and refuse conflicts, in-progress repository operations, unrelated staged changes, and unrelated edits inside shared provenance. Initialization preflights required metadata against ignore rules and rolls back partial writes/staging if the first commit fails. Adding a remote does not alter approval identity: library approvals use `library:<library_id>#<skill-name>` plus the accepted content hash.

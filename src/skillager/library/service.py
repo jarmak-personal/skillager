@@ -47,6 +47,7 @@ from .metadata import (
 )
 from .model import LIBRARY_COLLECTION_KIND, LIBRARY_NAMESPACE, LibraryIdentity, LibraryLayout, LibraryRegistration, normalize_skill_name
 from .paths import default_library_root, load_library_registration
+from .review import REVIEW_SCHEMA, REVIEW_LIMITS, ReviewRefusal, capture_review_tree, review_library_skill
 
 
 LIBRARY_INIT_SCHEMA = "skillager.library-init.v1"
@@ -227,11 +228,18 @@ def new_library_skill(catalog_root: Path, name: str) -> dict[str, Any]:
         }
 
 
-def library_acceptance_preview(catalog_root: Path, skill_name: str) -> dict[str, Any]:
+def library_acceptance_preview(catalog_root: Path, skill_name: str, *, review_manifest: bool = False) -> dict[str, Any]:
     registration, identity = _require_library_identity(catalog_root)
     normalized = normalize_skill_name(skill_name)
-    require_canonical_content_tree(registration.layout.skill_root(normalized), action="library acceptance")
-    skill = _library_skill_entry(catalog_root, skill_name)
+    target = registration.layout.skill_root(normalized)
+    require_canonical_content_tree(target, action="library acceptance")
+    if review_manifest:
+        skill, captured = review_library_skill(catalog_root, registration, identity, normalized)
+        record = (load_library_provenance(registration.layout) or {}).get("skills", {}).get(normalized)
+        if isinstance(record, dict) and isinstance(record.get("imported_from"), dict):
+            skill["imported_from"] = dict(record["imported_from"])
+    else:
+        skill, captured = _library_skill_entry(catalog_root, skill_name), None
     git = repository_status(registration.layout.root, mode=identity.git_mode)
     commit_targets = _acceptance_commit_targets(registration.layout, normalized, Path(skill["root"]))
     changes = (
@@ -241,7 +249,7 @@ def library_acceptance_preview(catalog_root: Path, skill_name: str) -> dict[str,
     )
     lint_blocked = bool(blocking_findings(skill.get("lint")))
     high_risk = skill.get("scan", {}).get("risk") == "high"
-    return {
+    result: dict[str, Any] = {
         "schema": LIBRARY_ACCEPT_SCHEMA,
         "status": "preview",
         "skill": _compact_library_skill(skill),
@@ -255,7 +263,25 @@ def library_acceptance_preview(catalog_root: Path, skill_name: str) -> dict[str,
             **changes,
         },
         "_provenance_fingerprint": _provenance_state_fingerprint(registration.layout, git, normalized),
+        "_library_binding": _acceptance_library_binding(registration, identity),
     }
+    if captured is not None:
+        require_canonical_content_tree(target, action="library acceptance")
+        fresh_registration, fresh_identity = _require_library_identity(catalog_root)
+        fresh_git = repository_status(fresh_registration.layout.root, mode=fresh_identity.git_mode)
+        if (captured["working_hash"] != skill["content_hash"]
+                or capture_review_tree(target)[0] != captured
+                or _acceptance_library_binding(fresh_registration, fresh_identity) != result["_library_binding"]
+                or _provenance_state_fingerprint(fresh_registration.layout, fresh_git, normalized) != result["_provenance_fingerprint"]):
+            raise ReviewRefusal("review_changed", "the review tree or library changed during preview; preview again")
+        result["review_manifest"] = {"schema": REVIEW_SCHEMA, "library_id": identity.library_id,
+                                     "library_root": str(registration.layout.root), "skill_id": skill["id"],
+                                     "skill_root": str(target), "limits": dict(REVIEW_LIMITS), **captured}
+    return result
+
+
+def _acceptance_library_binding(registration: LibraryRegistration, identity: LibraryIdentity) -> dict[str, Any]:
+    return {"registration": registration.to_mapping(), "identity": identity.to_mapping()}
 
 
 def accept_library_skill(
@@ -263,6 +289,9 @@ def accept_library_skill(
     skill_name: str,
     *,
     expected_hash: str,
+    expected_library: dict[str, Any] | None = None,
+    expected_provenance: str | None = None,
+    review_manifest: bool = False,
     override_lint: bool = False,
     reason: str | None = None,
     project_dir: Path | None = None,
@@ -272,8 +301,18 @@ def accept_library_skill(
     with resource_locks(resources):
         registration, identity = _require_library_identity(catalog_root)
         layout = registration.layout
+        if expected_library is not None:
+            git = repository_status(layout.root, mode=identity.git_mode)
+            if (_acceptance_library_binding(registration, identity) != expected_library
+                    or _provenance_state_fingerprint(layout, git, normalized) != expected_provenance):
+                raise ValueError("library acceptance preview is stale; library identity or provenance changed")
         require_canonical_content_tree(layout.skill_root(normalized), action="library acceptance")
-        skill = _library_skill_entry(catalog_root, normalized)
+        if review_manifest:
+            skill, reviewed = review_library_skill(catalog_root, registration, identity, normalized)
+            if capture_review_tree(layout.skill_root(normalized))[0] != reviewed:
+                raise ReviewRefusal("review_changed", "the review tree changed during acceptance; preview again")
+        else:
+            skill = _library_skill_entry(catalog_root, normalized)
         working_hash = str(skill["content_hash"])
         if working_hash != expected_hash:
             raise ValueError("library skill changed since the acceptance preview; review it again and rerun `library accept`")
@@ -283,6 +322,7 @@ def accept_library_skill(
             reason=reason,
         )
         approval_key = _library_approval_key(skill)
+        working_provenance = _provenance_state_fingerprint(layout, {"mode": "disabled"}, normalized) if review_manifest else None
         commit = None
         head_hash = None
         if identity.git_mode == "system":
@@ -306,6 +346,13 @@ def accept_library_skill(
                 head_hash = head_content_hash(layout.root, target)
             if head_hash != working_hash:
                 raise ValueError("library Git HEAD does not reproduce the accepted Skillager content hash")
+        if review_manifest:
+            require_canonical_content_tree(layout.skill_root(normalized), action="library acceptance")
+            fresh_registration, fresh_identity = _require_library_identity(catalog_root)
+            if (_acceptance_library_binding(fresh_registration, fresh_identity) != expected_library
+                    or capture_review_tree(layout.skill_root(normalized))[0] != reviewed
+                    or _provenance_state_fingerprint(layout, {"mode": "disabled"}, normalized) != working_provenance):
+                raise ReviewRefusal("review_changed", "the review tree or library changed before acceptance; preview again")
         record = set_trust(
             catalog_root,
             skill["id"],

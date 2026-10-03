@@ -266,6 +266,15 @@ skillager library accept lib/<name> --json
 Summarize what changed and ask the user to approve the preview. Run its exact next
 command only after approval.
 
+For explicitly authorized complete human review, use
+`skillager library accept lib/<name> --review-manifest --json`. Its bounded
+`skillager.library-review-manifest.v1` metadata covers all eligible bytes, including
+binaries, and executable state, and identifies the exact confirmation token.
+Verify complete confined file reads, then compare a fresh identical preview before
+requesting approval. Refuse unsupported review formats or finite-limit failures;
+do not omit files, rebuild the tree hash, or read pending bodies through ordinary
+agent commands. See [the exact review contract](LIBRARY_REVIEW.md).
+
 ### Edit
 
 Find the canonical path before editing:

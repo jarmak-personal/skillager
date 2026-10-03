@@ -289,7 +289,14 @@ skillager library accept lib/migration-review
 ```
 
 After any edit, the skill waits for review again. Accept it only when the preview
-matches the change you intended.
+and reviewed bytes match the change you intended. For a complete current-tree manifest, including first
+acceptance without Git history, run
+`skillager library accept lib/<name> --review-manifest --json`. Verify every listed
+file with confined human reads, compare a fresh identical preview, then approve
+its exact returned command. The metadata-only manifest includes supporting and
+binary files; a client unable to review a format must refuse rather than omit it.
+See [Exact current library review](LIBRARY_REVIEW.md) for schema, exclusions and
+finite-limit refusals.
 
 Run initialization yourself only when you want a custom location or no Git history:
 
