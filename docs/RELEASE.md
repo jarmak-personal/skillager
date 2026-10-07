@@ -69,6 +69,7 @@ version bump, use `patch`, `minor`, or `major`.
 The workflow:
 
 - builds release notes from commit subjects since the previous package tag before changing version files or pushing a commit/tag
+- commits the version bump locally before validation so checks run against clean, exact release source; no commit or tag is pushed until validation passes
 - builds the selected distribution
 - runs package checks before publishing
 - runs the local wheelhouse smoke check for Skillager releases
