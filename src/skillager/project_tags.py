@@ -198,7 +198,8 @@ def _normalize_skill_ids(values: Any) -> list[str]:
 
 
 def _touch_tag(entry: dict[str, Any]) -> None:
-    entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+    # Generated timestamp width participates in exact staging byte budgets.
+    entry["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _remember_catalog_state(data: dict[str, Any], catalog_state_dir: Path | None) -> None:

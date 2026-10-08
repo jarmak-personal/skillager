@@ -1151,7 +1151,8 @@ def _sidecar(
         "materialized_fingerprint": materialized_fingerprint,
         "materialized_target_hash": materialized_target_hash,
         "source_trust": skill.get("trust"),
-        "materialized_at": datetime.now(timezone.utc).isoformat(),
+        # Generated timestamp width participates in exact staging byte budgets.
+        "materialized_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "agent": agent,
         "scope": scope,
     }
@@ -1202,7 +1203,7 @@ def _working_sidecar(
         "materialized_fingerprint": materialized_fingerprint,
         "materialized_target_hash": materialized_target_hash,
         "source_trust": "reviewed",
-        "materialized_at": datetime.now(timezone.utc).isoformat(),
+        "materialized_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "agent": agent,
         "scope": scope,
     }
@@ -1245,7 +1246,7 @@ def _router_sidecar(
         "materialized_fingerprint": materialized_fingerprint,
         "materialized_target_hash": materialized_target_hash,
         "source_trust": "reviewed",
-        "materialized_at": datetime.now(timezone.utc).isoformat(),
+        "materialized_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "agent": agent,
         "scope": scope,
     }
@@ -1277,7 +1278,7 @@ def _stub_sidecar(
         "materialized_fingerprint": materialized_fingerprint,
         "materialized_target_hash": materialized_target_hash,
         "source_trust": skill.get("trust"),
-        "materialized_at": datetime.now(timezone.utc).isoformat(),
+        "materialized_at": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
         "agent": agent,
         "scope": scope,
     }
