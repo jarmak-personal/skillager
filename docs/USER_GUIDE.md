@@ -373,10 +373,11 @@ skillager library accept lib/migration-review
 After any edit, the skill waits for review again. Accept it only when the preview
 and reviewed bytes match the change you intended. For a complete current-tree manifest, including first
 acceptance without Git history, run
-`skillager library accept lib/<name> --review-manifest --json`. Verify every listed
-file with confined human reads, compare a fresh identical preview, then approve
-its exact returned command. The metadata-only manifest includes supporting and
-binary files; a client unable to review a format must refuse rather than omit it.
+`skillager library accept lib/<name> --review-manifest --json`. Every listed file
+can be inspected before one explicit decision about the complete version. Compare
+a fresh identical preview, then approve its exact returned command. The
+metadata-only manifest includes supporting and binary files; unsupported formats
+must remain visible with a route to suitable file tools.
 See [Exact current library review](LIBRARY_REVIEW.md) for schema, exclusions and
 finite-limit refusals.
 
@@ -425,6 +426,14 @@ skillager import workflows/pr-review --as team-pr-review
 The preview does not create the library or copy files. Confirmation copies only that
 skill, records where it came from, and leaves the original unchanged. A confirmed
 first import creates the default personal library.
+
+For a complete list of the files that Save and accept will cover, use
+`skillager import <external-id> --review-manifest --json`. Each file remains
+available for inspection; one confirmation copies and accepts the version.
+When names collide, add `--source-file <canonical-absolute-SKILL.md>` from the
+selected project inventory occurrence. The selector never imports an arbitrary
+path. Changed or unreadable files require a fresh complete preview. See
+[the import review contract](LIBRARY_REVIEW.md#import-an-external-original).
 
 ## Sync Existing Approvals
 

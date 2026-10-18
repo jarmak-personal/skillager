@@ -12,6 +12,7 @@ from ..state.locking import resource_locks
 from ..state.statefiles import read_user_json
 from ..trust import APPROVED_TRUST_STATES, approval_key_for, set_trust
 from .candidate import prepare_library_candidate
+from .review import REVIEW_LIMITS, ReviewRefusal, capture_review_tree
 from .git import LibraryGitError, commit_paths, path_changes, repository_status, verified_version_reference
 from .metadata import load_library_provenance, set_import_provenance
 from .model import LIBRARY_NAMESPACE, normalize_skill_name
@@ -28,6 +29,7 @@ from .service import (
 
 
 IMPORT_SCHEMA = "skillager.import.v1"
+IMPORT_REVIEW_SCHEMA = "skillager.import-review-manifest.v1"
 
 
 def import_preview(
@@ -37,9 +39,11 @@ def import_preview(
     *,
     destination_name: str | None = None,
     project_dir: Path | None = None,
+    source_file: Path | None = None,
+    review_manifest: bool = False,
 ) -> dict[str, Any]:
     layout, library, library_binding = _library_first_use_plan(catalog_root)
-    source = _resolve_external_skill(project_state, catalog_root, source_skill_id)
+    source = _resolve_external_skill(project_state, catalog_root, source_skill_id, source_file=source_file)
     name = normalize_skill_name(destination_name or source_skill_id.rsplit("/", 1)[-1])
     target = layout.skill_root(name)
     _require_import_destination(layout.skills, target, source)
@@ -55,7 +59,7 @@ def import_preview(
             "source_type": str((source.get("source") or {}).get("type") or "unknown"),
         },
     }
-    return {
+    result = {
         "schema": IMPORT_SCHEMA,
         "status": "preview",
         "source": _compact_source(source),
@@ -79,6 +83,20 @@ def import_preview(
         "requires_override": requires_override,
         "project": str(project_dir.resolve()) if project_dir is not None else None,
     }
+    if source_file is not None or review_manifest:
+        result["source"]["file"] = str(Path(source["entrypoint"]).resolve())
+    if review_manifest:
+        captured = _capture_import_review(source)
+        result["review_manifest"] = {
+            "schema": IMPORT_REVIEW_SCHEMA,
+            "source_id": source["id"], "source_root": result["source"]["path"],
+            "source_file": result["source"]["file"], "source_hash": source["content_hash"],
+            "source_provenance": _review_source_provenance(source),
+            "destination_id": result["destination"]["id"], "destination_path": str(target),
+            "library": {**library, "library_id": library_binding["library_id"]},
+            "limits": dict(REVIEW_LIMITS), **captured,
+        }
+    return result
 
 
 def import_library_skill(
@@ -92,13 +110,15 @@ def import_library_skill(
     override_lint: bool = False,
     reason: str | None = None,
     project_dir: Path | None = None,
+    source_file: Path | None = None,
+    expected_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     name = normalize_skill_name(destination_name)
     resources = [catalog_root / "library-mutation", catalog_root / f"library-skill-{name}"]
     with resource_locks(resources):
         registration, identity = _require_library_identity(catalog_root)
         layout = registration.layout
-        source = _resolve_external_skill(project_state, catalog_root, source_skill_id)
+        source = _resolve_external_skill(project_state, catalog_root, source_skill_id, source_file=source_file)
         source_hash = str(source["content_hash"])
         source_key = _source_key(source)
         if source_hash != expected_hash or source_key != expected_source_key:
@@ -107,6 +127,16 @@ def import_library_skill(
             raise ValueError(f"source skill is blocked and cannot be imported: {source_skill_id}")
         target = layout.skill_root(name)
         _require_import_destination(layout.skills, target, source)
+        if expected_review is not None:
+            captured = _capture_import_review(source)
+            if (str(Path(source["root"]).resolve()) != expected_review["source_root"]
+                    or str(Path(source["entrypoint"]).resolve()) != expected_review["source_file"]
+                    or _review_source_provenance(source) != expected_review["source_provenance"]
+                    or str(target) != expected_review["destination_path"]
+                    or str(layout.root) != expected_review["library"]["root"]
+                    or expected_review["library"]["library_id"] != identity.library_id
+                    or any(captured[key] != expected_review[key] for key in captured)):
+                raise ReviewRefusal("review_changed", "the selected import source or destination changed; preview again")
         _acceptance_overrides(source, override_lint=override_lint, reason=reason)
         git = repository_status(layout.root, mode=identity.git_mode)
         _require_safe_git_mutation(git, allow_target_staged=False)
@@ -256,8 +286,15 @@ def _external_skill_candidates(project_state: Path, catalog_root: Path, skill_id
     return candidates
 
 
-def _resolve_external_skill(project_state: Path, catalog_root: Path, skill_id: str) -> dict[str, Any]:
+def _resolve_external_skill(project_state: Path, catalog_root: Path, skill_id: str,
+                            *, source_file: Path | None = None) -> dict[str, Any]:
+    if source_file is not None and (len(os.fsencode(source_file)) > 4096 or not source_file.is_absolute() or source_file != source_file.resolve()
+                                    or not source_file.is_file()):
+        raise ValueError("--source-file requires an existing canonical absolute instruction-file path")
     candidates = _external_skill_candidates(project_state, catalog_root, skill_id)
+    if source_file is not None:
+        candidates = [skill for skill in candidates if skill.get("entrypoint")
+                      and Path(skill["entrypoint"]).resolve() == source_file]
     if not candidates:
         if skill_id.startswith(f"{LIBRARY_NAMESPACE}/"):
             raise ValueError("library skills are already owned and cannot be imported again")
@@ -266,6 +303,22 @@ def _resolve_external_skill(project_state: Path, catalog_root: Path, skill_id: s
         paths = ", ".join(sorted(str(Path(skill["root"]).resolve()) for skill in candidates))
         raise ValueError(f"external skill ID is ambiguous across discovered sources: {skill_id} ({paths})")
     return candidates[0]
+
+
+def _capture_import_review(source: dict[str, Any]) -> dict[str, Any]:
+    source_root = Path(source["root"]).resolve()
+    instruction = source_root / "SKILL.md"
+    if instruction.is_symlink() or not instruction.is_file():
+        raise ReviewRefusal("review_changed", "import requires a regular canonical SKILL.md; repair the source and preview again")
+    captured, _ = capture_review_tree(source_root)
+    if captured["working_hash"] != source["content_hash"] or capture_review_tree(source_root)[0] != captured:
+        raise ReviewRefusal("review_changed", "the external source changed during review capture; preview again")
+    return captured
+
+
+def _review_source_provenance(source: dict[str, Any]) -> dict[str, Any]:
+    metadata = _compact_source(source)
+    return {key: metadata[key] for key in ("type", "collection", "package", "version", "editable")}
 
 
 def _source_key(skill: dict[str, Any]) -> str:

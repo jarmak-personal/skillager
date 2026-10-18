@@ -279,8 +279,10 @@ For explicitly authorized complete human review, use
 `skillager library accept lib/<name> --review-manifest --json`. Its bounded
 `skillager.library-review-manifest.v1` metadata covers all eligible bytes, including
 binaries, and executable state, and identifies the exact confirmation token.
-Verify complete confined file reads, then compare a fresh identical preview before
-requesting approval. Refuse unsupported review formats or finite-limit failures;
+Make every eligible file available through separately authorized confined reads,
+verify any presented bytes, then compare a fresh identical preview before
+requesting one decision. No per-file acknowledgement is required. Route unsupported
+formats to suitable file tools and refuse finite-limit failures;
 do not omit files, rebuild the tree hash, or read pending bodies through ordinary
 agent commands. See [the exact review contract](LIBRARY_REVIEW.md).
 
@@ -306,6 +308,16 @@ skillager import <external-id> --json
 Report the source, destination, and warnings. The preview is read-only, including on
 first use. Confirmation may initialize the default library and copy the reviewed
 skill; it leaves the external source unchanged.
+
+For a complete inspectable import tree, add `--review-manifest --json`. Select a
+particular discovered occurrence with `--source-file <canonical-absolute-path>`,
+using the public inventory's exact `skill_file` and ID. This is a selector among
+discovered candidates, not arbitrary path import. The
+`skillager.import-review-manifest.v1` metadata binds every eligible file, source,
+destination and library to the same import token. One explicit confirmation copies
+and accepts that version; no second acceptance step is needed on success. Use the
+returned argv unchanged. Incomplete, unreadable or oversized evidence offers no
+applicable confirmation. See [the exact review contract](LIBRARY_REVIEW.md#import-an-external-original).
 
 ### Compare Or Restore
 

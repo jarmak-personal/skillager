@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from ..library.confirmation import confirmation_token, require_confirmation_token
-from ..library.importing import import_library_skill, import_preview
+from ..library.importing import IMPORT_SCHEMA, import_library_skill, import_preview
+from ..library.review import REVIEW_LIMITS, ReviewRefusal, limit_refusal
 from ..library.service import initialize_library
 from .context import catalog_root, current_project_dir, root, terminal_can_prompt
 
@@ -34,6 +35,8 @@ def add_import_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     )
     parser.add_argument("skill", help="External discovered skill ID.")
     parser.add_argument("--as", dest="destination_name", help="Collision-free library skill name.")
+    parser.add_argument("--source-file", type=Path, help="Select one discovered occurrence by its exact canonical absolute instruction-file path.")
+    parser.add_argument("--review-manifest", action="store_true", help="Include the complete bounded external import tree, bound to this confirmation (requires --json).")
     parser.add_argument(
         "--yes",
         action="store_true",
@@ -54,6 +57,18 @@ def add_import_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 
 
 def cmd_import(args: argparse.Namespace) -> int:
+    if args.review_manifest and not args.json:
+        raise ValueError("--review-manifest requires --json")
+    try:
+        return _run_import(args)
+    except ReviewRefusal as error:
+        print(json.dumps({"schema": IMPORT_SCHEMA, "status": "refused",
+                          "error": {"code": error.code, "message": str(error)},
+                          "limits": dict(REVIEW_LIMITS)}, indent=2, sort_keys=True))
+        return 2
+
+
+def _run_import(args: argparse.Namespace) -> int:
     if args.override_lint and not (args.reason or "").strip():
         raise ValueError("--reason is required with --override-lint")
     if args.reason and not args.override_lint:
@@ -65,7 +80,14 @@ def cmd_import(args: argparse.Namespace) -> int:
         args.skill,
         destination_name=args.destination_name,
         project_dir=current_project_dir(),
+        source_file=args.source_file,
+        review_manifest=args.review_manifest,
     )
+    source_binding = {}
+    if args.source_file is not None or args.review_manifest:
+        source_binding = {"source_file": preview["source"]["file"], "source_root": preview["source"]["path"]}
+    if args.review_manifest:
+        source_binding["review_manifest"] = preview["review_manifest"]
     token = confirmation_token(
         "library-import",
         source_id=preview["source"]["id"],
@@ -75,6 +97,7 @@ def cmd_import(args: argparse.Namespace) -> int:
         library_binding=preview["_library_binding"],
         override_lint=args.override_lint,
         reason=(args.reason or "").strip() or None,
+        **source_binding,
     )
     preview = dict(preview)
     if preview["blocked"]:
@@ -91,7 +114,13 @@ def cmd_import(args: argparse.Namespace) -> int:
             override_lint=args.override_lint,
             reason=args.reason,
             json_output=args.json,
+            source_file=Path(preview["source"]["file"]) if source_binding else None,
+            review_manifest=args.review_manifest,
         )
+    if args.review_manifest:
+        preview["review_manifest"]["confirmation_token"] = token
+        if len((json.dumps(_public_payload(preview), indent=2, sort_keys=True) + "\n").encode("utf-8")) > REVIEW_LIMITS["response_bytes"]:
+            raise limit_refusal()
     if not args.yes:
         if args.json:
             print(json.dumps(_public_payload(preview), indent=2, sort_keys=True))
@@ -120,6 +149,12 @@ def cmd_import(args: argparse.Namespace) -> int:
     initialization = None
     if preview["library"]["status"] == "will-initialize":
         initialization = initialize_library(catalog_root(args), path=Path(preview["library"]["root"]))
+    expected_review = preview.get("review_manifest")
+    if initialization is not None and expected_review is not None:
+        # The preview disclosed first initialization at this root. Bind the
+        # subsequent copy to the exact identity this confirmation just created.
+        expected_review = {**expected_review, "library": {**expected_review["library"],
+                           "library_id": initialization["library"]["library_id"]}}
     result = import_library_skill(
         root(args),
         catalog_root(args),
@@ -130,6 +165,8 @@ def cmd_import(args: argparse.Namespace) -> int:
         override_lint=args.override_lint,
         reason=args.reason,
         project_dir=current_project_dir(),
+        source_file=Path(preview["source"]["file"]) if source_binding else None,
+        expected_review=expected_review,
     )
     if args.json:
         if initialization is not None:
@@ -176,6 +213,8 @@ def _import_argv(
     override_lint: bool,
     reason: str | None,
     json_output: bool,
+    source_file: Path | None = None,
+    review_manifest: bool = False,
 ) -> list[str]:
     command = [
         "skillager",
@@ -184,6 +223,10 @@ def _import_argv(
         "--as",
         name,
     ]
+    if source_file is not None:
+        command.extend(["--source-file", str(source_file)])
+    if review_manifest:
+        command.append("--review-manifest")
     if override_lint:
         command.extend(["--override-lint", "--reason", (reason or "").strip()])
     if json_output:

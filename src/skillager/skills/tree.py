@@ -7,6 +7,7 @@ import shutil
 import stat
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 from ..signing import is_evidence_file
 
@@ -21,12 +22,12 @@ TRANSIENT_PATTERNS = ("*.tmp", "*.swp", "*~")
 TREE_FINGERPRINT_SCHEMA = "skillager.tree-fingerprint.v2"
 
 
-def iter_content_files(root: Path) -> list[Path]:
+def iter_content_files(root: Path, *, strict: bool = False) -> list[Path]:
     """Return regular, agent-visible files below a skill root in hash order."""
 
     root = root.resolve()
     files: list[Path] = []
-    for path in root.rglob("*"):
+    for path in _strict_content_paths(root) if strict else root.rglob("*"):
         if path.is_symlink() or not path.is_file():
             continue
         relative = path.relative_to(root)
@@ -36,15 +37,36 @@ def iter_content_files(root: Path) -> list[Path]:
     return sorted(files, key=lambda item: item.relative_to(root).as_posix())
 
 
+def _strict_content_paths(root: Path) -> Iterator[Path]:
+    """Review-only enumeration: surface inaccessible eligible directories."""
+    def unreadable(error: OSError) -> None:
+        raise error
+
+    if not root.is_dir():
+        raise OSError("review source is not a directory")
+    for directory, folders, names in os.walk(root, onerror=unreadable, followlinks=False):
+        parent = Path(directory)
+        folders[:] = [name for name in folders if not _excluded_tree_component(name)
+                      and not (parent / name).is_symlink()]
+        for name in names:
+            path = parent / name
+            # stat errors must not become implicit absence on Python versions
+            # whose Path.is_file() suppresses more filesystem errors.
+            if stat.S_ISREG(path.stat(follow_symlinks=False).st_mode):
+                yield path
+
+
+def _excluded_tree_component(part: str) -> bool:
+    return part in CONTENT_TREE_EXCLUDES or part.endswith((".pyc", ".pyo"))
+
+
 def content_path_excluded(relative: Path) -> bool:
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError(f"content tree path must be relative and contained: {relative}")
     if is_evidence_file(relative):
         return True
     for part in relative.parts:
-        if part in CONTENT_TREE_EXCLUDES:
-            return True
-        if part.endswith(".pyc") or part.endswith(".pyo"):
+        if _excluded_tree_component(part):
             return True
     return any(fnmatch.fnmatch(relative.as_posix(), pattern) for pattern in TRANSIENT_PATTERNS)
 
