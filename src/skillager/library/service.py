@@ -58,11 +58,16 @@ LIBRARY_WHERE_SCHEMA = "skillager.where.v1"
 LIBRARY_RELOCATE_SCHEMA = "skillager.library-relocate.v1"
 
 
-def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: bool = False) -> dict[str, Any]:
+def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: bool = False,
+                       expected_first_use: dict[str, Any] | None = None) -> dict[str, Any]:
     created = False
     git_repository_created = False
     commit: dict[str, Any] | None = None
     with resource_lock(catalog_root / "library-mutation"):
+        if expected_first_use is not None:
+            _, public, binding = _library_first_use_plan(catalog_root)
+            if {**public, "library_id": binding["library_id"]} != expected_first_use:
+                raise ReviewRefusal("review_changed", "the library changed before initialization; preview again")
         registration = _registered_library_or_conflict(catalog_root)
         if registration is not None:
             if path is not None and LibraryLayout.from_root(path).root != registration.layout.root:
@@ -134,6 +139,12 @@ def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: 
         register_library_collection(catalog_root, layout.root, identity.library_id)
         index = refresh_collection(catalog_root, LIBRARY_NAMESPACE)
     status = library_status(catalog_root)
+    observed_library = status.get("library") or {}
+    if expected_first_use is not None and (observed_library.get("registration") != "valid"
+                                           or observed_library.get("library_id") != identity.library_id
+                                           or (status.get("git") or {}).get("mode") != identity.git_mode
+                                           or observed_library.get("root") != str(layout.root)):
+        raise ReviewRefusal("review_changed", "library setup completed, but its identity changed; inspect the library and preview again")
     return {
         "schema": LIBRARY_INIT_SCHEMA,
         "status": "initialized" if created else "already-initialized",

@@ -201,6 +201,23 @@ class ImportReviewBehaviorTests(unittest.TestCase):
         self.assertEqual(self.cli.run(*preview["next_command_argv"][1:]).code, 2)
         self.assertEqual(self.state(), before)
 
+    def test_first_use_registers_the_exact_preexisting_reviewed_library(self):
+        default = self.root / "home/.skillager/library"
+        original_catalog = self.cli.env["SKILLAGER_CATALOG_STATE_DIR"]
+        self.cli.env["SKILLAGER_CATALOG_STATE_DIR"] = str(self.root / "foreign-catalog")
+        try:
+            initialized = self.checked(self.cli.run("library", "init", "--path", str(default), "--no-git", "--json"))
+        finally:
+            self.cli.env["SKILLAGER_CATALOG_STATE_DIR"] = original_catalog
+        preview = self.checked(self.preview())
+        self.assertEqual(preview["library"]["status"], "will-initialize")
+        self.assertEqual(preview["review_manifest"]["library"]["library_id"], initialized["library"]["library_id"])
+        self.assertEqual(preview["review_manifest"]["library"]["git_mode"], "disabled")
+        imported = self.checked(self.cli.run(*preview["next_command_argv"][1:]))
+        self.assertEqual(imported["destination"]["acceptance"], "accepted")
+        identity = json.loads((default / ".skillager/library.json").read_text())
+        self.assertEqual(identity["library_id"], initialized["library"]["library_id"])
+
     def test_limits_refuse_complete_preview_without_manifest_or_applicable_confirmation(self):
         self.initialize()
         for boundary in ("file", "tree", "count", "response"):

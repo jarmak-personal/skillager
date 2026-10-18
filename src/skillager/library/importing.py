@@ -135,6 +135,7 @@ def import_library_skill(
                     or str(target) != expected_review["destination_path"]
                     or str(layout.root) != expected_review["library"]["root"]
                     or expected_review["library"]["library_id"] != identity.library_id
+                    or expected_review["library"]["git_mode"] != identity.git_mode
                     or any(captured[key] != expected_review[key] for key in captured)):
                 raise ReviewRefusal("review_changed", "the selected import source or destination changed; preview again")
         _acceptance_overrides(source, override_lint=override_lint, reason=reason)

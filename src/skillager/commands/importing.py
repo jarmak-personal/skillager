@@ -147,12 +147,17 @@ def _run_import(args: argparse.Namespace) -> int:
     if args.yes:
         require_confirmation_token(args.confirmation_token, token, operation="library import")
     initialization = None
-    if preview["library"]["status"] == "will-initialize":
-        initialization = initialize_library(catalog_root(args), path=Path(preview["library"]["root"]))
     expected_review = preview.get("review_manifest")
-    if initialization is not None and expected_review is not None:
-        # The preview disclosed first initialization at this root. Bind the
-        # subsequent copy to the exact identity this confirmation just created.
+    if preview["library"]["status"] == "will-initialize":
+        initialization = initialize_library(
+            catalog_root(args), path=Path(preview["library"]["root"]),
+            **({"expected_first_use": expected_review["library"]} if expected_review is not None else {}),
+        )
+    if initialization is not None and expected_review is not None and expected_review["library"]["library_id"] is None:
+        if not initialization["created"]:
+            raise ReviewRefusal("review_changed", "library setup did not create the expected identity; inspect the library and preview again")
+        # Only an identity created by this confirmation may fill the preview's
+        # missing UUID. A pre-existing reviewed identity must remain identical.
         expected_review = {**expected_review, "library": {**expected_review["library"],
                            "library_id": initialization["library"]["library_id"]}}
     result = import_library_skill(
