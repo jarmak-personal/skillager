@@ -13,6 +13,7 @@ from unittest import mock
 
 from skillager.catalog import impl as catalog_impl
 from skillager.commands.impl import main
+from skillager.library.browse import library_metadata_index
 from skillager.library.inventory import LibraryInventoryUnavailable, library_inventory
 
 from tests.behavior.support import BODY_SENTINEL, CliResult, SkillagerCli, make_basic_workspace
@@ -123,6 +124,9 @@ class LibraryInventoryBehaviorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             library, cli = self.library(Path(tmp))
             entrypoint = library / "skills" / "zulu" / "SKILL.md"
+            # Force live metadata loading rather than exact-hash seeding from
+            # the collection index, then remove the file inside that loader.
+            entrypoint.write_text(entrypoint.read_text() + "\nChanged before discovery.\n")
             original = entrypoint.read_bytes()
             real_load = catalog_impl.load_skill_from_dir
 
@@ -132,7 +136,7 @@ class LibraryInventoryBehaviorTests(unittest.TestCase):
                 return real_load(root, source)
 
             try:
-                with mock.patch.object(catalog_impl, "load_skill_from_dir", side_effect=disappear):
+                with mock.patch.dict(os.environ, cli.env, clear=True), mock.patch.object(catalog_impl, "load_skill_from_dir", side_effect=disappear):
                     with self.assertRaises(LibraryInventoryUnavailable) as error:
                         library_inventory(Path(cli.env["SKILLAGER_CATALOG_STATE_DIR"]))
                 self.assertNotIn(BODY_SENTINEL, str(error.exception))
@@ -173,14 +177,12 @@ class LibraryInventoryBehaviorTests(unittest.TestCase):
             blocked = library / "skills" / "middle"
             (blocked / "skillager.yaml").write_text("schema: unsupported-schema\n")
             first = self.checked(self.page(cli))
-            real_select = catalog_impl.select_collection_skills
-
             def additional_error(*args, **kwargs):
-                rows = real_select(*args, **kwargs)
-                kwargs["discovery_errors"].append({"path": str(blocked), "error": BODY_SENTINEL})
-                return rows
+                data = library_metadata_index(*args, **kwargs)
+                data["errors"].append({"path": str(blocked), "error": BODY_SENTINEL})
+                return data
 
-            with mock.patch("skillager.library.inventory.select_collection_skills", side_effect=additional_error):
+            with mock.patch("skillager.library.inventory.library_metadata_index", side_effect=additional_error):
                 argv = ["list", "--scope", "library", "--json", "--limit", "1"]
                 page = self.checked(self.in_process_cli(cli, *argv))
                 self.assertEqual(page["skills"], first["skills"])

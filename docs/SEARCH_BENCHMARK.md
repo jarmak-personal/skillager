@@ -152,6 +152,15 @@ Project/package discovery remains live; exposed sources, variants, and identity
 collisions receive additional verification to preserve ranking and ambiguity rules.
 An unchanged mtime or Git HEAD does not establish source approval.
 
+Personal-library list/search browsing now reuses metadata with per-tree stat
+receipts in a separate disposable cache. Each request still observes live roots
+and all canonical file stats, including ctime, plus signature/card evidence used
+by public metadata, and rescans changed trees. Exact hash checks remain mandatory
+for returned matches and all content/approval/mutation
+operations; the receipts are metadata freshness hints only. Paginated search
+verifies the requested ranked prefix plus one continuation row instead of every
+match, while full-library snapshots retain stale-cursor detection for hidden rows.
+
 A fresh complete 5,000-approved-skill run with five repeated subprocess samples
 per query produced these warm medians:
 

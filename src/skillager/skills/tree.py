@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import os
 import shutil
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -134,6 +136,47 @@ def content_tree_fingerprint(root: Path) -> str:
     return digest.hexdigest()
 
 
+def metadata_tree_receipt(root: Path) -> str:
+    """Observe metadata freshness, including evidence, never content authority.
+
+    ctime catches ordinary same-size edits with restored mtime; inode/device catch
+    replacements. Atime is absent so reads do not invalidate the observation.
+    Signature/card metadata follows evidence links, unlike canonical content.
+    Existing content fingerprints and exact hashes deliberately remain unchanged.
+    """
+    digest = hashlib.sha256()
+
+    def record(name: str, info: os.stat_result) -> None:
+        values = (name, info.st_dev, info.st_ino, info.st_mode,
+                  info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        digest.update(repr(values).encode())
+        digest.update(b"\0")
+
+    def walk(directory: Path) -> None:
+        with os.scandir(directory) as iterator:
+            entries = sorted(iterator, key=lambda item: item.name)
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(root)
+            evidence = is_evidence_file(relative)
+            if content_path_excluded(relative) and not evidence:
+                continue
+            info = entry.stat(follow_symlinks=False)
+            if evidence:
+                record(relative.as_posix(), info)
+                if stat.S_ISLNK(info.st_mode) and path.is_file():
+                    digest.update(str(path.resolve()).encode())
+                    digest.update(b"\0")
+                    record(relative.as_posix(), entry.stat(follow_symlinks=True))
+            elif stat.S_ISDIR(info.st_mode):
+                walk(path)
+            elif stat.S_ISREG(info.st_mode):
+                record(relative.as_posix(), info)
+
+    walk(root)
+    return digest.hexdigest()
+
+
 def require_canonical_content_tree(root: Path, *, action: str = "mutation") -> None:
     """Refuse symlinks and files deliberately excluded from the authoritative tree."""
 
@@ -164,5 +207,6 @@ __all__ = [
     "content_tree_manifest",
     "copy_content_tree",
     "iter_content_files",
+    "metadata_tree_receipt",
     "require_canonical_content_tree",
 ]

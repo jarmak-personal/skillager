@@ -242,32 +242,29 @@ def _collection_skills_snapshot(
         data = _load_or_refresh_collection_index(state_root, collection_name, refresh_library=refresh_library, require_complete_library=require_complete_library)
         if discovery_errors is not None:
             discovery_errors.extend(data.get("errors", []))
-        for skill in data.get("skills", []):
-            skill = dict(skill)
-            if skill.get("id") and skill.get("content_hash"):
-                approval_key = skill.get("approval_key") or approval_key_for(
-                    skill["id"],
-                    skill.get("root"),
-                    skill.get("source") or {},
-                    entrypoint=skill.get("entrypoint"),
-                )
-                trust = trust_info(
-                    trust_root,
-                    skill["id"],
-                    skill["content_hash"],
-                    lint=skill.get("lint"),
-                    approval_key=approval_key,
-                    approval_root=approval_root,
-                )
-                trust = _trust_with_collection_migration_alias(
-                    state_root,
-                    trust_root,
-                    skill,
-                    trust,
-                )
-                _apply_approval_metadata(skill, approval_key, trust)
-                apply_review_metadata(skill)
-            skills.append(skill)
+        skills.extend(collection_index_skills(state_root, data, trust_root=trust_root, approval_root=approval_root))
+    return skills
+
+
+def collection_index_skills(
+    state_root: Path, data: dict[str, Any], *, trust_root: Path, approval_root: Path,
+) -> list[dict[str, Any]]:
+    """Apply current decisions to observed collection metadata in a trust snapshot."""
+    skills = []
+    for entry in data.get("skills", []):
+        skill = dict(entry)
+        if skill.get("id") and skill.get("content_hash"):
+            approval_key = skill.get("approval_key") or approval_key_for(
+                skill["id"], skill.get("root"), skill.get("source") or {}, entrypoint=skill.get("entrypoint"),
+            )
+            trust = trust_info(
+                trust_root, skill["id"], skill["content_hash"], lint=skill.get("lint"),
+                approval_key=approval_key, approval_root=approval_root,
+            )
+            trust = _trust_with_collection_migration_alias(state_root, trust_root, skill, trust)
+            _apply_approval_metadata(skill, approval_key, trust)
+            apply_review_metadata(skill)
+        skills.append(skill)
     return skills
 
 

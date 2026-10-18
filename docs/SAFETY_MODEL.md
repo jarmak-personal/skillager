@@ -82,7 +82,7 @@ Collection refresh stores metadata in `catalog.sqlite3`; old collection JSON
 indexes remain readable until refreshed. Search incrementally fills
 `search-v1.sqlite3` under the configured cache directory with metadata and the
 existing first 50,000 characters of approved entrypoints. Search may write this
-derived cache; other metadata/readiness commands do not populate it. Search joins
+derived cache; other metadata/readiness commands do not populate the prose index. Search joins
 FTS matches to candidates selected by current approval records. Cached collection
 metadata is tentative until each ranked result passes a fresh exact source-tree
 hash and approval check. Rejected candidates do not consume the result limit.
@@ -95,6 +95,20 @@ unchanged size or restored timestamps cannot preserve availability after an edit
 or project decisions. Its `exposure: "unknown"` explicitly means workspace state
 was not inspected. Default workspace search retains project decisions and exposure
 ranking. Neither scope approves content or exposes it to an agent.
+
+Personal-library list/search browsing may write a separate derived metadata cache
+under `library-browse-v1` in the configured cache directory. It observes live root
+membership and file stats on every request, including ctime so ordinary edits with
+restored mtime invalidate metadata. This includes signature/card evidence and
+linked evidence targets, without adding them to the accepted content hash.
+Changed trees are rescanned with the existing exact hash/lint/scanner owners.
+These receipts are advisory freshness observations,
+not acceptance witnesses: they never authorize bodies, acceptance, export, exposure,
+or other mutations. Every returned search match still passes an exact live-tree
+hash and current approval check, even when its metadata receipt was unchanged.
+The cache validates live library identity/path/provenance and reloads approvals;
+corrupt or unwritable derived storage falls back to live metadata observation.
+Metadata reads leave approval and catalog authority files unchanged.
 
 These caches contain no approval authority and can be deleted while Skillager is
 idle. Old cached bodies may remain on disk after revocation, but cannot produce a

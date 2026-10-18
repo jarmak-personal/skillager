@@ -33,7 +33,7 @@ def write_report(path: Path, report: dict) -> None:
     temp.replace(path)
 
 
-def clear_search_cache(catalog: OwnedLibraryCatalog) -> None:
+def clear_query_caches(catalog: OwnedLibraryCatalog) -> None:
     cache = catalog.root / "cache"
     if cache.is_symlink():
         raise ValueError("benchmark cache must not be a symlink")
@@ -93,8 +93,8 @@ def run_measurements(catalog: OwnedLibraryCatalog, args: argparse.Namespace, rep
                 raise AssertionError("workload must have a continuation page")
             argv = [*first[:-1], first_page["next_cursor"]]
         assert argv is not None
-        if name.startswith("search_"):
-            clear_search_cache(catalog)
+        if name.startswith(("list_", "search_")):
+            clear_query_caches(catalog)
         case = {"name": name, "argv": argv, "samples": []}
         report["commands"].append(case)
         reference = None
@@ -191,7 +191,7 @@ def main() -> int:
               "size": args.size, "seed": args.seed, "page_size": args.page_size, "commands": [],
               "measurement": {
                   "latency": "Fresh public CLI interpreter including startup, discovery/verification, Git, and JSON output.",
-                  "cold": "First measured invocation after setup; search cache cleared before each search case. Catalog/approval state remains intact. OS caches are not flushed.",
+                  "cold": "First measured invocation after setup; disposable browse and search caches cleared before each list/search case, including continuation. Catalog/approval state remains intact. OS caches are not flushed.",
                   "warm": "Repeated fresh interpreters reuse persisted caches and OS state. Changed accept samples create successive comparable revisions, not identical inputs.",
                   "memory": "Peak RSS of the individual CLI interpreter including minimal measurement launcher; native Git subprocess and aggregate process-tree peaks are not measured.",
                   "accept": "Preview timed separately. Confirmed sample excludes its preceding preview and file edit; changed vs unchanged commit/hash proofs are recorded.",

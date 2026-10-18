@@ -82,14 +82,34 @@ the completed format migration.
 ## Implementation record
 
 Implemented in `state/approvals.py`, `state/database.py`, `catalog/storage.py`,
-the collection/search paths, and library accept/import/restore. Unchanged owned
-library metadata for ordinary inventory is reusable only after exact tree, library
-identity, path, and provenance verification. Search defers tree verification to
-ranked candidates, while reconciling live discovery and current approval hashes.
+the collection/search paths, and library accept/import/restore. Exact collection
+selection retains current tree, identity, path, and provenance verification.
+Personal-library list/search browsing additionally uses a disposable metadata
+cache owned by `library/browse.py`, using the tree receipt owner in `skills/tree.py`,
+under the configured cache directory. Every request validates the registered
+identity and provenance, walks live roots, and compares tree membership and file
+stat receipts (including ctime, inode/device, size, mtime and modes). Receipts also
+cover signature/card evidence and linked evidence targets used by public metadata.
+Changed trees pass the existing exact hash, scanner and lint owners; unchanged declared metadata
+is reused. A first browse can seed metadata from the collection index only after
+exact tree verification. Receipt capture on both sides of a refresh refuses
+concurrent changes. Approval records are read anew; receipts never grant content
+or mutation authority. Search defers exact tree verification to ranked candidates,
+while reconciling live discovery and current approval hashes.
 It refills limited results after stale candidates and preserves exposure/variant
 ranking and collision handling. `search --scope library` skips workspace inventory
 and reports unchecked exposure as `unknown`. Search stores the existing ASCII scoring tokens alongside
 Unicode FTS5 so ranking and reasons do not require warm-query body reads.
+
+Cursor snapshots still include hidden and nonmatching metadata changes. Paginated
+personal search uses one complete library observation for ranking and the snapshot,
+including pending and blocked members. Non-paginated search retains partial results
+when a source cannot be observed; list and cursor snapshots require complete coverage.
+Search verifies the ranked prefix through the requested page and one continuation
+row, preserving grouping and filtering without validating every broad match.
+Source-tree stat enumeration and full metadata/snapshot assembly remain linear in
+library size. A late page must verify its preceding ranked prefix; this is not a
+constant-time query API or a filesystem watcher.
 
 The full local check, including ranked-candidate search, passed: 426 Skillager tests,
 13 linter tests, Ruff, both typing
