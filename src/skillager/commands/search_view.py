@@ -21,7 +21,7 @@ from ..state.paths import cache_root, find_project_root, project_state_root
 from ..state import approvals
 from .context import catalog_root, current_project_dir, root
 from .pagination import CursorError
-from .search_pagination import search_page, search_snapshot
+from .search_pagination import search_page, search_snapshot, search_window_limit
 
 
 def add_search_view_options(parser: argparse.ArgumentParser) -> None:
@@ -76,7 +76,12 @@ def run_search_view(args: argparse.Namespace) -> int:
         records = approvals.load(catalog).get("global_approvals", {}) if registration else {}
         relations, lineage_complete = lineage_relations(provenance, identifier, records)
         supplied = _read_installed(args.installed_identities) if args.installed_identities else None
-        skills = cli._search_inventory(args, deferred=not paginated)
+        library_observation = None
+        if personal and paginated:
+            from ..library.inventory import library_metadata_observation
+            library_observation = library_metadata_observation(catalog)
+        skills = cli._search_inventory(args, deferred=personal or not paginated,
+                                       library_skills=library_observation[0] if library_observation else None)
         if any(skill.get("identity_collision") for skill in skills):
             skills = cli._search_inventory(args, deferred=False)
         if len(skills) > SEARCH_INVENTORY_LIMIT:
@@ -101,7 +106,8 @@ def run_search_view(args: argparse.Namespace) -> int:
         payload["context"] = {"project_root": str(project) if project else None,
                               "installed_observation": "provided" if supplied is not None else "observed" if view.installed_complete else "unknown"}
         if paginated:
-            snapshot = search_snapshot(args, skills, registration=registration.to_mapping() if registration else None,
+            snapshot = search_snapshot(args, skills, library_state=library_observation[1] if library_observation else None,
+                                       registration=registration.to_mapping() if registration else None,
                                        provenance=provenance, relations=relations,
                                        presence=observation, exposures=exposures,
                                        supplied=sorted(supplied) if supplied is not None else None,
@@ -126,7 +132,8 @@ def run_search_view(args: argparse.Namespace) -> int:
         if args.agent:
             ranked = cli._sort_agent_variant_search(ranked, args.agent)
         trust_root = catalog if personal else root(args)
-        results = view.results(ranked, copies=args.view == "copies", limit=None if paginated else args.limit,
+        result_limit = search_window_limit(args, snapshot=snapshot) if paginated else args.limit
+        results = view.results(ranked, copies=args.view == "copies", limit=result_limit,
                                current=lambda skill: cli._search_result_is_current(skill, trust_root, catalog)
                                and (not args.compatible_only or cli.compatibility_problem(skill, args.agent) is None),
                                public=lambda skill: cli._public_full_skill_metadata({**skill, "exposure": "unknown"} if personal else skill),

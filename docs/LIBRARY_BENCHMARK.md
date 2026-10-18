@@ -85,8 +85,9 @@ fingerprints of the actual imported benchmark/support files, including any bench
 edits that have not yet been committed.
 
 **Cold** means the first measured invocation of each command after construction and
-fixture verification. Search's private benchmark cache is cleared before each search
-case, including the continuation-page case. Catalog and approval state remain intact;
+fixture verification. The fixture's disposable browse and search caches are cleared
+before each list/search case, including the continuation-page case after its cursor
+is obtained. This includes the `library-browse-v1` metadata cache. Catalog and approval state remain intact;
 setup and verification already read files. OS caches are never flushed, so these are
 not disk-cold measurements. **Warm** means repeated fresh interpreters reuse persisted
 caches and OS state. Three repeats are development smoke evidence, not tail-latency

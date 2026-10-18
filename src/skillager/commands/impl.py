@@ -3973,13 +3973,19 @@ def cmd_search(args: argparse.Namespace) -> int:
     library_only = getattr(args, "scope", "workspace") == "library"
     if library_only and (args.tag or args.include_global):
         raise ValueError("--scope library cannot be combined with --tag or --include-global")
-    skills = _search_inventory(args, deferred=not paginated)
+    library_observation = None
+    if library_only and paginated:
+        from ..library.inventory import library_metadata_observation
+        library_observation = library_metadata_observation(catalog_root(args))
+    skills = _search_inventory(args, deferred=library_only or not paginated,
+                               library_skills=library_observation[0] if library_observation else None)
     # Ambiguous identities need live metadata from every claimant before merging.
     if any(skill.get("identity_collision") for skill in skills):
         skills = _search_inventory(args, deferred=False)
     if paginated:
-        from .search_pagination import search_page, search_snapshot
-        snapshot = search_snapshot(args, skills)
+        from .search_pagination import search_page, search_snapshot, search_window_limit
+        snapshot = search_snapshot(args, skills, library_state=library_observation[1] if library_observation else None)
+    result_limit = search_window_limit(args, snapshot=snapshot) if paginated else args.limit
     trust_root = catalog_root(args) if library_only else root(args)
     families = Counter(_agent_variant_family_key(skill) for skill in skills) if args.agent else Counter()
     for skill in skills:
@@ -4009,7 +4015,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         if library_only:
             skill["exposure"] = "unknown"
         verified.append(skill)
-        if not paginated and args.limit and len(verified) >= args.limit:
+        if result_limit and len(verified) >= result_limit:
             break
     if args.json or args.full_json:
         payload = [_public_full_skill_metadata(skill) for skill in verified] if args.full_json else [_compact_search_result(skill, agent=args.agent) for skill in verified]
@@ -4025,12 +4031,16 @@ def cmd_search(args: argparse.Namespace) -> int:
     return 0
 
 
-def _search_inventory(args: argparse.Namespace, *, deferred: bool) -> list[dict[str, Any]]:
+def _search_inventory(args: argparse.Namespace, *, deferred: bool, library_skills: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     if getattr(args, "scope", "workspace") == "library":
         if load_library_registration(catalog_root(args)) is None:
             return []
-        if deferred:
-            skills = collection_search_candidates(catalog_root(args), trust_root=catalog_root(args), name="lib")
+        if library_skills is not None:
+            skills = select_visible_skills(library_skills)
+        elif deferred:
+            from ..library.inventory import library_metadata_observation
+            observed, _state = library_metadata_observation(catalog_root(args), require_complete=False)
+            skills = select_visible_skills(observed)
         else:
             skills = select_collection_skills(catalog_root(args), "lib", trust_root=catalog_root(args), approval_root=catalog_root(args))
         by_id: dict[str, dict[str, Any]] = {}

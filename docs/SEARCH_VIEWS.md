@@ -94,6 +94,16 @@ rows and restart with `--cursor ''`. A malformed or mismatched request cursor
 returns `invalid_cursor` and exits 2. These errors are distinct from an unavailable
 search observation. All request controls must remain fixed during traversal.
 
+Clients can pass the cursor directly for the next page; a separate whole-library
+status call is unnecessary. Library browsing observes live source membership and
+file stats on each request, rescanning changed metadata only. Personal paginated
+search uses that same complete observation for ranking and the cursor snapshot,
+including hidden pending and blocked members. Unchanged stat
+receipts never authorize content: search exact-hashes the ranked prefix through
+the requested page and one continuation row against current approvals. Hidden or
+nonmatching changes still invalidate the complete traversal snapshot. Cache files
+are disposable, and approval/content actions retain their own exact validation.
+
 Each result preserves existing public full metadata and adds `search`:
 
 - `group_id`: opaque stable logical identity.

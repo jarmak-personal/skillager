@@ -32,24 +32,29 @@ def page_metadata(
     """Page one verified ordered inventory; cursors carry no approval authority."""
     if limit <= 0:
         raise ValueError("--limit must be greater than 0 for paginated results")
-    request_hash = fingerprint(request)
+    offset = page_offset(snapshot=snapshot, request=request, cursor=cursor)
+    if cursor not in (None, "") and offset >= len(rows):
+        raise CursorError("invalid_cursor", "cursor offset is outside the inventory")
+    end = offset + limit
+    next_cursor = None
+    if end < len(rows):
+        payload = {"schema": CURSOR_SCHEMA, "request": fingerprint(request), "snapshot": snapshot, "offset": end}
+        next_cursor = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+    return rows[offset:end], next_cursor
+
+
+def page_offset(*, snapshot: str, request: dict[str, Any], cursor: str | None) -> int:
+    """Validate a traversal before doing work for its requested result window."""
     offset = 0
     if cursor not in (None, ""):
         assert cursor is not None
         decoded = _decode_cursor(cursor)
-        if decoded["request"] != request_hash:
+        if decoded["request"] != fingerprint(request):
             raise CursorError("invalid_cursor", "cursor belongs to a different request")
         if decoded["snapshot"] != snapshot:
             raise CursorError("stale_cursor", "inventory changed; restart from the first page")
         offset = decoded["offset"]
-        if offset >= len(rows):
-            raise CursorError("invalid_cursor", "cursor offset is outside the inventory")
-    end = offset + limit
-    next_cursor = None
-    if end < len(rows):
-        payload = {"schema": CURSOR_SCHEMA, "request": request_hash, "snapshot": snapshot, "offset": end}
-        next_cursor = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
-    return rows[offset:end], next_cursor
+    return offset
 
 
 def _decode_cursor(token: str) -> dict[str, Any]:

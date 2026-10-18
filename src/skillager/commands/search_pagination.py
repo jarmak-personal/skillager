@@ -8,14 +8,15 @@ from .. import project_tags
 from ..catalog.impl import load_collections, select_collection_skills
 from ..library.inventory import library_inventory
 from .context import catalog_root, current_project_dir, root
-from .pagination import fingerprint, page_metadata
+from .pagination import fingerprint, page_metadata, page_offset
 
 
-def search_snapshot(args: argparse.Namespace, skills: list[dict[str, Any]], **observations: Any) -> str:
+def search_snapshot(args: argparse.Namespace, skills: list[dict[str, Any]], *, library_state: dict[str, Any] | None = None, **observations: Any) -> str:
     # Observe hidden rows separately: merging them into the ranking inventory can
     # turn an otherwise available same-ID source into an identity collision.
     catalog = catalog_root(args)
-    _rows, library_state = library_inventory(catalog)
+    if library_state is None:
+        _rows, library_state = library_inventory(catalog)
     collections = load_collections(catalog).get("collections", {}) if args.scope == "workspace" else {}
     other_errors: list[dict[str, str]] = []
     other_inventory = [skill for name in sorted(collections) if name != "lib"
@@ -31,8 +32,18 @@ def search_snapshot(args: argparse.Namespace, skills: list[dict[str, Any]], **ob
 def search_page(
     args: argparse.Namespace, rows: list[dict[str, Any]], *, snapshot: str,
 ) -> tuple[list[dict[str, Any]], str | None]:
+    return page_metadata(rows, snapshot=snapshot, request=_search_request(args), limit=args.limit, cursor=args.cursor)
+
+
+def search_window_limit(args: argparse.Namespace, *, snapshot: str) -> int:
+    # One extra verified row establishes continuation without verifying every
+    # match. Prior rows still pass native grouping/filtering and exact checks.
+    return page_offset(snapshot=snapshot, request=_search_request(args), cursor=args.cursor) + args.limit + 1
+
+
+def _search_request(args: argparse.Namespace) -> dict[str, Any]:
     personal = args.scope == "library"
-    request = {
+    return {
         "command": "search", "scope": args.scope, "query": args.query,
         "catalog": str(catalog_root(args)),
         "project": None if personal else str(current_project_dir()),
@@ -44,4 +55,3 @@ def search_page(
         "installed_identities": str(args.installed_identities.resolve()) if args.installed_identities else None,
         "full_json": args.full_json, "limit": args.limit,
     }
-    return page_metadata(rows, snapshot=snapshot, request=request, limit=args.limit, cursor=args.cursor)
