@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add metadata-only `list --scope project --json` for exact current-directory
+  native originals and managed Full/Stub/Router copies, including pending and
+  blocked originals regardless of editable-package discovery precedence. Combine
+  bounded pagination with explicit discovery completeness, stable occurrence paths,
+  metadata-safe errors, and stale-cursor detection; preserve existing workspace,
+  library, approval, and exposure behavior. Planned for 0.9.7.
+
 - Add opt-in `library accept --review-manifest --json` with a complete finite
   metadata-only current-tree manifest bound to the existing acceptance token and
   registered library identity. Support first/no-Git acceptance and edited trees;

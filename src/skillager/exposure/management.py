@@ -9,7 +9,8 @@ from .impl import _project_agent_bases
 from .identity import library_id, router_member_sources
 
 
-def _exposure_records(project_dir: Path, *, agents: list[str], scope: str, errors: list[str] | None = None) -> list[dict[str, Any]]:
+def _exposure_records(project_dir: Path, *, agents: list[str], scope: str, errors: list[str] | None = None,
+                      observed_targets: set[Path] | None = None) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     seen: set[Path] = set()
     for agent, roots in _exposure_roots(project_dir, agents=agents, scope=scope).items():
@@ -38,6 +39,7 @@ def _exposure_records(project_dir: Path, *, agents: list[str], scope: str, error
                 seen.add(resolved)
                 if errors is not None and (sidecar.is_symlink() or sidecar.parent.is_symlink()
                         or (scope == "project" and not resolved.is_relative_to(project_dir.resolve()))
+                        or (sidecar.parent / "SKILL.md").is_symlink()
                         or not (sidecar.parent / "SKILL.md").is_file()):
                     errors.append("unreadable-target")
                     continue
@@ -47,10 +49,23 @@ def _exposure_records(project_dir: Path, *, agents: list[str], scope: str, error
                     if errors is not None:
                         errors.append("unreadable-target")
                     continue
-                record = _exposure_record(sidecar, data, fallback_agent=agent, fallback_scope=scope)
+                try:
+                    record = _exposure_record(sidecar, data, fallback_agent=agent, fallback_scope=scope)
+                except (TypeError, ValueError):
+                    if errors is None:
+                        raise
+                    errors.append("unknown-target")
+                    continue
+                working = (data.get("schema") == "skillager.materialized.v1"
+                           and data.get("source_type") == "skillager-working")
+                if errors is not None and record is not None and (record["agent"] != agent or record["scope"] != scope):
+                    errors.append("unknown-target")
+                    continue
+                if observed_targets is not None and (record is not None or working):
+                    observed_targets.add(sidecar.parent.resolve())
                 if record is not None:
                     records.append(record)
-                elif errors is not None and data.get("source_type") != "skillager-working":
+                elif errors is not None and not working:
                     errors.append("unknown-target")
     return sorted(records, key=lambda item: (item["agent"], item["scope"], item["exposure_id"]))
 

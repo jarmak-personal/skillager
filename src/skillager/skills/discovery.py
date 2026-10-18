@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import stat
 import sys
 from dataclasses import replace
 from importlib import metadata
@@ -122,6 +123,7 @@ def discover(
     include_packages: bool = True,
     extra_paths: Iterable[Path] | None = None,
     project_native_root: Path | None = None,
+    managed_paths: list[Path] | None = None,
 ) -> tuple[list[IndexableSkill], list[dict[str, str]]]:
     skills: list[IndexableSkill] = []
     errors: list[dict[str, str]] = []
@@ -139,7 +141,8 @@ def discover(
             roots.extend((path, {"type": "path"}) for path in paths)
     for root, source in roots:
         try:
-            skill_dirs = _skill_dirs(root)
+            skill_dirs = (_skill_dirs(root, project_root=project_native_root, errors=errors, managed_paths=managed_paths)
+                          if project_native_root is not None else _skill_dirs(root))
         except OSError as exc:
             errors.append({"path": str(root), "error": str(exc)})
             continue
@@ -657,7 +660,12 @@ def _editable_source_root(dist: metadata.Distribution) -> Path | None:
     return path if path.exists() else None
 
 
-def _skill_dirs(root: Path) -> list[Path]:
+def _skill_dirs(root: Path, *, project_root: Path | None = None,
+                errors: list[dict[str, str]] | None = None,
+                managed_paths: list[Path] | None = None) -> list[Path]:
+    if project_root is not None:
+        assert errors is not None
+        return _native_skill_dirs(root, project_root.resolve(), errors, managed_paths)
     if not root.exists():
         return []
     if (root / "SKILL.md").exists():
@@ -665,6 +673,64 @@ def _skill_dirs(root: Path) -> list[Path]:
             return []
         return [root]
     return sorted(path.parent for path in root.rglob("SKILL.md") if not _is_materialized_skill(path.parent))
+
+
+def _native_skill_dirs(root: Path, project: Path, errors: list[dict[str, str]],
+                       managed_paths: list[Path] | None) -> list[Path]:
+    """Observe native occurrences with explicit traversal failures and containment.
+
+    Ordinary broad discovery retains its historical traversal. A project inventory
+    must never turn glob's suppressed permission errors into a complete empty list.
+    """
+    result: list[Path] = []
+    seen: set[Path] = set()
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            resolved = directory.resolve(strict=True)
+            if not resolved.is_relative_to(project):
+                errors.append({"path": str(directory), "code": "outside-project"})
+                continue
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            if len(seen) > 20_000 or len(result) >= 10_000:
+                errors.append({"path": str(root), "code": "inventory-limit"})
+                break
+            if not stat.S_ISDIR(resolved.stat().st_mode):
+                errors.append({"path": str(directory), "code": "invalid-root"})
+                continue
+            children = sorted(resolved.iterdir(), key=lambda item: item.name)
+            instruction = resolved / "SKILL.md"
+            if instruction in children:
+                target = instruction.resolve(strict=True)
+                if not target.is_relative_to(project) or not stat.S_ISREG(target.stat().st_mode):
+                    errors.append({"path": str(instruction), "code": "invalid-instruction-file"})
+                    continue
+                if _is_materialized_skill(resolved):
+                    if managed_paths is not None:
+                        managed_paths.append(resolved)
+                else:
+                    result.append(resolved)
+                if directory == root:
+                    # Preserve the scanner's root-is-a-skill convention.
+                    continue
+            for child in reversed(children):
+                try:
+                    if stat.S_ISDIR(child.stat().st_mode):
+                        pending.append(child)
+                except (OSError, RuntimeError):
+                    errors.append({"path": str(child), "code": "unreadable-path"})
+        except FileNotFoundError:
+            # Missing supported roots are ordinary absence; dangling links and
+            # entries disappearing during enumeration are incomplete evidence.
+            if directory != root or any(path.is_symlink() for path in (directory, *directory.parents)
+                                        if path.is_relative_to(project)):
+                errors.append({"path": str(directory), "code": "unreadable-path"})
+        except (OSError, RuntimeError):
+            errors.append({"path": str(directory), "code": "unreadable-path"})
+    return sorted(result)
 
 
 def _is_materialized_skill(root: Path) -> bool:

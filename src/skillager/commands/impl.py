@@ -91,6 +91,7 @@ from .context import (
 )
 from .library import add_library_parser
 from .library_inventory import cmd_list_library
+from .project_inventory import cmd_list_project
 from .pagination import CursorError
 from .importing import add_import_parser
 
@@ -214,15 +215,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "list",
-        help="List workspace or personal-library skill metadata.",
+        help="List workspace, project, or personal-library skill metadata.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="List available effective workspace skills, including attached collection-tag skills. Library scope lists every owned skill as paginated JSON, including pending and blocked skills, without project discovery.",
+        description="List available effective workspace skills. Project scope inventories current native skills and managed copies, including pending skills. Library scope inventories owned skills without project discovery. Project and library scopes require --json and support pagination.",
         epilog="Examples:\n  skillager list\n  skillager list --scope library --json --limit 100\n  skillager list --scope library --json --limit 100 --cursor TOKEN\n  skillager list --summary-json --agent codex\n  skillager list --no-packages --json\n  skillager list --include-global\n  skillager list --source python-package --json\n  skillager list --source npm-package --json\n  skillager list --source cargo-package --json\n  skillager list --json --full-json",
     )
     p.add_argument("--source")
-    p.add_argument("--scope", choices=["workspace", "library"], default="workspace", help="List effective workspace skills (default), or page all personal-library skill metadata without project discovery.")
-    p.add_argument("--limit", type=int, help="Personal-library page size (default: 100; greater than 0).")
-    p.add_argument("--cursor", help="Opaque cursor from the preceding personal-library JSON page.")
+    p.add_argument("--scope", choices=["workspace", "library", "project"], default="workspace", help="List effective workspace skills (default), exact project occurrences, or personal-library metadata.")
+    p.add_argument("--limit", type=int, help="Project/library page size (default: 100; project maximum: 100).")
+    p.add_argument("--cursor", help="Opaque cursor from the preceding project/library JSON page.")
     p.add_argument("--activation")
     p.add_argument("--audience")
     p.add_argument("--package")
@@ -3914,8 +3915,10 @@ def cmd_index(args: argparse.Namespace) -> int:
 def cmd_list(args: argparse.Namespace) -> int:
     if getattr(args, "scope", "workspace") == "library":
         return cmd_list_library(args)
+    if getattr(args, "scope", "workspace") == "project":
+        return cmd_list_project(args)
     if getattr(args, "limit", None) is not None or getattr(args, "cursor", None) is not None:
-        raise ValueError("list --limit and --cursor require --scope library")
+        raise ValueError("list --limit and --cursor require --scope library or project")
     if args.full_json:
         args.json = True
     if args.json and args.summary_json:

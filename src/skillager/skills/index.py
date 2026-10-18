@@ -37,8 +37,10 @@ def build_index(
 ) -> dict[str, Any]:
     approval_root = approval_root or state_root
     cached = _load_cached_entries(state_root) if reuse_cache else {}
+    managed_paths: list[Path] = []
     skills, errors = discover(paths, include_packages=include_packages, extra_paths=extra_paths,
-                              project_native_root=project_native_root)
+                              project_native_root=project_native_root,
+                              managed_paths=managed_paths if project_native_root is not None else None)
     entries = []
     for skill in skills:
         fingerprint = content_tree_fingerprint(skill.root)
@@ -79,6 +81,8 @@ def build_index(
         entries.append(entry)
     entries.sort(key=lambda item: item["id"])
     data = {"version": INDEX_VERSION, "skills": entries, "errors": errors}
+    if project_native_root is not None:
+        data["managed_paths"] = sorted({str(path) for path in managed_paths})
     if persist:
         state_root.mkdir(parents=True, exist_ok=True)
         index_path(state_root).write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
