@@ -330,6 +330,99 @@ class ProjectInventoryBehaviorTests(unittest.TestCase):
                 self.assertEqual({error["path"] for error in result["observation"]["errors"]},
                                  {str(target.parent / name) for name in variants[:number]})
 
+    def test_query_matches_full_inventory_before_pages_including_all_statuses_and_kinds(self):
+        self.skill(self.project / ".agents/skills/000-before", "Unrelated")
+        pending = self.skill(self.project / ".skills/pending", "Query match")
+        accepted = self.skill(self.project / ".skills/accepted", "Query match")
+        blocked = self.skill(self.project / ".skills/blocked", "Query match")
+        quarantine = self.skill(self.project / ".skills/quarantine", "Query match")
+        (quarantine / "skillager.yaml").write_text("schema: invalid\n")
+        self.checked(self.cli.run("review", "approve", "project/accepted", "--project-only", "--json"))
+        self.checked(self.cli.run("review", "block", "project/blocked", "--project-only", "--json"))
+        targets = []
+        for mode, source in (("full", "library"), ("stub", "skillager-stub"), ("router", "skillager-router")):
+            target = self.managed("z-" + mode, source)
+            path = target / "SKILL.md"
+            path.write_text(path.read_text().replace("name: Example", "name: Query match"))
+            targets.append(target)
+        unfiltered = self.page("--limit", "1")
+        self.assertEqual(unfiltered["skills"][0]["name"], "Unrelated")
+        before = self.state_bytes()
+        rows, cursor = [], None
+        while True:
+            page = self.page("--query", " QUERY   match ", "--limit", "2", *(["--cursor", cursor] if cursor else []))
+            self.assertEqual(page["observation"], unfiltered["observation"])
+            rows.extend(page["skills"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+        self.assertEqual([row["skill_file"] for row in rows],
+                         sorted(str(path / "SKILL.md") for path in (pending, accepted, blocked, quarantine, *targets)))
+        self.assertEqual(len({row["occurrence_id"] for row in rows}), 7)
+        self.assertEqual({row["status"] for row in rows}, {"pending", "accepted", "blocked", "lint_blocked", "present"})
+        self.assertEqual({row["kind"] for row in rows}, {"native", "full", "stub", "router"})
+        self.assertEqual(self.state_bytes(), before)
+
+    def test_query_is_literal_casefolded_display_metadata_and_never_body_search(self):
+        target = self.skill(self.project / ".skills/identifier", "Straße [helper]")
+        for query in ("STRASSE", "[helper]", "project/IDENTIFIER", "DECLARED inventory"):
+            with self.subTest(query=query):
+                row, = self.page("--query", query)["skills"]
+                self.assertEqual(row["skill_file"], str(target / "SKILL.md"))
+        for query in (BODY_SENTINEL, ".*", str(target)):
+            with self.subTest(query=query):
+                self.assertEqual(self.page("--query", query)["skills"], [])
+
+    def test_query_empty_results_retain_complete_or_partial_observation(self):
+        self.skill(self.project / ".skills/one")
+        empty = self.page("--query", "no matching metadata")
+        self.assertEqual((empty["skills"], empty["next_cursor"], empty["observation"]["status"]), ([], None, "complete"))
+        (self.project / ".skills/broken").symlink_to(self.base / "missing")
+        partial = self.page("--query", "no matching metadata")
+        self.assertEqual((partial["skills"], partial["next_cursor"]), ([], None))
+        self.assertEqual(partial["observation"], self.page()["observation"])
+        self.assertEqual(partial["observation"]["status"], "partial")
+
+    def test_query_cursor_normalization_is_equivalent_and_changed_query_is_rejected(self):
+        for slug in ("one", "two", "three"):
+            self.skill(self.project / ".skills" / slug, "Same name")
+        first = self.page("--query", " SAME \t NAME ", "--limit", "1")
+        next_page = self.page("--query", "same name", "--limit", "1", "--cursor", first["next_cursor"])
+        self.assertNotEqual(next_page["skills"][0]["occurrence_id"], first["skills"][0]["occurrence_id"])
+        invalid = self.page("--query", "different", "--limit", "1", "--cursor", first["next_cursor"], code=2)
+        self.assertEqual(invalid["error"]["code"], "invalid_cursor")
+        default = self.page("--limit", "1")
+        self.assertEqual(self.page("--query", " \t ", "--limit", "1"), default)
+        self.assertEqual(self.page("--query", "", "--limit", "1", "--cursor", default["next_cursor"]),
+                         self.page("--limit", "1", "--cursor", default["next_cursor"]))
+
+    def test_query_cursor_stales_when_an_unmatched_occurrence_changes(self):
+        one = self.skill(self.project / ".skills/one", "Match")
+        self.skill(self.project / ".skills/two", "Match")
+        unrelated = self.skill(self.project / ".skills/other", "Unrelated")
+        first = self.page("--query", "match", "--limit", "1")
+        self.assertEqual(first["skills"][0]["skill_file"], str(one / "SKILL.md"))
+        path = unrelated / "SKILL.md"
+        path.write_text(path.read_text() + "Changed unrelated body.\n")
+        stale = self.page("--query", "match", "--limit", "1", "--cursor", first["next_cursor"], code=15)
+        self.assertEqual(stale["error"]["code"], "stale_cursor")
+
+    def test_query_size_and_scope_combinations_are_bounded_before_observation(self):
+        for query in (" " * 1001, "é" * 501):
+            result = self.cli.run("list", "--scope", "project", "--query", query, "--json")
+            self.assertEqual(result.code, 2)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("at most 1000 UTF-8 bytes", result.stderr)
+        self.assertEqual(self.page("--query", "é" * 500)["skills"], [])
+        for scope in ("workspace", "library"):
+            result = self.cli.run("list", "--scope", scope, "--query", "", "--json")
+            self.assertEqual(result.code, 2)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("requires --scope project", result.stderr)
+        result = self.cli.run("list", "--scope", "project", "--query", "example")
+        self.assertEqual(result.code, 2)
+        self.assertIn("requires --json", result.stderr)
+
     def test_unsupported_options_and_limits_are_rejected(self):
         for options in (("--limit", "0"), ("--limit", "101"), ("--source", "project"), ("--agent", "codex")):
             result = self.cli.run("list", "--scope", "project", "--json", *options)

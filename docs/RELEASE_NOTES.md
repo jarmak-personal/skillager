@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add bounded `list --scope project --query TEXT --json` filtering before pagination.
+  Match displayed metadata case-insensitively without excluding pending originals
+  or managed copies; bind the normalized query to the cursor and retain full
+  discovery completeness and stale-inventory checks.
+
 - Add metadata-only `list --scope project --json` for exact current-directory
   native originals and managed Full/Stub/Router copies, including pending and
   blocked originals regardless of editable-package discovery precedence. Combine

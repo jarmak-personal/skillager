@@ -224,6 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scope", choices=["workspace", "library", "project"], default="workspace", help="List effective workspace skills (default), exact project occurrences, or personal-library metadata.")
     p.add_argument("--limit", type=int, help="Project/library page size (default: 100; project maximum: 100).")
     p.add_argument("--cursor", help="Opaque cursor from the preceding project/library JSON page.")
+    p.add_argument("--query", help="Project scope only: case-insensitive literal match in displayed ID, name, or description before pagination (maximum 1000 UTF-8 bytes).")
     p.add_argument("--activation")
     p.add_argument("--audience")
     p.add_argument("--package")
@@ -3913,6 +3914,8 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
+    if getattr(args, "query", None) is not None and getattr(args, "scope", "workspace") != "project":
+        raise ValueError("list --query requires --scope project")
     if getattr(args, "scope", "workspace") == "library":
         return cmd_list_library(args)
     if getattr(args, "scope", "workspace") == "project":

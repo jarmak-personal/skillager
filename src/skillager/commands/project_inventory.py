@@ -21,6 +21,7 @@ from .pagination import CursorError, fingerprint, page_metadata
 PROJECT_INVENTORY_LIMIT = 10_000
 PROJECT_RESULT_BYTES = 512_000
 PROJECT_ERROR_LIMIT = 20
+PROJECT_QUERY_BYTES = 1_000
 
 
 def cmd_list_project(args: argparse.Namespace) -> int:
@@ -31,6 +32,10 @@ def cmd_list_project(args: argparse.Namespace) -> int:
     limit = args.limit if args.limit is not None else 100
     if not 1 <= limit <= 100:
         raise ValueError("project --limit must be between 1 and 100")
+    raw_query = getattr(args, "query", None) or ""
+    if len(raw_query.encode("utf-8")) > PROJECT_QUERY_BYTES:
+        raise ValueError("project --query must be at most 1000 UTF-8 bytes")
+    query = " ".join(raw_query.split()).casefold()
     project = Path.cwd().resolve()
     payload: dict[str, Any] = {
         "schema": "skillager.list.v1", "scope": "project", "project_root": str(project),
@@ -95,10 +100,14 @@ def cmd_list_project(args: argparse.Namespace) -> int:
         rows = sorted({row["occurrence_id"]: row for row in rows}.values(), key=lambda row: row["skill_file"])
         observation = {"status": "partial" if errors else "complete", "errors": errors[:PROJECT_ERROR_LIMIT],
                        "error_count": len(errors)}
+        matches = [row for row in rows if not query or any(
+            query in row[field].casefold() for field in ("id", "name", "description")
+        )]
         page, cursor = page_metadata(
-            rows, snapshot=fingerprint({"originals": observed, "managed": managed_state, "rows": rows, "errors": errors}),
+            matches, snapshot=fingerprint({"originals": observed, "managed": managed_state, "rows": rows, "errors": errors}),
             request={"command": "list", "scope": "project", "project": str(project),
-                     "state": str(state), "catalog": str(catalog), "limit": limit},
+                     "state": str(state), "catalog": str(catalog), "limit": limit,
+                     **({"query": query} if query else {})},
             limit=limit, cursor=args.cursor,
         )
         payload.update(skills=page, next_cursor=cursor, observation=observation)

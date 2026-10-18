@@ -11,7 +11,9 @@ personal-library version changes.
 For metadata-only current-project inventory, run `skillager list --scope project
 --json --limit 100` from the exact project/worktree root (planned for 0.9.7). It
 includes pending originals and managed copies without setup or approval. Follow
-`next_cursor`; treat `observation.status: partial` as incomplete discovery. See
+`next_cursor`; add `--query TEXT` to filter displayed project metadata before
+pagination, including pending originals and managed copies. Keep the same query
+when continuing a cursor. Treat `observation.status: partial` as incomplete discovery. See
 [the contract](USER_GUIDE.md#browse-skills-in-one-project). Presence never grants
 content access or mutation authority.
 
