@@ -8,6 +8,13 @@ Use Skillager to find and apply reviewed skills. Handle routine selection and
 project curation yourself. Ask the user for approval, destructive choices, and
 personal-library version changes.
 
+For metadata-only current-project inventory, run `skillager list --scope project
+--json --limit 100` from the exact project/worktree root (planned for 0.9.7). It
+includes pending originals and managed copies without setup or approval. Follow
+`next_cursor`; treat `observation.status: partial` as incomplete discovery. See
+[the contract](USER_GUIDE.md#browse-skills-in-one-project). Presence never grants
+content access or mutation authority.
+
 ## Start Or Resume Work
 
 Run this after a context reset or resumed session:

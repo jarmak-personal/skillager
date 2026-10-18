@@ -103,6 +103,69 @@ other metadata/readiness commands remain read-only. Deleting these caches while
 Skillager is idle does not revoke approvals. Search still validates current content
 and returns metadata only, using the existing 50,000-character body search window.
 
+## Browse Skills In One Project
+
+From the project or worktree root, list its current skills without setup or approval:
+
+```bash
+skillager list --scope project --json --limit 100
+```
+
+This opt-in contract is planned for **0.9.7**. It observes exactly the canonical
+current directory, including plain folders and Git worktrees; it never substitutes
+an ancestor repository. Native originals come from Skillager's supported project
+skill locations (`.skills`, `skills`, `.agents/skills`, `.agents/codex/skills`,
+`.agents/claude/skills`, `.codex/skills`, and `.claude/skills`). Editable package
+provenance cannot hide an occurrence there. Environment/package-only, global,
+sibling, child-repository, and personal-library sources are excluded. Managed
+Full, Stub, and Router copies are included through the existing exposure owner.
+
+The `skillager.list.v1` envelope has `scope: "project"`, `project_root`,
+`observation`, `skills`, and `next_cursor`. `observation.status` is `complete`,
+`partial`, or `unavailable`; `errors` contains up to 20 fixed diagnostic codes with
+bounded paths, and `error_count` gives the total. A partial result is usable metadata,
+not an exhaustive inventory. Complete and partial responses exit **0**; unavailable
+responses exit **2** with no rows or continuation. Missing supported directories
+are ordinary absence; unreadable directories, escaping or broken links, malformed
+skills, and managed-copy observation failures are reported. No exception text or
+skill-body excerpts appear in diagnostics.
+
+Every row supplies:
+
+- `id`: Skillager's identifier in this observation. A native occurrence also found
+  through an editable Python distribution retains that discovery identity and its
+  exact-content review decisions. Select current files by `occurrence_id` and
+  `skill_file`; an identifier alone is not a current-file read capability.
+- `occurrence_id`: `project:` plus a SHA-256 of the canonical instruction-file path.
+  This stays stable across display-name/provenance changes. Distinct files with the
+  same name remain distinct; aliases of one canonical instruction file appear once.
+- `name`, `description`: declared frontmatter only (160/1,000 characters maximum).
+  Missing names use the directory name; missing descriptions are empty. Body prose
+  is never inferred as display metadata.
+- `skill_file`: the exact canonical current instruction path within this project.
+- `kind`: `native`, `full`, `stub`, or `router`.
+- `native`: `{scope: "project", managed: boolean, agent: "codex" | "claude" | null}`.
+- `status` and `trust`: originals report pending/accepted/blocked/lint_blocked and
+  their current trust state. Managed copies report `present` and null trust;
+  presence does not establish source acceptance, currentness, or mutation authority.
+- `exposure`: null for originals; the existing `skillager.exposure.v1` record for
+  managed copies, including its selector and recorded source identity. Use ordinary
+  exposure previews for drift, canonical lineage validation, and mutations.
+
+One deterministic page order (canonical instruction path) covers originals and
+managed copies together. Pass `next_cursor` back with the same options; page size
+is 1–100, default 100. A change to an observed original, trust record, managed copy/sidecar, or
+discovery result invalidates the traversal with the existing `stale_cursor` error and
+exit **15**. Restart at page one. Output is bounded to 512,000 bytes and inventory
+to 10,000 occurrences; oversized observations are unavailable, never silently
+truncated. Listing may still read and hash current source trees to determine trust
+and snapshot freshness; it is not a filesystem watch or constant-time cache.
+
+Project scope requires `--json` and rejects workspace filters. It is read-only:
+it does not initialize a project/library, import, accept, expose, or authorize
+instruction reads. Existing workspace/library listing and provenance filters retain
+their current behavior.
+
 ## Browse The Personal Library
 
 `list` keeps its existing workspace scope and output by default. To browse all owned

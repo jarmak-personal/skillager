@@ -17,6 +17,10 @@ each project.
 discover or create → review exact content → let the agent find what helps
 ```
 
+To inspect the skills already in a project, including unreviewed originals and
+managed copies, run `skillager list --scope project --json` from its root (planned
+for 0.9.7). See the [project inventory contract](docs/USER_GUIDE.md#browse-skills-in-one-project).
+
 ## Quickstart
 
 Install Skillager once, then set it up in a project:
