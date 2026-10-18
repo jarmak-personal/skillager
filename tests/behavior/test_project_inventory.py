@@ -36,11 +36,7 @@ class ProjectInventoryBehaviorTests(unittest.TestCase):
 
     def test_editable_package_overlap_does_not_hide_unapproved_native_occurrence(self):
         native = self.skill(self.project / ".agents/skills/example")
-        packages = self.project / ".venv/lib/python3.13/site-packages"
-        distribution = packages / "example-1.0.dist-info"
-        distribution.mkdir(parents=True)
-        (distribution / "METADATA").write_text("Metadata-Version: 2.1\nName: example\nVersion: 1.0\n")
-        (distribution / "direct_url.json").write_text(json.dumps({"url": self.project.as_uri(), "dir_info": {"editable": True}}))
+        packages = self.editable_package()
         self.skill(packages / "example/skills/package-only")
         self.skill(self.base / "home/.agents/skills/global-only")
         self.skill(self.project / "child-repository/.agents/skills/child-only")
@@ -61,6 +57,53 @@ class ProjectInventoryBehaviorTests(unittest.TestCase):
         self.assertEqual(row["native"], {"scope": "project", "managed": False, "agent": "codex"})
         self.assertEqual(self.state_bytes(), before)
         self.assertFalse((self.project / ".skillager").exists())
+
+    def editable_package(self):
+        packages = self.project / ".venv/lib/python3.13/site-packages"
+        distribution = packages / "example-1.0.dist-info"
+        distribution.mkdir(parents=True)
+        (distribution / "METADATA").write_text("Metadata-Version: 2.1\nName: example\nVersion: 1.0\n")
+        (distribution / "direct_url.json").write_text(json.dumps({"url": self.project.as_uri(), "dir_info": {"editable": True}}))
+        return packages
+
+    def test_editable_overlap_preserves_ordinary_review_approval_block_and_unblock(self):
+        native = self.skill(self.project / ".agents/skills/example")
+        packages = self.editable_package()
+        self.skill(packages / "example/skills/example")
+        observed = self.checked(self.cli.run("review", "--json"))
+        original, = [row for row in observed["selected"] if row["entrypoint"] == str(native / "SKILL.md")]
+        sid = original["id"]
+        for scope in (("--project-only",), ()):
+            with self.subTest(scope=scope):
+                for action, expected in (("approve", "accepted"), ("block", "blocked"), ("unblock", "accepted")):
+                    self.checked(self.cli.run("review", action, sid, *scope, "--json"))
+                    # The persisted index is a disposable cache, never authority
+                    # for connecting this occurrence to its review decision.
+                    (self.base / "state/project/index.json").unlink(missing_ok=True)
+                    before = self.state_bytes()
+                    page = self.page()
+                    row, = page["skills"]
+                    self.assertEqual(page["observation"]["status"], "complete")
+                    self.assertEqual((row["id"], row["skill_file"], row["status"]),
+                                     (sid, str(native / "SKILL.md"), expected))
+                    self.assertEqual(self.state_bytes(), before)
+        instruction = native / "SKILL.md"
+        instruction.write_text(instruction.read_text() + "Changed instructions.\n")
+        self.assertEqual(self.page()["skills"][0]["status"], "pending")
+
+    def test_editable_overlap_same_named_native_occurrences_do_not_share_decisions(self):
+        one = self.skill(self.project / ".agents/skills/example", "Same name")
+        two = self.skill(self.project / ".claude/skills/example", "Same name")
+        self.editable_package()
+        observed = self.checked(self.cli.run("review", "--json"))
+        ids = {row["entrypoint"]: row["id"] for row in observed["selected"]}
+        self.assertNotEqual(ids[str(one / "SKILL.md")], ids[str(two / "SKILL.md")])
+        self.checked(self.cli.run("review", "approve", ids[str(one / "SKILL.md")], "--project-only", "--json"))
+        self.checked(self.cli.run("review", "block", ids[str(two / "SKILL.md")], "--project-only", "--json"))
+        rows = {row["skill_file"]: row for row in self.page()["skills"]}
+        self.assertEqual(rows[str(one / "SKILL.md")]["status"], "accepted")
+        self.assertEqual(rows[str(two / "SKILL.md")]["status"], "blocked")
+        self.assertEqual(len({row["occurrence_id"] for row in rows.values()}), 2)
 
     def state_bytes(self):
         return {str(path.relative_to(self.base)): path.read_bytes() for directory in ("state", "cache", "home")
@@ -215,6 +258,8 @@ class ProjectInventoryBehaviorTests(unittest.TestCase):
         result = self.page()
         self.assertEqual(result["observation"]["status"], "partial")
         self.assertEqual(result["skills"], [])
+        self.assertEqual(result["observation"]["error_count"], 1)
+        self.assertEqual(result["observation"]["errors"], [{"code": "unknown-target", "path": str(target)}])
 
     def test_unrecognized_managed_location_and_working_helper_have_explicit_coverage(self):
         working = self.managed("working", "skillager-working")
@@ -261,7 +306,8 @@ class ProjectInventoryBehaviorTests(unittest.TestCase):
         self.assertEqual({error["code"] for error in result["observation"]["errors"]}, {"invalid-skill"})
 
     def test_managed_instruction_symlinks_and_invalid_sidecar_context_are_partial(self):
-        for variant in ("instruction-link", "agent", "scope", "working-schema", "malformed-members"):
+        variants = ("instruction-link", "agent", "scope", "working-schema", "malformed-members")
+        for number, variant in enumerate(variants, start=1):
             with self.subTest(variant=variant):
                 target = self.managed(variant, "library")
                 sidecar = target / "skillager.materialized.yaml"
@@ -279,7 +325,10 @@ class ProjectInventoryBehaviorTests(unittest.TestCase):
                 result = self.page()
                 self.assertEqual(result["observation"]["status"], "partial")
                 self.assertEqual(result["skills"], [])
-                self.assertIn(str(target), {error["path"] for error in result["observation"]["errors"]})
+                self.assertEqual(result["observation"]["error_count"], number)
+                self.assertEqual(len(result["observation"]["errors"]), number)
+                self.assertEqual({error["path"] for error in result["observation"]["errors"]},
+                                 {str(target.parent / name) for name in variants[:number]})
 
     def test_unsupported_options_and_limits_are_rejected(self):
         for options in (("--limit", "0"), ("--limit", "101"), ("--source", "project"), ("--agent", "codex")):

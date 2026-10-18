@@ -13,7 +13,7 @@ from ..exposure.management import _exposure_records
 from ..exposure.target_state import target_state_hash
 from ..skills.index import build_index
 from ..skills.schema import skill_frontmatter_metadata
-from ..trust import trust_snapshot
+from ..trust import APPROVED_TRUST_STATES, trust_snapshot
 from .context import catalog_root, root
 from .pagination import CursorError, fingerprint, page_metadata
 
@@ -41,15 +41,21 @@ def cmd_list_project(args: argparse.Namespace) -> int:
         state, catalog = root(args), catalog_root(args)
         with trust_snapshot([state, catalog]):
             observed = build_index(state, approval_root=catalog, project_native_root=project,
-                                   include_packages=False, persist=False)
+                                   include_packages=False, persist=False, project_inventory=True)
         errors = [_discovery_error(item) for item in observed["errors"]]
-        exposure_errors: list[str] = []
+        exposure_errors: list[dict[str, str]] = []
         observed_targets: set[Path] = set()
-        exposures = _exposure_records(project, agents=["codex", "claude"], scope="project", errors=exposure_errors,
+        exposures = _exposure_records(project, agents=["codex", "claude"], scope="project", inventory_errors=exposure_errors,
                                       observed_targets=observed_targets)
         errors.extend({"code": "unrecognized-managed-copy", "path": path[:4096]}
                       for path in observed["managed_paths"] if Path(path) not in observed_targets)
-        errors.extend({"code": "managed-observation-failed", "path": None} for _ in exposure_errors)
+        errors.extend({"code": item["code"], "path": item["path"][:4096]} for item in exposure_errors)
+        # Native traversal and exposure enumeration may observe the same failed
+        # path. Report that occurrence once, keeping the first precise cause.
+        failures: dict[str, dict[str, Any]] = {}
+        for error in errors:
+            failures.setdefault(str(error["path"] or error["code"]), error)
+        errors = list(failures.values())
         if len(observed["skills"]) + len(exposures) > PROJECT_INVENTORY_LIMIT or any(
             error["code"] == "inventory-limit" for error in errors
         ):
@@ -64,7 +70,7 @@ def cmd_list_project(args: argparse.Namespace) -> int:
                 errors.append({"code": "unreadable-skill", "path": str(path)[:4096]})
                 continue
             trust = skill["trust"]
-            row.update(status="accepted" if trust in {"reviewed", "trusted", "pinned"} else
+            row.update(status="accepted" if trust in APPROVED_TRUST_STATES else
                        trust if trust in {"blocked", "lint_blocked"} else "pending", trust=trust,
                        kind="native", native={"scope": "project", "managed": False,
                                               "agent": (skill.get("native") or {}).get("agent")}, exposure=None)

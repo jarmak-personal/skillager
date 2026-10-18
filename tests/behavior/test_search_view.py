@@ -124,6 +124,53 @@ class SearchViewBehaviorTests(unittest.TestCase):
             {"library_id": identifier, "skill_id": self.canonical, "path": "/forbidden"}]}))
         self.search("merge", "--scope", "library", "--installed-identities", str(path), code=2)
 
+    def test_inventory_only_traversal_failures_do_not_change_search_presence(self):
+        (self.source.parent / "dangling").symlink_to(self.root / "missing", target_is_directory=True)
+        inventory = self.checked(self.cli.run("list", "--scope", "project", "--json"))
+        self.assertEqual(inventory["observation"]["status"], "partial")
+        result = self.search()
+        self.assertEqual(result["context"]["installed_observation"], "observed")
+        self.assertEqual(result["results"], [])
+
+    def test_search_retains_supported_root_symlink_observation(self):
+        collection = self.source.parent
+        shared = self.root / "shared-skills"
+        collection.rename(shared)
+        collection.symlink_to(shared, target_is_directory=True)
+        self.checked(self.cli.run("review", "approve", "project/merge-helper", "--json"))
+        inventory = self.checked(self.cli.run("list", "--scope", "project", "--json"))
+        self.assertEqual(inventory["observation"]["status"], "partial")
+        self.assertEqual(inventory["skills"], [])
+        result = self.search()
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["context"]["installed_observation"], "observed")
+
+    def test_inventory_only_managed_context_check_preserves_search_presence(self):
+        self.other_project()
+        path = self.expose("stub")
+        sidecar = path / "skillager.materialized.yaml"
+        sidecar.write_text(sidecar.read_text().replace("agent: claude", "agent: codex"))
+        inventory = self.checked(self.cli.run("list", "--scope", "project", "--json"))
+        self.assertEqual(inventory["observation"]["status"], "partial")
+        self.assertEqual(inventory["skills"], [])
+        result = self.search()
+        self.assertEqual(result["context"]["installed_observation"], "observed")
+        self.assertEqual(result["results"], [])
+
+    def test_inventory_only_managed_instruction_check_preserves_search_presence(self):
+        self.other_project()
+        path = self.expose("stub")
+        instruction = path / "SKILL.md"
+        other = path / "instructions.md"
+        instruction.rename(other)
+        instruction.symlink_to(other)
+        inventory = self.checked(self.cli.run("list", "--scope", "project", "--json"))
+        self.assertEqual(inventory["observation"]["status"], "partial")
+        self.assertEqual(inventory["skills"], [])
+        result = self.search()
+        self.assertEqual(result["context"]["installed_observation"], "observed")
+        self.assertEqual(result["results"], [])
+
     def test_nonproject_discovery_errors_do_not_disable_project_presence(self):
         roots = [self.root / "home" / ".claude" / "skills" / "bad-global",
                  self.project / ".venv" / ".skillager" / "skills" / "bad-environment",

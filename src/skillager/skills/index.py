@@ -34,13 +34,15 @@ def build_index(
     persist: bool = True,
     reuse_cache: bool = True,
     project_native_root: Path | None = None,
+    project_inventory: bool = False,
 ) -> dict[str, Any]:
     approval_root = approval_root or state_root
     cached = _load_cached_entries(state_root) if reuse_cache else {}
     managed_paths: list[Path] = []
     skills, errors = discover(paths, include_packages=include_packages, extra_paths=extra_paths,
                               project_native_root=project_native_root,
-                              managed_paths=managed_paths if project_native_root is not None else None)
+                              managed_paths=managed_paths if project_inventory else None,
+                              project_inventory=project_inventory)
     entries = []
     for skill in skills:
         fingerprint = content_tree_fingerprint(skill.root)
@@ -74,14 +76,14 @@ def build_index(
         apply_review_metadata(entry)
         if not entry.get("quarantined"):
             entry["audience_guess"] = classify_audience(skill)
-        native = _native_info(entry)
+        native = _native_info(entry, project_inventory=project_inventory)
         if native:
             entry["native"] = native
         mark_authored_metadata(entry)
         entries.append(entry)
     entries.sort(key=lambda item: item["id"])
     data = {"version": INDEX_VERSION, "skills": entries, "errors": errors}
-    if project_native_root is not None:
+    if project_inventory:
         data["managed_paths"] = sorted({str(path) for path in managed_paths})
     if persist:
         state_root.mkdir(parents=True, exist_ok=True)
@@ -158,9 +160,9 @@ def _apply_approval_metadata(entry: dict[str, Any], approval_key: str | None, tr
         entry["trust_scope"] = trust["scope"]
 
 
-def _native_info(skill: dict[str, Any]) -> dict[str, Any] | None:
+def _native_info(skill: dict[str, Any], *, project_inventory: bool = False) -> dict[str, Any] | None:
     source_type = skill.get("source", {}).get("type")
-    if source_type not in {"project", "global"}:
+    if not project_inventory and source_type not in {"project", "global"}:
         return None
     root = str(skill.get("root") or "")
     agent = skill.get("source", {}).get("agent")

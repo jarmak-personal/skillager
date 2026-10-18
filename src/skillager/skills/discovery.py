@@ -124,7 +124,10 @@ def discover(
     extra_paths: Iterable[Path] | None = None,
     project_native_root: Path | None = None,
     managed_paths: list[Path] | None = None,
+    project_inventory: bool = False,
 ) -> tuple[list[IndexableSkill], list[dict[str, str]]]:
+    if project_inventory and project_native_root is None:
+        raise ValueError("project inventory requires a selected project")
     skills: list[IndexableSkill] = []
     errors: list[dict[str, str]] = []
     roots: list[tuple[Path, dict[str, Any]]] = []
@@ -142,7 +145,7 @@ def discover(
     for root, source in roots:
         try:
             skill_dirs = (_skill_dirs(root, project_root=project_native_root, errors=errors, managed_paths=managed_paths)
-                          if project_native_root is not None else _skill_dirs(root))
+                          if project_inventory else _skill_dirs(root))
         except OSError as exc:
             errors.append({"path": str(root), "error": str(exc)})
             continue
@@ -154,6 +157,23 @@ def discover(
                 if quarantined:
                     skills.append(quarantined)
                 errors.append({"path": str(skill_dir), "error": str(exc)})
+    if project_inventory:
+        assert project_native_root is not None
+        # Presence and provenance are separate. Resolve only these already-found
+        # native paths against distribution metadata; never enumerate package
+        # skill trees merely to recover ordinary review's approval identity.
+        sources = _native_python_sources(project_native_root, {skill.root for skill in skills})
+        for index, skill in enumerate(skills):
+            native_source = sources.get(skill.root)
+            if native_source is None:
+                continue
+            try:
+                skills[index] = load_skill_from_dir(skill.root, native_source)
+            except (SchemaError, OSError, ValueError) as exc:
+                quarantined = quarantine_skill_from_dir(skill.root, native_source, exc)
+                if quarantined:
+                    skills[index] = quarantined
+                errors.append({"path": str(skill.root), "error": str(exc)})
     if include_packages:
         package_skills, package_errors = discover_package_skills()
         skills = [*package_skills, *skills]
@@ -181,17 +201,9 @@ def discover_package_skills() -> tuple[list[IndexableSkill], list[dict[str, str]
                 if quarantined:
                     skills.append(quarantined)
                 errors.append({"path": str(skill_dir), "error": str(exc)})
-        editable_root = _editable_source_root(dist)
-        if editable_root:
-            source = {
-                "type": "python-package",
-                "package": name,
-                "version": version,
-                "editable": "true",
-                "path": str(editable_root),
-            }
-            if environment is not None:
-                source["environment"] = environment
+        source = _editable_distribution_source(dist, environment)
+        if source:
+            editable_root = Path(source["path"])
             for root, root_source in project_skill_roots(editable_root, source):
                 try:
                     skill_dirs = _skill_dirs(root)
@@ -658,6 +670,39 @@ def _editable_source_root(dist: metadata.Distribution) -> Path | None:
         return None
     path = Path(unquote(parsed.path)).resolve()
     return path if path.exists() else None
+
+
+def _editable_distribution_source(dist: metadata.Distribution, environment: str | None) -> dict[str, Any] | None:
+    editable_root = _editable_source_root(dist)
+    if editable_root is None:
+        return None
+    source = {"type": "python-package", "package": dist.metadata["Name"] if "Name" in dist.metadata else "unknown",
+              "version": dist.version, "editable": "true", "path": str(editable_root)}
+    if environment is not None:
+        source["environment"] = environment
+    return source
+
+
+def _native_python_sources(project: Path, native_paths: set[Path]) -> dict[Path, dict[str, Any]]:
+    """Recover package-first provenance for known occurrences, without discovery."""
+    sources: dict[Path, dict[str, Any]] = {}
+    if not native_paths:
+        return sources
+    for dist, environment in _package_distributions(project):
+        source = {"type": "python-package", "package": dist.metadata["Name"] if "Name" in dist.metadata else "unknown",
+                  "version": dist.version, "environment": environment}
+        for file in dist.files or []:
+            if _is_packaged_skill_file(file.parts, file.name):
+                path = Path(str(dist.locate_file(file))).parent.resolve()
+                if path in native_paths:
+                    sources.setdefault(path, source)
+        editable = _editable_distribution_source(dist, environment)
+        if editable:
+            for root, root_source in project_skill_roots(Path(editable["path"]), editable):
+                for path in native_paths:
+                    if path.is_relative_to(root.resolve()):
+                        sources.setdefault(path, root_source)
+    return sources
 
 
 def _skill_dirs(root: Path, *, project_root: Path | None = None,

@@ -10,63 +10,71 @@ from .identity import library_id, router_member_sources
 
 
 def _exposure_records(project_dir: Path, *, agents: list[str], scope: str, errors: list[str] | None = None,
-                      observed_targets: set[Path] | None = None) -> list[dict[str, Any]]:
+                      observed_targets: set[Path] | None = None,
+                      inventory_errors: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     seen: set[Path] = set()
+    observing = errors is not None or inventory_errors is not None
+
+    def failed(code: str, path: Path) -> None:
+        if errors is not None:
+            errors.append(code)
+        if inventory_errors is not None:
+            inventory_errors.append({"code": code, "path": str(path)})
+
     for agent, roots in _exposure_roots(project_dir, agents=agents, scope=scope).items():
         for root_path in roots:
             if not root_path.is_dir():
-                if errors is not None and (root_path.exists() or root_path.is_symlink()):
-                    errors.append("unreadable-target-root")
+                if observing and (root_path.exists() or root_path.is_symlink()):
+                    failed("unreadable-target-root", root_path)
                 continue
-            if errors is not None:
+            if observing:
                 try:
                     # Path.glob can suppress directory permission errors. Check
                     # actual enumeration before claiming a complete observation.
                     next(root_path.iterdir(), None)
                 except OSError:
-                    errors.append("unreadable-target-root")
+                    failed("unreadable-target-root", root_path)
                     continue
             for sidecar in sorted(root_path.glob("*/skillager.materialized.yaml")):
                 try:
                     resolved = sidecar.resolve()
+                    if observed_targets is not None:
+                        observed_targets.add(sidecar.parent.resolve())
                 except OSError:
-                    if errors is not None:
-                        errors.append("unreadable-target")
+                    failed("unreadable-target", sidecar.parent)
                     continue
                 if resolved in seen:
                     continue
                 seen.add(resolved)
-                if errors is not None and (sidecar.is_symlink() or sidecar.parent.is_symlink()
+                if observing and (sidecar.is_symlink() or sidecar.parent.is_symlink()
                         or (scope == "project" and not resolved.is_relative_to(project_dir.resolve()))
-                        or (sidecar.parent / "SKILL.md").is_symlink()
+                        or (inventory_errors is not None and (sidecar.parent / "SKILL.md").is_symlink())
                         or not (sidecar.parent / "SKILL.md").is_file()):
-                    errors.append("unreadable-target")
+                    failed("unreadable-target", sidecar.parent)
                     continue
                 try:
                     data = load_mapping(sidecar)
                 except Exception:
-                    if errors is not None:
-                        errors.append("unreadable-target")
+                    failed("unreadable-target", sidecar.parent)
                     continue
                 try:
                     record = _exposure_record(sidecar, data, fallback_agent=agent, fallback_scope=scope)
                 except (TypeError, ValueError):
-                    if errors is None:
+                    if inventory_errors is None:
                         raise
-                    errors.append("unknown-target")
+                    failed("unknown-target", sidecar.parent)
                     continue
-                working = (data.get("schema") == "skillager.materialized.v1"
-                           and data.get("source_type") == "skillager-working")
-                if errors is not None and record is not None and (record["agent"] != agent or record["scope"] != scope):
-                    errors.append("unknown-target")
-                    continue
-                if observed_targets is not None and (record is not None or working):
-                    observed_targets.add(sidecar.parent.resolve())
+                working = data.get("source_type") == "skillager-working"
+                if inventory_errors is not None:
+                    working = working and data.get("schema") == "skillager.materialized.v1"
+                    if record is not None and (record["agent"] != agent or record["scope"] != scope):
+                        failed("unknown-target", sidecar.parent)
+                        continue
                 if record is not None:
                     records.append(record)
-                elif errors is not None and not working:
-                    errors.append("unknown-target")
+                elif observing and not working:
+                    failed("unknown-target", sidecar.parent)
     return sorted(records, key=lambda item: (item["agent"], item["scope"], item["exposure_id"]))
 
 

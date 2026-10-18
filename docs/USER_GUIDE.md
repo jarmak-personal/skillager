@@ -132,7 +132,10 @@ skill-body excerpts appear in diagnostics.
 
 Every row supplies:
 
-- `id`: Skillager's identifier in this observation, not a package-discovery alias.
+- `id`: Skillager's identifier in this observation. A native occurrence also found
+  through an editable Python distribution retains that discovery identity and its
+  exact-content review decisions. Select current files by `occurrence_id` and
+  `skill_file`; an identifier alone is not a current-file read capability.
 - `occurrence_id`: `project:` plus a SHA-256 of the canonical instruction-file path.
   This stays stable across display-name/provenance changes. Distinct files with the
   same name remain distinct; aliases of one canonical instruction file appear once.
