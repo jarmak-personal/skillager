@@ -37,6 +37,8 @@ class MutationPromptTests(unittest.TestCase):
                 argparse.Namespace(
                     skill="project/demo",
                     destination_name=None,
+                    source_file=None,
+                    review_manifest=False,
                     yes=False,
                     override_lint=False,
                     reason=None,
