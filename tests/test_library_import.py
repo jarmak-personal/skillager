@@ -8,7 +8,7 @@ from unittest.mock import patch
 from skillager.library.importing import import_library_skill, import_preview
 from skillager.library.metadata import load_library_provenance
 from skillager.library.model import LibraryLayout
-from skillager.library.service import accept_library_skill, initialize_library
+from skillager.library.service import accept_library_skill, initialize_library, library_where
 from skillager.state.trust import set_trust
 from tests.support import chdir
 
@@ -69,32 +69,38 @@ class PersonalLibraryImportTransactionTests(unittest.TestCase):
             self.assertFalse((library / "skills" / "blocked").exists())
 
     def test_trust_write_failure_leaves_safe_pending_copy_repairable_by_accept(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            project, state, catalog, library, _source = self.workspace(root, "trust-failure")
-            with patch("pathlib.Path.home", return_value=root / "home"), chdir(project):
-                initialize_library(catalog, path=library, no_git=True)
-                preview = import_preview(state, catalog, "project/trust-failure", project_dir=project)
-                with patch("skillager.library.importing.set_trust", side_effect=RuntimeError("trust unavailable")):
-                    with self.assertRaisesRegex(ValueError, "copied but pending acceptance"):
-                        import_library_skill(
-                            state,
+        for review_manifest in (False, True):
+            with self.subTest(review_manifest=review_manifest):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    project, state, catalog, library, source = self.workspace(root, "trust-failure")
+                    with patch("pathlib.Path.home", return_value=root / "home"), chdir(project):
+                        initialize_library(catalog, path=library, no_git=True)
+                        preview = import_preview(state, catalog, "project/trust-failure", project_dir=project,
+                                                 review_manifest=review_manifest)
+                        with patch("skillager.library.importing.set_trust", side_effect=RuntimeError("trust unavailable")):
+                            with self.assertRaisesRegex(ValueError, "copied but pending acceptance"):
+                                import_library_skill(
+                                    state,
+                                    catalog,
+                                    "project/trust-failure",
+                                    destination_name="trust-failure",
+                                    expected_hash=preview["source_hash"],
+                                    expected_source_key=preview["_source_key"],
+                                    project_dir=project,
+                                    source_file=source / "SKILL.md" if review_manifest else None,
+                                    expected_review=preview.get("review_manifest"),
+                                )
+                        target = library / "skills" / "trust-failure"
+                        self.assertTrue(target.is_dir())
+                        self.assertEqual(library_where(catalog, "trust-failure", project_dir=project)["skill"]["acceptance"], "pending")
+                        accepted = accept_library_skill(
                             catalog,
-                            "project/trust-failure",
-                            destination_name="trust-failure",
+                            "trust-failure",
                             expected_hash=preview["source_hash"],
-                            expected_source_key=preview["_source_key"],
                             project_dir=project,
                         )
-                target = library / "skills" / "trust-failure"
-                self.assertTrue(target.is_dir())
-                accepted = accept_library_skill(
-                    catalog,
-                    "trust-failure",
-                    expected_hash=preview["source_hash"],
-                    project_dir=project,
-                )
-                self.assertEqual(accepted["skill"]["acceptance"], "accepted")
+                        self.assertEqual(accepted["skill"]["acceptance"], "accepted")
 
     @staticmethod
     def workspace(root: Path, name: str) -> tuple[Path, Path, Path, Path, Path]:

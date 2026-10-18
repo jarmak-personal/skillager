@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add opt-in `import --review-manifest --json` with the complete bounded external
+  tree tied to the same import confirmation. Select exact discovered occurrences
+  with `--source-file`; preserve one confirmed copy-and-accept action and unchanged
+  originals. Both explicit import and library review now refuse unreadable eligible
+  subtrees instead of silently omitting files.
+
 - Add bounded `list --scope project --query TEXT --json` filtering before pagination.
   Match displayed metadata case-insensitively without excluding pending originals
   or managed copies; bind the normalized query to the cursor and retain full

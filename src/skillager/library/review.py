@@ -32,7 +32,7 @@ def limit_refusal() -> ReviewRefusal:
 def capture_review_tree(root: Path) -> tuple[dict[str, Any], list[tuple[str, bytes, bool]]]:
     """Hash bounded bytes once using the existing approval-identity owner."""
     try:
-        paths = iter_content_files(root)
+        paths = iter_content_files(root, strict=True)
         if len(paths) > REVIEW_LIMITS["files"]:
             raise limit_refusal()
         files = []

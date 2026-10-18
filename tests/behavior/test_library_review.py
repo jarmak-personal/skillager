@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -207,6 +208,26 @@ class LibraryReviewManifestBehaviorTests(unittest.TestCase):
         self.assertTrue(lint["requires_override"])
         self.assertGreater(lint["lint"]["blocking_count"], 0)
         self.assertNotIn("next_command_argv", lint)
+
+    @unittest.skipUnless(os.name == "posix" and os.geteuid() != 0, "requires POSIX permission enforcement")
+    def test_unreadable_eligible_subtree_cannot_offer_a_complete_library_review(self):
+        self.initialize()
+        directory = self.skill / "references"
+        directory.mkdir()
+        (directory / "required.md").write_text("Required supporting instructions.\n")
+        preview = self.checked(self.preview())
+        before = self.state()
+        directory.chmod(0)
+        try:
+            refused = self.checked(self.preview(), 2)
+            self.assertEqual(refused["status"], "refused")
+            self.assertEqual(refused["error"]["code"], "review_changed")
+            self.assertNotIn("review_manifest", refused)
+            self.assertNotIn("next_command_argv", refused)
+            self.assertEqual(self.cli.run(*preview["next_command_argv"][1:]).code, 2)
+        finally:
+            directory.chmod(0o700)
+        self.assertEqual(self.state(), before)
 
     def test_preview_requires_json_and_never_initializes_a_missing_library(self):
         result = self.preview()
