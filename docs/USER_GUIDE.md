@@ -161,6 +161,25 @@ to 10,000 occurrences; oversized observations are unavailable, never silently
 truncated. Listing may still read and hash current source trees to determine trust
 and snapshot freshness; it is not a filesystem watch or constant-time cache.
 
+Use `--query TEXT` to filter the complete project metadata before pagination:
+
+```bash
+skillager list --scope project --query "review changes" --json --limit 50
+```
+
+The query is limited to **1,000 UTF-8 bytes before normalization**. Matching trims
+and collapses whitespace, ignores case with Unicode case folding, and looks for
+the literal query in each displayed `id`, `name`, or declared `description`.
+It does not search bodies, paths, or diagnostics, and does not rank results.
+All statuses and kinds remain eligible; canonical instruction path still orders
+the matches. Empty or whitespace-only queries are the ordinary complete inventory.
+
+The normalized query is bound to the cursor. Equivalent case/whitespace queries
+can continue the same traversal; changing the normalized query returns
+`invalid_cursor` (exit **2**). Discovery completeness and stale-cursor checks still
+cover the entire project: an empty match list with `partial` observation does not
+prove that no matching skills exist. `--query` is rejected outside project scope.
+
 Project scope requires `--json` and rejects workspace filters. It is read-only:
 it does not initialize a project/library, import, accept, expose, or authorize
 instruction reads. Existing workspace/library listing and provenance filters retain
