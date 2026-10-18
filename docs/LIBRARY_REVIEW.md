@@ -93,9 +93,10 @@ First-library initialization is disclosed in the preview and happens only during
 confirmation. Its expected registration, UUID and Git mode are checked under the
 initialization lock. Only an identity actually created by that confirmation can
 fill a missing UUID; a pre-existing reviewed identity must remain identical. The
-copy rechecks UUID, root and Git mode under the import lock. If the library changes
-after setup has completed, the refusal says so: inspect the resulting setup before
-obtaining a new preview instead of assuming it was rolled back.
+copy rechecks UUID, root and Git mode under the import lock. If import fails after
+setup has completed, its error retains the original failure and reports the
+completed setup's root and Git mode. Inspect the resulting setup before obtaining
+a new preview instead of assuming it was rolled back.
 
 Confirmed import preserves its existing behavior: copy the eligible tree, accept
 that exact version, and leave the original unchanged. There is no extra pending

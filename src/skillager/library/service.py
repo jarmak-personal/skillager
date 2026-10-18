@@ -78,6 +78,10 @@ def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: 
         else:
             layout = LibraryLayout.from_root(path or default_library_root())
         identity = load_library_identity(layout)
+        if expected_first_use is not None and (
+                (identity.library_id if identity is not None else None) != expected_first_use["library_id"]
+                or (identity is not None and identity.git_mode != expected_first_use["git_mode"])):
+            raise ReviewRefusal("review_changed", "the library identity changed before initialization; preview again")
         if registration is not None:
             _validate_registered_library(registration, identity)
             assert identity is not None

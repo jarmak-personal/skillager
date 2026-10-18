@@ -142,3 +142,112 @@ class ImportReviewBindingTests(unittest.TestCase):
         self.assertIn("setup completed", refused["error"]["message"])
         self.assertTrue((self.default / ".skillager/library.json").exists())
         self.assertFalse((self.default / "skills/reviewable").exists())
+
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_source_change_after_completed_setup_reports_both_outcomes(self):
+        preview = self.fixture.checked(self.fixture.preview())
+        original = command.initialize_library
+
+        def changed_after_setup(*args, **kwargs):
+            initialized = original(*args, **kwargs)
+            instruction = self.fixture.source / "SKILL.md"
+            instruction.write_text(instruction.read_text() + "Changed after library setup.\n")
+            return initialized
+
+        with patch.object(command, "initialize_library", changed_after_setup):
+            result = self.confirm(preview)
+        self.assertEqual(result.code, 2, result.stdout + result.stderr)
+        self.assertIn("source changed since preview", result.stderr)
+        self.assertIn("library setup completed", result.stderr)
+        self.assertIn(str(self.default), result.stderr)
+        self.assertIn("Git mode: system", result.stderr)
+        self.assertTrue(service.library_status(self.catalog)["initialized"])
+        self.assertFalse((self.default / "skills/reviewable").exists())
+
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_destination_collision_after_completed_setup_reports_both_outcomes(self):
+        preview = self.fixture.checked(self.fixture.preview())
+        original = command.initialize_library
+        target = self.default / "skills/reviewable"
+
+        def changed_after_setup(*args, **kwargs):
+            initialized = original(*args, **kwargs)
+            target.mkdir()
+            (target / "SKILL.md").write_text("# Another operation's skill\n")
+            return initialized
+
+        with patch.object(command, "initialize_library", changed_after_setup):
+            result = self.confirm(preview)
+        self.assertEqual(result.code, 2, result.stdout + result.stderr)
+        self.assertIn("already exists", result.stderr)
+        self.assertIn("library setup completed", result.stderr)
+        self.assertIn(str(self.default), result.stderr)
+        self.assertIn("Git mode: system", result.stderr)
+        self.assertEqual((target / "SKILL.md").read_text(), "# Another operation's skill\n")
+        self.assertTrue(service.library_status(self.catalog)["initialized"])
+
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_review_refusal_after_completed_setup_keeps_code_and_setup_outcome(self):
+        preview = self.fixture.checked(self.fixture.preview())
+        original = command.initialize_library
+
+        def changed_after_setup(*args, **kwargs):
+            initialized = original(*args, **kwargs)
+            identity_path = self.default / ".skillager/library.json"
+            identity = json.loads(identity_path.read_text())
+            identity["git"]["mode"] = "disabled"
+            identity_path.write_text(json.dumps(identity))
+            return initialized
+
+        with patch.object(command, "initialize_library", changed_after_setup):
+            result = self.confirm(preview)
+        refused = self.fixture.checked(result, 2)
+        self.assertEqual(refused["error"]["code"], "review_changed")
+        self.assertIn("source or destination changed", refused["error"]["message"])
+        self.assertIn("library setup completed", refused["error"]["message"])
+        self.assertIn(str(self.default), refused["error"]["message"])
+        self.assertIn("Git mode: system", refused["error"]["message"])
+        self.assertFalse((self.default / "skills/reviewable").exists())
+
+    @unittest.skipUnless(shutil.which("git"), "system Git is required")
+    def test_identity_appearing_after_locked_plan_is_not_registered(self):
+        preview = self.fixture.checked(self.fixture.preview())
+        original = service._library_first_use_plan
+        after_other = None
+
+        def identity_after_plan(*args, **kwargs):
+            nonlocal after_other
+            plan = original(*args, **kwargs)
+            service.initialize_library(self.root / "foreign-catalog", path=self.default, no_git=True)
+            after_other = self.fixture.state()
+            return plan
+
+        with patch.object(service, "_library_first_use_plan", identity_after_plan):
+            result = self.confirm(preview)
+        refused = self.fixture.checked(result, 2)
+        self.assertEqual(refused["error"]["code"], "review_changed")
+        self.assertEqual(self.fixture.state(), after_other)
+        self.assertFalse((self.default / "skills/reviewable").exists())
+
+    def test_reviewed_identity_replaced_after_locked_plan_is_not_registered(self):
+        service.initialize_library(self.root / "foreign-catalog", path=self.default, no_git=True)
+        preview = self.fixture.checked(self.fixture.preview())
+        original = service._library_first_use_plan
+        after_other = None
+
+        def identity_after_plan(*args, **kwargs):
+            nonlocal after_other
+            plan = original(*args, **kwargs)
+            identity_path = self.default / ".skillager/library.json"
+            identity = json.loads(identity_path.read_text())
+            identity["library_id"] = str(uuid4())
+            identity_path.write_text(json.dumps(identity))
+            after_other = self.fixture.state()
+            return plan
+
+        with patch.object(service, "_library_first_use_plan", identity_after_plan):
+            result = self.confirm(preview)
+        refused = self.fixture.checked(result, 2)
+        self.assertEqual(refused["error"]["code"], "review_changed")
+        self.assertEqual(self.fixture.state(), after_other)
+        self.assertFalse((self.default / "skills/reviewable").exists())

@@ -406,50 +406,53 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("git"), "system Git is required")
     def test_failed_git_commit_leaves_pending_import_repairable_by_library_accept(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            _, cli = make_basic_workspace(root)
-            library = root / "library"
-            cli.env["GIT_CONFIG_GLOBAL"] = str(root / "missing-global-gitconfig")
-            cli.env["GIT_CONFIG_NOSYSTEM"] = "1"
-            source = cli.project / ".skills" / "git-import"
-            self.write_skill(source, "Git Import", "Use Git import guidance.")
-            self.assert_code(cli.run("library", "init", "--path", str(library)), 0)
-            hook = library / ".git" / "hooks" / "pre-commit"
-            hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
-            hook.chmod(0o700)
+        for review_manifest in (False, True):
+            with self.subTest(review_manifest=review_manifest):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    _, cli = make_basic_workspace(root)
+                    library = root / "library"
+                    cli.env["GIT_CONFIG_GLOBAL"] = str(root / "missing-global-gitconfig")
+                    cli.env["GIT_CONFIG_NOSYSTEM"] = "1"
+                    source = cli.project / ".skills" / "git-import"
+                    self.write_skill(source, "Git Import", "Use Git import guidance.")
+                    self.assert_code(cli.run("library", "init", "--path", str(library)), 0)
+                    hook = library / ".git" / "hooks" / "pre-commit"
+                    hook.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+                    hook.chmod(0o700)
 
-            failed = cli.run_confirmed("import", "project/git-import", "--yes")
-            self.assert_code(failed, 2)
-            self.assertIn("content remains pending", failed.stderr)
-            self.assertIn("library accept lib/git-import --json", failed.stderr)
-            target = library / "skills" / "git-import"
-            self.assertTrue(target.is_dir())
-            blocked = cli.run("show", "lib/git-import", "--content")
-            self.assert_code(blocked, 2)
+                    review_options = ["--review-manifest", "--json"] if review_manifest else []
+                    failed = cli.run_confirmed("import", "project/git-import", "--yes", *review_options)
+                    self.assert_code(failed, 2)
+                    self.assertIn("content remains pending", failed.stderr)
+                    self.assertIn("library accept lib/git-import --json", failed.stderr)
+                    target = library / "skills" / "git-import"
+                    self.assertTrue(target.is_dir())
+                    blocked = cli.run("show", "lib/git-import", "--content")
+                    self.assert_code(blocked, 2)
 
-            hook.unlink()
-            repaired = cli.run_confirmed("library", "accept", "lib/git-import", "--yes", "--json")
-            self.assert_code(repaired, 0)
-            self.assertEqual(repaired.json()["skill"]["status"], "clean")
-            tracked = subprocess.run(
-                ["git", "show", "--pretty=format:", "--name-only", "HEAD"],
-                cwd=library,
-                env=cli.env,
-                text=True,
-                stdout=subprocess.PIPE,
-                check=True,
-            ).stdout.splitlines()
-            self.assertEqual(tracked, [".skillager/provenance.json", "skills/git-import/SKILL.md"])
-            git_status = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=library,
-                env=cli.env,
-                text=True,
-                stdout=subprocess.PIPE,
-                check=True,
-            ).stdout
-            self.assertEqual(git_status, "")
+                    hook.unlink()
+                    repaired = cli.run_confirmed("library", "accept", "lib/git-import", "--yes", "--json")
+                    self.assert_code(repaired, 0)
+                    self.assertEqual(repaired.json()["skill"]["status"], "clean")
+                    tracked = subprocess.run(
+                        ["git", "show", "--pretty=format:", "--name-only", "HEAD"],
+                        cwd=library,
+                        env=cli.env,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        check=True,
+                    ).stdout.splitlines()
+                    self.assertEqual(tracked, [".skillager/provenance.json", "skills/git-import/SKILL.md"])
+                    git_status = subprocess.run(
+                        ["git", "status", "--porcelain"],
+                        cwd=library,
+                        env=cli.env,
+                        text=True,
+                        stdout=subprocess.PIPE,
+                        check=True,
+                    ).stdout
+                    self.assertEqual(git_status, "")
 
     @unittest.skipUnless(shutil.which("git"), "system Git is required")
     def test_accept_refuses_unrelated_staged_edits_inside_shared_provenance(self) -> None:

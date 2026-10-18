@@ -154,25 +154,32 @@ def _run_import(args: argparse.Namespace) -> int:
             **({"expected_first_use": expected_review["library"]} if expected_review is not None else {}),
         )
     if initialization is not None and expected_review is not None and expected_review["library"]["library_id"] is None:
-        if not initialization["created"]:
-            raise ReviewRefusal("review_changed", "library setup did not create the expected identity; inspect the library and preview again")
-        # Only an identity created by this confirmation may fill the preview's
-        # missing UUID. A pre-existing reviewed identity must remain identical.
+        # The locked initializer checks the expected absence before creating
+        # this identity. A pre-existing reviewed UUID must remain identical.
         expected_review = {**expected_review, "library": {**expected_review["library"],
                            "library_id": initialization["library"]["library_id"]}}
-    result = import_library_skill(
-        root(args),
-        catalog_root(args),
-        args.skill,
-        destination_name=str(preview["destination"]["name"]),
-        expected_hash=str(preview["source_hash"]),
-        expected_source_key=str(preview["_source_key"]),
-        override_lint=args.override_lint,
-        reason=args.reason,
-        project_dir=current_project_dir(),
-        source_file=Path(preview["source"]["file"]) if source_binding else None,
-        expected_review=expected_review,
-    )
+    try:
+        result = import_library_skill(
+            root(args),
+            catalog_root(args),
+            args.skill,
+            destination_name=str(preview["destination"]["name"]),
+            expected_hash=str(preview["source_hash"]),
+            expected_source_key=str(preview["_source_key"]),
+            override_lint=args.override_lint,
+            reason=args.reason,
+            project_dir=current_project_dir(),
+            source_file=Path(preview["source"]["file"]) if source_binding else None,
+            expected_review=expected_review,
+        )
+    except (OSError, ValueError) as error:
+        if initialization is None or expected_review is None:
+            raise
+        message = (f"{error}; personal library setup completed at {initialization['library']['root']} "
+                   f"(Git mode: {initialization['git']['mode']})")
+        if isinstance(error, ReviewRefusal):
+            raise ReviewRefusal(error.code, message) from error
+        raise ValueError(message) from error
     if args.json:
         if initialization is not None:
             result["library"] = {
