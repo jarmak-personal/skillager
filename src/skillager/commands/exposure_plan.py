@@ -35,7 +35,7 @@ def cmd_exposure_plan(args: argparse.Namespace) -> int:
                 result, code = apply_plan(plan, args.confirmation_token)
         sys.stdout.write(encode_plan_output(result))
         return code
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+    except (OSError, ValueError, KeyError) as error:
         reason_code = error.code if isinstance(error, PlanRefusal) else "state-changed" if args.confirmation_token else "unavailable"
         refused: dict[str, Any] = {"schema": PLAN_SCHEMA, "status": "refused", "reason_code": reason_code, "reason": public_refusal_reason(error), "results": []}
         if plan is not None:

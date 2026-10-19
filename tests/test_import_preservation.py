@@ -7,13 +7,14 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from copy import deepcopy
+from copy import copy, deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
 from skillager.commands.impl import main
 from skillager.exposure.plan import ExposurePlan
 from skillager.exposure.plan_apply import apply_plan
+from skillager.exposure.plan_sources import PlanSources
 from skillager.exposure import plan_apply
 from skillager.exposure.plan_targets import PlanTarget, tree_state
 from skillager.library import importing
@@ -183,6 +184,7 @@ class ImportPreservationAuthorityTests(unittest.TestCase):
             root = Path(tmp).resolve()
             fixture = fixtures.ImportPreservationBehaviorTests()
             _, cli, source, _ = fixture.fixture(root)
+            request = fixture.observe(cli, source)["candidates"][0]["requests"]["stub"]
             state = Path(cli.env["SKILLAGER_STATE_DIR"])
             approvals.save(state, {"skills": {"project/demo": {"state": "pinned", "content_hash": "f" * 64}}})
             pinned = fixture.observe(cli, source, code=2)
@@ -198,6 +200,11 @@ class ImportPreservationAuthorityTests(unittest.TestCase):
             result = fixture.observe(cli, source, code=2)
             self.assertEqual(result["candidates"][0]["basis"], "approved-sync")
             self.assertIsNone(result["candidates"][0]["requests"])
+            self.assertEqual(fixture.preview(cli, request, code=2)["reason_code"], "origin-unpreserved")
+            provenance["skills"]["duplicate"] = deepcopy(provenance["skills"]["demo"])
+            write_library_provenance(layout, provenance)
+            self.assertEqual(fixture.observe(cli, source, code=2)["reason_code"], "origin-ambiguous")
+            self.assertEqual(fixture.preview(cli, request, code=2)["reason_code"], "origin-ambiguous")
             self.assertEqual(tree_state(source), before)
 
     def test_canonical_changes_after_staging_preserve_original_before_disposal(self):
@@ -244,3 +251,110 @@ class ImportPreservationAuthorityTests(unittest.TestCase):
                     self.assertEqual(outcome["status"], "recovery_required")
                     self.assertEqual(tree_state(Path(outcome["recovery_path"])), before)
                 self.assertEqual((root / "library/skills/demo/support/helper.sh").read_text(), "Concurrent canonical change\n")
+
+    def test_foreign_import_proof_does_not_hide_current_library_choice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            fixture = fixtures.ImportPreservationBehaviorTests()
+            _, cli, source, _ = fixture.fixture(root)
+            catalog = Path(cli.env["SKILLAGER_CATALOG_STATE_DIR"])
+            current = approvals.load(catalog)
+            foreign = copy(cli)
+            foreign_catalog = root / "foreign-catalog"
+            foreign.env = {**cli.env, "SKILLAGER_CATALOG_STATE_DIR": str(foreign_catalog)}
+            fixture.checked(foreign.run("library", "init", "--path", str(root / "foreign-library"), "--no-git", "--json"))
+            preview = fixture.checked(foreign.run("import", "project/demo", "--source-file", str(source / "SKILL.md"), "--review-manifest", "--json"))
+            fixture.checked(foreign.run(*preview["next_command_argv"][1:]))
+            foreign_records = approvals.load(foreign_catalog)["global_approvals"]
+            combined = deepcopy(current)
+            combined["global_approvals"].update(foreign_records)
+            approvals.save(catalog, combined)
+            observed = fixture.observe(cli, source)
+            self.assertEqual(observed["status"], "available")
+            self.assertEqual(len(observed["candidates"]), 1)
+            request = observed["candidates"][0]["requests"]["stub"]
+            self.assertEqual(request["source"]["library_id"], observed["library_id"])
+            # A coherent foreign decision alone is never current-library authority.
+            approvals.save(catalog, {**current, "global_approvals": foreign_records})
+            self.assertEqual(fixture.observe(cli, source, code=2)["candidates"], [])
+            # A proof claiming this library under a foreign key is malformed, not
+            # an unrelated foreign choice that may be silently ignored.
+            misbound = deepcopy(combined)
+            key = next(iter(foreign_records))
+            misbound["global_approvals"][key]["import_preservation"]["canonical"]["library_id"] = observed["library_id"]
+            approvals.save(catalog, misbound)
+            self.assertEqual(fixture.observe(cli, source, code=2)["reason_code"], "origin-unpreserved")
+            approvals.save(catalog, combined)
+            foreign_before = tree_state(root / "foreign-library/skills/demo")
+            fixture.apply(cli, fixture.preview(cli, request))
+            self.assertEqual(tree_state(root / "foreign-library/skills/demo"), foreign_before)
+
+    def test_malformed_decisions_after_install_report_partial_and_preserve_original(self):
+        for boundary in ("install", "disposal"):
+            for malformed in ("record", "state", "proof"):
+                with self.subTest(boundary=boundary, malformed=malformed), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp).resolve()
+                    fixture = fixtures.ImportPreservationBehaviorTests()
+                    project, cli, source, _ = fixture.fixture(root)
+                    request = fixture.observe(cli, source)["candidates"][0]["requests"]["stub"]
+                    preview = fixture.preview(cli, request)
+                    before = tree_state(source)
+                    canonical_check = PlanSources.revalidate_canonical
+                    checks_after_install = 0
+                    def corrupt(owner, records, **kwargs):
+                        nonlocal checks_after_install
+                        if (source / "skillager.materialized.yaml").is_file():
+                            checks_after_install += 1
+                            if checks_after_install == (1 if boundary == "install" else 2):
+                                decisions = records[owner.catalog]["global_approvals"]
+                                key = next(iter(decisions))
+                                if malformed == "record":
+                                    decisions[key] = ["malformed"]
+                                else:
+                                    decisions[key]["state" if malformed == "state" else "import_preservation"] = ["malformed"]
+                        return canonical_check(owner, records, **kwargs)
+                    output = io.StringIO()
+                    with chdir(project), patch.dict(os.environ, cli.env), redirect_stdout(output), patch.object(PlanSources, "revalidate_canonical", corrupt):
+                        code = main(preview["next_command_argv"][1:])
+                    result = json.loads(output.getvalue())
+                    self.assertEqual(code, 2, result)
+                    self.assertEqual(result["status"], "partial")
+                    self.assertEqual(result["reason_code"], "approval-malformed")
+                    self.assertEqual({item["target_id"] for item in result["results"]}, {item["target_id"] for item in preview["targets"]})
+                    outcome = next(item for item in result["results"] if item["path"] == str(source))
+                    if boundary == "install":
+                        self.assertEqual(outcome["status"], "rolled_back")
+                        self.assertEqual(tree_state(source), before)
+                    else:
+                        self.assertEqual(outcome["status"], "recovery_required")
+                        self.assertEqual(tree_state(Path(outcome["recovery_path"])), before)
+
+    def test_malformed_provenance_after_staging_uses_existing_partial_recovery(self):
+        for malformed in ("entry", "sync"):
+            with self.subTest(malformed=malformed), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp).resolve()
+                fixture = fixtures.ImportPreservationBehaviorTests()
+                project, cli, source, _ = fixture.fixture(root)
+                request = fixture.observe(cli, source)["candidates"][0]["requests"]["stub"]
+                preview = fixture.preview(cli, request)
+                before = tree_state(source)
+                revalidate = PlanSources.revalidate
+                injected = False
+                def corrupt(owner, records=None):
+                    nonlocal injected
+                    if not injected and any(source.parent.glob(".skillager-exposure-plan-*")):
+                        injected = True
+                        provenance = load_library_provenance(owner.layout)
+                        provenance["skills"]["demo"] = ["malformed"] if malformed == "entry" else {"sync": ["malformed"]}
+                        write_library_provenance(owner.layout, provenance)
+                    return revalidate(owner, records)
+                output = io.StringIO()
+                with chdir(project), patch.dict(os.environ, cli.env), redirect_stdout(output), patch.object(PlanSources, "revalidate", corrupt):
+                    code = main(preview["next_command_argv"][1:])
+                result = json.loads(output.getvalue())
+                self.assertTrue(injected)
+                self.assertEqual(code, 2, result)
+                self.assertEqual(result["status"], "partial")
+                self.assertEqual(result["reason_code"], "origin-unpreserved")
+                self.assertEqual(tree_state(source), before)
+                self.assertFalse(list(source.parent.glob(".skillager-exposure-plan-*")))

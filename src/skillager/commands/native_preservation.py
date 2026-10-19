@@ -10,7 +10,6 @@ from typing import Any
 from ..exposure.impl import _project_agent_bases
 from ..exposure.plan_request import MAX_OUTPUT_BYTES, REQUEST_SCHEMA, PlanRefusal, encode_plan_output, public_refusal_reason
 from ..exposure.plan_sources import PlanSources
-from ..exposure.plan_targets import bounded_metadata
 from ..library.sync_lineage import canonical_target_state
 from .context import catalog_root, current_project_dir, root
 
@@ -42,26 +41,18 @@ def cmd_native_preservation(args: argparse.Namespace) -> int:
             raise PlanRefusal("origin-unavailable", "The selected unmanaged native occurrence is no longer observed")
         origin_id, (_source, observed) = pairs[0]
         result.update(project=str(project), agent=agent, scope="project", library_id=sources.library_id, origin=observed)
-        synced = [f"lib/{name}" for name, metadata in sources.provenance.get("skills", {}).items()
-                  if isinstance(metadata, dict) and isinstance(metadata.get("sync"), dict)
-                  and metadata["sync"].get("source_identity") == sources.origin_sources[origin_id]]
-        # A sync relation always retains its stricter authority path. An invalid
-        # sync proof never falls through to import acceptance.
-        candidates = synced if synced else sources.import_candidates(origin_id)
-        if len(synced) > 1:
-            raise PlanRefusal("origin-ambiguous", "The original has ambiguous synchronized canonical lineages")
-        bounded_metadata(candidates)
+        basis, candidates = sources.native_choices(origin_id)
         for skill_id in candidates:
             item: dict[str, Any] = {"source": {"library_id": sources.library_id, "skill_id": skill_id},
-                                    "basis": "approved-sync" if synced else "accepted-import",
+                                    "basis": basis,
                                     "status": "unavailable", "reason_code": None, "requests": None}
             try:
                 sources.native(origin_id, skill_id)
                 selected = sources.selected_origins[origin_id]
-                item.update(status="available", proof_id=(selected["status"]["lineage_id"] if synced else selected["stored"]["proof_id"]),
+                item.update(status="available", proof_id=(selected["status"]["lineage_id"] if basis == "approved-sync" else selected["stored"]["proof_id"]),
                             requests={mode: {"schema": REQUEST_SCHEMA, "action": "adopt-native", "origin_id": origin_id,
                                              "source": item["source"], "mode": mode} for mode in ("native", "stub")})
-            except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            except (OSError, ValueError, KeyError) as error:
                 item.update(reason_code=error.code if isinstance(error, PlanRefusal) else "origin-unpreserved", reason=public_refusal_reason(error))
             result["candidates"].append(item)
         available = sum(item["status"] == "available" for item in result["candidates"])
@@ -69,7 +60,7 @@ def cmd_native_preservation(args: argparse.Namespace) -> int:
                       reason_code="origin-ambiguous" if available > 1 else None if available else "origin-unpreserved")
         if len(encode_plan_output(result).encode("utf-8")) > MAX_OUTPUT_BYTES:
             raise PlanRefusal("output-limit", "Native observation exceeds the complete 4 MiB output limit")
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+    except (OSError, ValueError, KeyError) as error:
         result.update(status="unavailable", reason_code=error.code if isinstance(error, PlanRefusal) else "origin-unpreserved",
                       reason=public_refusal_reason(error), candidates=[])
     sys.stdout.write(encode_plan_output(result))
