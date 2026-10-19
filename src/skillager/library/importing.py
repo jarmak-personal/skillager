@@ -12,6 +12,8 @@ from ..state.locking import resource_locks
 from ..state.statefiles import read_user_json
 from ..trust import APPROVED_TRUST_STATES, approval_key_for, set_trust
 from .candidate import prepare_library_candidate
+from .source_identity import source_key as _source_key
+from .import_preservation import import_preservation
 from .review import REVIEW_LIMITS, ReviewRefusal, capture_review_tree
 from .git import LibraryGitError, commit_paths, path_changes, repository_status, verified_version_reference
 from .metadata import load_library_provenance, set_import_provenance
@@ -203,6 +205,9 @@ def import_library_skill(
         if not approval_key:
             raise ValueError("imported library skill is missing a stable approval key")
         try:
+            version = verified_version_reference(layout.root, target, source_key=approval_key, expected_hash=expected_hash, mode=identity.git_mode)
+            preservation = import_preservation(source, project_dir, target, identity.library_id,
+                                               layout.root, f"{LIBRARY_NAMESPACE}/{name}", expected_hash)
             record = set_trust(
                 catalog_root,
                 f"{LIBRARY_NAMESPACE}/{name}",
@@ -216,7 +221,8 @@ def import_library_skill(
                 approval_key=approval_key,
                 approval_root=catalog_root,
                 global_scope=True,
-                version=verified_version_reference(layout.root, target, source_key=approval_key, expected_hash=expected_hash, mode=identity.git_mode),
+                version=version,
+                import_preservation=preservation,
             )
         except Exception as exc:
             pending_state = "committed but pending" if identity.git_mode == "system" else "copied but pending"
@@ -320,18 +326,6 @@ def _capture_import_review(source: dict[str, Any]) -> dict[str, Any]:
 def _review_source_provenance(source: dict[str, Any]) -> dict[str, Any]:
     metadata = _compact_source(source)
     return {key: metadata[key] for key in ("type", "collection", "package", "version", "editable")}
-
-
-def _source_key(skill: dict[str, Any]) -> str:
-    key = skill.get("approval_key") or approval_key_for(
-        str(skill["id"]),
-        skill.get("root"),
-        skill.get("source") or {},
-        entrypoint=skill.get("entrypoint"),
-    )
-    if isinstance(key, str) and key:
-        return key
-    return f"path:{Path(skill['root']).resolve().as_posix()}"
 
 
 def _compact_source(skill: dict[str, Any]) -> dict[str, Any]:

@@ -643,6 +643,7 @@ def add_expose_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     p.add_argument("--allow-incompatible", action="store_true", help="Allow native/stub exposure even when skill metadata explicitly excludes the selected agent.")
     p.add_argument("--list", action="store_true", dest="list_exposures", help="List Skillager-managed exposed targets for the selected agent/scope.")
     p.add_argument("--request-json", help="One complete token-bound local exposure lifecycle request as JSON.")
+    p.add_argument("--observe-native", metavar="SKILL_FILE", help="Observe exact accepted preservation choices for one project native original without changing it.")
     p.add_argument("--exposure-id", help="Select one exact existing managed project library copy for native/stub exposure.")
     p.add_argument("--remove", metavar="EXPOSURE_ID", help="Remove one Skillager-managed exposed target by exposure id.")
     p.add_argument("--dry-run", action="store_true", help="Preview targets; one project native/stub skill also returns complete file effects and bound confirmation.")
@@ -5561,6 +5562,9 @@ def _review_extra_skills(args: argparse.Namespace, *, discovery_errors: list[dic
 
 
 def cmd_expose(args: argparse.Namespace) -> int:
+    if getattr(args, "observe_native", None) is not None:
+        from .native_preservation import cmd_native_preservation
+        return cmd_native_preservation(args)
     if getattr(args, "request_json", None) is not None:
         from .exposure_plan import cmd_exposure_plan
         return cmd_exposure_plan(args)

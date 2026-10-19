@@ -35,7 +35,10 @@ def build_index(
     reuse_cache: bool = True,
     project_native_root: Path | None = None,
     project_inventory: bool = False,
+    selected_native_file: Path | None = None,
 ) -> dict[str, Any]:
+    if selected_native_file is not None and not project_inventory:
+        raise ValueError("selected native observation requires project inventory")
     approval_root = approval_root or state_root
     cached = _load_cached_entries(state_root) if reuse_cache else {}
     managed_paths: list[Path] = []
@@ -45,6 +48,8 @@ def build_index(
                               project_inventory=project_inventory)
     entries = []
     for skill in skills:
+        if selected_native_file is not None and skill.entrypoint != selected_native_file:
+            continue
         fingerprint = content_tree_fingerprint(skill.root)
         # Trust is exact-hash authority, so a metadata fingerprint may never stand in
         # for reading the current canonical tree. The persisted digest can still let

@@ -126,7 +126,11 @@ for confirmation and refusal handling.
 
 Local native adoption, named router grouping/membership/ungrouping, and preserved
 native removal use complete `expose --request-json` plans. Exact-copy Full/Stub
-changes use optional `--exposure-id`. See [local exposure plans](docs/EXPOSURE_PLANS.md)
+changes use optional `--exposure-id`. For a selected native original,
+`expose --observe-native <absolute-SKILL.md> --agent codex|claude --json` reports
+exact accepted-import or approved-sync preservation and ready Full/Stub plan
+requests. Saving and accepting an import does not approve the original; replacing
+it remains a separate explicit exposure confirmation. See [local exposure plans](docs/EXPOSURE_PLANS.md)
 for the closed request schema, preservation rules, complete effects and recovery.
 
 Removal previews use `skillager expose --remove <exposure-id> --agent codex --json`
