@@ -39,15 +39,84 @@ confirming; no text-only request confirmation is offered.
 
 ## Preservation and names
 
-Native selectors come from the metadata-only `skillager.library-lineage.v1`
-relation (`library sync --status --json` or the existing skill metadata). The
-origin is a physical occurrence, separate from its logical source identity.
-Skillager rechecks the registered library UUID, canonical acceptance, current
-origin approval, lineage and full current tree. Every removed file, directory and
-entry permission must match its preserved canonical counterpart. Extra excluded
-files, symlinks or special entries refuse; filtered approval hashes alone never
-make them disposable. In-place adoption preserves and binds the original root
-permissions. Library preservation does not recreate the deployment directory.
+Select an original through the metadata-only observation command, using the exact
+`skill_file` returned by `list --scope project --json`:
+
+```bash
+skillager expose --observe-native /absolute/project/.agents/skills/review/SKILL.md --agent codex --scope project --json
+```
+
+Claude originals use their exact native path and `--agent claude`. The selector
+must be a canonical absolute `SKILL.md` in a supported native directory of the
+current project and provider. It cannot be combined with an exposure request,
+mode, filters, dry run, confirmation or global scope. It performs no mutation.
+
+The `skillager.native-preservation.v1` response contains `project`, `agent`,
+`scope`, `library_id`, the exact `origin`, and a complete `candidates` array.
+Each candidate has `source: {library_id, skill_id}`, `basis`, `status`,
+`reason_code`, and `requests`. Available candidates also have a `proof_id` and
+ready `requests.native` / `requests.stub` objects using the existing
+`skillager.exposure-request.v1` `adopt-native` shape. Pass the chosen request to
+`expose --request-json` for a fresh complete preview; observation grants no
+confirmation token and does not replace that preview or the user's decision.
+An unavailable candidate has `requests: null` and a reason. The top-level status
+is `available` for one available choice, `ambiguous` for multiple available
+choices (both exit 0), or `unavailable` when none can be used (exit 2). Display
+all choices and require an explicit canonical selection when ambiguous.
+
+For example, an available candidate contains metadata shaped like:
+
+```json
+{
+  "source": {"library_id": "LIBRARY_UUID", "skill_id": "lib/review"},
+  "basis": "accepted-import",
+  "status": "available",
+  "reason_code": null,
+  "proof_id": "PROOF_ID",
+  "requests": {
+    "native": {"schema": "skillager.exposure-request.v1", "action": "adopt-native", "origin_id": "ORIGIN_ID", "source": {"library_id": "LIBRARY_UUID", "skill_id": "lib/review"}, "mode": "native"},
+    "stub": {"schema": "skillager.exposure-request.v1", "action": "adopt-native", "origin_id": "ORIGIN_ID", "source": {"library_id": "LIBRARY_UUID", "skill_id": "lib/review"}, "mode": "stub"}
+  }
+}
+```
+
+Preservation has two separate bases:
+
+- `approved-sync` retains the existing approval-bound
+  `skillager.library-lineage.v1` relation and current source approval requirement.
+  Its selectors remain available through `library sync --status --json`.
+- `accepted-import` comes only from a successful new explicit import acceptance.
+  The canonical approval record binds the exact original occurrence, project,
+  provider, registered library UUID/root, canonical skill/version and complete
+  original/canonical tree states. An ordinary unapproved original is eligible;
+  explicit source blocks and pins remain protections. Import and replacement
+  never approve the original or future source versions, and never synchronize or
+  create a duplicate canonical copy. Editable `imported_from` metadata, same names
+  or matching bodies do not create this proof. Older imports and repaired pending
+  imports receive no inferred proof. A broken sync relation cannot fall back to
+  the import basis.
+
+The observation reads candidate decision metadata before any candidate tree and
+supports at most 64 complete import choices. It hashes only the selected current
+original and candidate library trees, not all bodies in the library. Candidate
+metadata uses the existing 64 KiB bound and complete output the 4 MiB bound;
+overflow refuses without truncation. Current project-native discovery metadata
+still resolves the selected occurrence and its policy identity.
+
+Skillager rechecks canonical acceptance and every relevant original/canonical byte
+and permission before replacement, including under the existing apply locks.
+Extra excluded files, empty directories not copied by import, changed nested modes,
+symlinks or special entries leave the original intact and refuse replacement.
+Import's filtered-copy semantics are unchanged. In-place adoption binds and
+retains the original root permissions independently of the library root.
+Changed acceptance, proof, source decision, identity or target requires a fresh
+complete plan. Canonical reacceptance does not regenerate import proof.
+
+After a lost import response, this observation can establish whether current
+accepted preservation exists. After a lost exposure response, an unavailable
+original alone does not establish success: inspect the current managed exposure,
+complete admitted targets and any recovery state. Never replay a mutation merely
+because its response was lost.
 
 An unwanted pending, blocked or unpreserved native directory needs no approval
 merely to be removed. Use the host's ordinary file manager or a client's explicit
@@ -117,7 +186,8 @@ Lifecycle preview uses `skillager.exposure-plan.v1`, `status: would_apply`, with
 
 - canonical request, project, agent, scope and library UUID;
 - selected canonical source identities/hashes, public approval evidence, and
-  selected origin/lineage/preservation evidence;
+  selected origin/lineage/preservation evidence (`lineages` for approved sync,
+  `import_preservations` for exact accepted imports, including source-decision state);
 - group/tag membership before and after, and the explicit tag policy;
 - every affected or consumed `targets[]` entry: stable plan-local `target_id`,
   kind/path/exposure identity, action, before/after root mode and state hash,
@@ -149,7 +219,10 @@ array; a built plan reports all its targets as refused.
 
 After mutation starts, failure returns exit 2 and `partial` with actual outcomes.
 Originals remain detached until all targets verify; their complete bytes/modes
-are checked again before disposal. Rollback never overwrites a concurrently
+are checked again before disposal. Canonical preservation is rechecked after
+installation and at each original's final disposal boundary. Detected late drift
+retains the original for recovery; a later external edit remains a later change.
+Rollback never overwrites a concurrently
 changed destination. Recovery paths can retain originals and interrupted current
 copies. This coordinates one bounded exposure action; it does not promise
 simultaneous atomic replacement across directories.

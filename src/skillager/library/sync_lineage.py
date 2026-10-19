@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import stat
 from pathlib import Path
@@ -10,42 +9,16 @@ from ..exposure.target_state import target_state_hash, target_state_manifest
 from ..skills.tree import require_canonical_content_tree
 from ..state.library_approval import approval_witness, public_approval, public_approval_evidence
 from ..state.trust import APPROVED_TRUST_STATES, _record_trust_info
-from .importing import _source_key
+from .source_identity import identity as identity, origin, source_identity as source_identity
 
 
 LINEAGE_SCHEMA = "skillager.library-lineage.v1"
 
 
-def identity(kind: str, *parts: str) -> str:
-    digest = hashlib.sha256(f"skillager.sync-{kind}.v1\0".encode())
-    digest.update(json.dumps(parts, separators=(",", ":")).encode())
-    return digest.hexdigest()
-
-
-def source_identity(skill: dict[str, Any]) -> str:
-    return identity("source", _source_key(skill))
-
-
-def origin(skill: dict[str, Any], project: Path | None, *, source_id: str) -> dict[str, Any]:
-    source = skill.get("source") or {}
-    root = str(Path(skill["root"]).resolve())
-    entrypoint = str(Path(skill["entrypoint"]).resolve())
-    native = skill.get("native")
-    return {
-        "origin_id": identity("origin", source_id, root, entrypoint),
-        "skill_id": skill["id"], "source_type": source.get("type", "unknown"),
-        "path": root, "entrypoint": entrypoint,
-        "native": ({"agent": native["agent"], "scope": native["scope"],
-                    "project_root": str(project.resolve()) if project and native["scope"] == "project" else None} if native else None),
-        "provenance": {name: (source[name] in {True, "true", "True"} if name == "editable" else source[name])
-                       for name in ("collection", "package", "version", "editable") if name in source},
-    }
-
-
 def canonical_target_state(target: Path) -> dict[str, Any]:
     """Preserve complete destination state separately from approval hashing."""
+    entries = target_state_manifest(target, max_entries=512, max_bytes=32 * 1024 * 1024)
     require_canonical_content_tree(target, action="library sync")
-    entries = target_state_manifest(target)
     if len(entries) > 512 or any(item["type"] not in {"file", "directory"} for item in entries.values()):
         raise ValueError("sync destination has unsupported or excessive entries")
     if any(item.get("size", 0) > 8 * 1024 * 1024 for item in entries.values()):

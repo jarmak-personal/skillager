@@ -106,6 +106,15 @@ the existing repair path. Blocked sources and scanner/lint overrides retain thei
 existing gates. Neither the manifest nor import acceptance grants ordinary body
 access to an unapproved original.
 
+A successful new import also records exact replacement preservation with canonical
+acceptance when the complete original tree is preserved, including nested modes.
+Use `expose --observe-native <absolute-SKILL.md> --agent codex|claude --json` to
+observe that fact and obtain explicit Full/Stub plan requests. Excluded or
+unpreserved material remains at the original and prevents this proof; importing
+still succeeds normally. Failed/pending acceptance and later manual repair do not
+create proof. A lost final response is uncertain delivery: inspect current public
+state rather than replaying import. See [native preservation](EXPOSURE_PLANS.md#preservation-and-names).
+
 Ordinary import previews and confirmations keep their existing shape and behavior
 when neither new option is supplied. `--source-file` can also select an occurrence
 without requesting a manifest; it still binds that occurrence to confirmation.

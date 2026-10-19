@@ -17,7 +17,7 @@ def cmd_exposure_plan(args: argparse.Namespace) -> int:
     plan: ExposurePlan | None = None
     try:
         conflicts = [name for name in ("skill_ids", "mode", "tag", "all_reviewed", "all_agents", "force", "allow_incompatible",
-                     "source", "collection", "audience", "package", "activation", "include_blocked", "list_exposures", "remove", "exposure_id")
+                     "source", "collection", "audience", "package", "activation", "include_blocked", "list_exposures", "remove", "exposure_id", "observe_native")
                      if getattr(args, name, None)]
         if conflicts or (not args.agent or len(args.agent) != 1 or args.agent[0] not in {"codex", "claude"}) or args.scope != "project" or not args.json:
             raise PlanRefusal("invalid-options", "Lifecycle requests require --json, one --agent codex|claude, --scope project and no selection filters or overrides")

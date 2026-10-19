@@ -435,6 +435,13 @@ selected project inventory occurrence. The selector never imports an arbitrary
 path. Changed or unreadable files require a fresh complete preview. See
 [the import review contract](LIBRARY_REVIEW.md#import-an-external-original).
 
+After Save and accept, replacing that same original with a managed Full or Stub
+copy is a separate explicit decision. Select it with
+`expose --observe-native <absolute-SKILL.md> --agent codex|claude --json`, choose
+an available accepted copy, then preview and confirm its returned exposure request.
+This does not approve the original or future edits. Unpreserved extras or changed
+modes keep the original intact. See [the complete plan contract](EXPOSURE_PLANS.md).
+
 ## Sync Existing Approvals
 
 Run `skillager library sync --approved` to backfill already approved skills from the

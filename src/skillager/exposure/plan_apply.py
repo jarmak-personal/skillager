@@ -48,6 +48,7 @@ def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[d
     failed = False
     rollback_started = False
     failure_code: str | None = None
+    preserved_origins = {Path(value["observed"]["path"]): value["skill"]["id"] for value in plan.sources.selected_origins.values()}
     allocations = {target.path.parent / ".skillager-target-allocation" for target in plan.targets if target.kind not in {"parent", "tags"}}
     target_resources = [target.path for target in plan.targets if target.kind != "parent"]
     coordination_files = {lock_path_for(resource) for resource in [*allocations, *target_resources]}
@@ -138,6 +139,8 @@ def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[d
                 expected = target.after(deterministic=False)
                 if target.observe() != expected:
                     raise PlanRefusal("target-changed", "Exposure changed before aggregate verification")
+            if preserved_origins:
+                plan.sources.revalidate_canonical(records)
             # Recheck original bytes/modes at their detached locations, without
             # substituting the recovery path for the reviewed destination identity.
             for target in plan.targets:
@@ -170,11 +173,14 @@ def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[d
                 try:
                     if target.observe(backup) != target.before:
                         raise OSError("retained original changed before disposal")
+                    if target.path in preserved_origins:
+                        plan.sources.revalidate_canonical(records, skill_id=preserved_origins[target.path])
                     _delete(backup)
-                except OSError:
+                except (OSError, ValueError) as error:
                     failed = True
-                    failure_code = failure_code or "disposal-failed"
-                    result.update(status="recovery_required", reason_code="disposal-failed", recovery_path=str(backup))
+                    reason_code = error.code if isinstance(error, PlanRefusal) else "disposal-failed"
+                    failure_code = failure_code or reason_code
+                    result.update(status="recovery_required", reason_code=reason_code, recovery_path=str(backup))
             for root, target in scratch.items():
                 if (root / "previous").exists() or (root / "interrupted-current").exists():
                     continue

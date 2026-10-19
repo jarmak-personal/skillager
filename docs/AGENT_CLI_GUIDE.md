@@ -360,6 +360,13 @@ before retrying. See [Full export](USER_GUIDE.md#export-an-accepted-full-payload
 
 ## Plan local native and router changes
 
+For a selected original, use `expose --observe-native <absolute-SKILL.md> --agent
+codex|claude --scope project --json`. Use the public inventory's exact file path,
+show every returned canonical choice, and pass its selected Full/Stub request to
+a fresh complete preview. The `accepted-import` basis permits an unchanged newly
+imported original without approving that source; `approved-sync` retains current
+source approval. Unavailable proof leaves reading and separate import available.
+
 Use the closed `expose --request-json` lifecycle contract for preserved native
 adoption/removal and named router changes. Review every returned target, file
 and tag effect before confirming the exact token. Use `--exposure-id` for an

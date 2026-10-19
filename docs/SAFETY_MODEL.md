@@ -125,6 +125,19 @@ Only the canonical content tree crosses the boundary: regular files below the se
 
 Import provenance stores the source skill ID, imported hash, source type, and timestamp for attribution and audit. It does not create an upstream synchronization contract.
 
+A successful new canonical import acceptance may additionally store compact exact
+preservation evidence in that same trusted approval record and decision history.
+It binds the physical occurrence, project/provider, library UUID/root, canonical
+version, all preserved entries/modes and both root modes. Incomplete filtered
+copies receive no proof. Editable attribution cannot confer this authority, and
+neither ordinary later acceptance nor older matching metadata synthesizes it.
+Selected native observation and the existing complete exposure plan verify current
+proof and effective protections; ordinary pending source approval is distinct
+from an explicit block. An invalid approved-sync lineage never downgrades to this
+basis. No original-source approval is added. Acceptance and proof commit together;
+a failure before that transaction leaves no authority, while a lost final response
+requires a fresh supported observation of current facts.
+
 ## Approved Source Synchronization
 
 Approval actions and setup preserve canonical copies of approved sources from the
@@ -374,7 +387,8 @@ Users own the final approval decision.
 The closed `expose --request-json` actions reuse canonical approval/lineage,
 project-tag, projection rendering, full target manifest, lock and reservation
 owners. They never derive approval. Native conversion/removal requires current
-approved preservation of all original material, not merely a filtered hash.
+accepted preservation of all original material, through the distinct approved-sync
+or exact accepted-import basis, not merely a filtered hash.
 The aggregate token binds each source/target/tag and explicit replacement or
 departure. Preflight stale state refuses without target/tag writes. After
 publication starts, retained originals and per-target recovery outcomes preserve
