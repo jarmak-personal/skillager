@@ -319,6 +319,16 @@ and accepts that version; no second acceptance step is needed on success. Use th
 returned argv unchanged. Incomplete, unreadable or oversized evidence offers no
 applicable confirmation. See [the exact review contract](LIBRARY_REVIEW.md#import-an-external-original).
 
+If the user explicitly wants to save a native project original and replace it with
+a managed Full or Stub copy, add `--project-mode native|stub --agent codex|claude`
+to that exact-source manifest preview. The distinct
+`skillager.import-placement.v1` response binds acceptance and every replacement
+effect to one decision; execute only its returned argv after that decision.
+Existing accepted preservation uses ordinary native adoption instead. Read the
+separate save/placement outcomes: a saved canonical remains when replacement
+fails. Do not retry uncertain work or substitute two independently confirmed
+commands. See [Save and use](LIBRARY_REVIEW.md#save-and-use-a-native-original).
+
 ### Compare Or Restore
 
 Use metadata-only history and diff summaries first:

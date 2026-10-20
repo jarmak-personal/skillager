@@ -735,13 +735,14 @@ def prepare_direct_candidate(
     skill: dict[str, Any], *, candidate: Path, target: Path, agent: str, scope: str,
     mode: str, decisions: dict[str, Any], verify_source: bool = True,
     root_mode: int | None = None,
+    content_root: Path | None = None,
     candidate_fd: int | None = None,
     owned_entries: dict[str, tuple[int, int]] | None = None,
 ) -> dict[str, Any]:
     """One renderer/sidecar owner for ordinary and aggregate direct exposures."""
     if candidate_fd is not None and mode != "native":
         raise ValueError("descriptor-bound candidates support native Full payloads only")
-    source_root = Path(skill.get("root") or ".").resolve()
+    source_root = (content_root or Path(skill.get("root") or ".")).resolve()
     if mode == "native":
         _require_native_skill_frontmatter(source_root / "SKILL.md")
     if candidate_fd is None:

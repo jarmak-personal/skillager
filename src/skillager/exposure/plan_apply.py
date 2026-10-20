@@ -28,11 +28,18 @@ def apply_plan(plan: ExposurePlan, token: str) -> tuple[dict[str, Any], int]:
     resources = [source.catalog / "library-mutation"]
     resources.extend(source.catalog / f"library-skill-{skill_id[4:]}" for skill_id in source.selected)
     with resource_locks(resources):
-        with approvals.locked_records([source.state, source.catalog]) as records:
-            source.revalidate(records)
-            plan.require_staging_clear()
-            plan.revalidate_targets()
-            return _publish(plan, records)
+        return apply_plan_locked(plan, token)
+
+
+def apply_plan_locked(plan: ExposurePlan, token: str) -> tuple[dict[str, Any], int]:
+    """Publish with library-mutation and selected library-skill locks already held."""
+    require_confirmation_token(token, plan.token, operation="exposure plan")
+    source = plan.sources
+    with approvals.locked_records([source.state, source.catalog]) as records:
+        source.revalidate(records)
+        plan.require_staging_clear()
+        plan.revalidate_targets()
+        return _publish(plan, records)
 
 
 def _publish(plan: ExposurePlan, records: dict[Path, dict[str, Any]]) -> tuple[dict[str, Any], int]:

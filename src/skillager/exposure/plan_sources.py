@@ -239,21 +239,7 @@ class PlanSources:
                        records[self.state].get("skills", {}).get(source.get("_decision_skill_id"))])
 
     def _import_proof(self, source: dict[str, Any], skill: dict[str, Any], record: dict[str, Any], records: dict[Path, dict[str, Any]]) -> dict[str, Any]:
-        source_witness = approval_witness(source, self.state, self.catalog, records)
-        # Missing source approval is the ordinary import journey. Explicit block
-        # decisions still win; acceptance never approves or clears this source.
-        for root, namespace, key in ((self.state, "skills", source["id"]),
-                                     (self.catalog, "global_approvals", source.get("approval_key")),
-                                     (self.state, "skills", source.get("_decision_skill_id"))):
-            decision = records[root].get(namespace, {}).get(key) or {}
-            info = _record_trust_info(decision, source["content_hash"], lint=source.get("lint"), scope="project")
-            if source_witness is None and info and info.get("state") == "blocked":
-                raise PlanRefusal("origin-blocked", "The selected original is explicitly blocked")
-            if source_witness is None and decision.get("state") == "pinned" and decision.get("content_hash") != source["content_hash"]:
-                raise PlanRefusal("origin-pinned", "The original source is pinned to another version")
-        problem = compatibility_problem(source, self.agent)
-        if problem:
-            raise PlanRefusal("source-incompatible", problem)
+        require_import_source(source, self.state, self.catalog, self.agent, records)
         info = _record_trust_info(record, skill["content_hash"], lint=skill.get("lint"), scope="global") or {}
         if record.get("derived_from") is not None or info.get("state") not in APPROVED_TRUST_STATES or record.get("skill_id") != skill["id"] or record.get("approval_key") != canonical_approval_key(self.library_id, skill["id"][4:]):
             raise PlanRefusal("origin-unpreserved", "Import preservation requires its current canonical acceptance")
@@ -331,3 +317,23 @@ class PlanSources:
             if self._lineage(stored, skill, source, current) != value["status"]:
                 raise PlanRefusal("origin-changed", "Native preservation changed after preview")
             self._preserved_tree(Path(source["root"]), Path(skill["root"]))
+
+
+def require_import_source(source: dict[str, Any], state: Path, catalog: Path, agent: str,
+                          records: dict[Path, dict[str, Any]]) -> None:
+    """Original-source protections shared by prospective import and accepted adoption."""
+    source_witness = approval_witness(source, state, catalog, records)
+    # Missing source approval is the ordinary import journey. Explicit block
+    # decisions still win; acceptance never approves or clears this source.
+    for root, namespace, key in ((state, "skills", source["id"]),
+                                 (catalog, "global_approvals", source.get("approval_key")),
+                                 (state, "skills", source.get("_decision_skill_id"))):
+        decision = records[root].get(namespace, {}).get(key) or {}
+        info = _record_trust_info(decision, source["content_hash"], lint=source.get("lint"), scope="project")
+        if source_witness is None and info and info.get("state") == "blocked":
+            raise PlanRefusal("origin-blocked", "The selected original is explicitly blocked")
+        if source_witness is None and decision.get("state") == "pinned" and decision.get("content_hash") != source["content_hash"]:
+            raise PlanRefusal("origin-pinned", "The original source is pinned to another version")
+    problem = compatibility_problem(source, agent)
+    if problem:
+        raise PlanRefusal("source-incompatible", problem)

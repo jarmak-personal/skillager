@@ -118,142 +118,159 @@ def import_library_skill(
     name = normalize_skill_name(destination_name)
     resources = [catalog_root / "library-mutation", catalog_root / f"library-skill-{name}"]
     with resource_locks(resources):
-        registration, identity = _require_library_identity(catalog_root)
-        layout = registration.layout
-        source = _resolve_external_skill(project_state, catalog_root, source_skill_id, source_file=source_file)
-        source_hash = str(source["content_hash"])
-        source_key = _source_key(source)
-        if source_hash != expected_hash or source_key != expected_source_key:
-            raise ValueError("import source changed since preview; review the new preview and rerun `skillager import`")
-        if source.get("trust") == "blocked":
-            raise ValueError(f"source skill is blocked and cannot be imported: {source_skill_id}")
-        target = layout.skill_root(name)
-        _require_import_destination(layout.skills, target, source)
-        if expected_review is not None:
-            captured = _capture_import_review(source)
-            if (str(Path(source["root"]).resolve()) != expected_review["source_root"]
-                    or str(Path(source["entrypoint"]).resolve()) != expected_review["source_file"]
-                    or _review_source_provenance(source) != expected_review["source_provenance"]
-                    or str(target) != expected_review["destination_path"]
-                    or str(layout.root) != expected_review["library"]["root"]
-                    or expected_review["library"]["library_id"] != identity.library_id
-                    or expected_review["library"]["git_mode"] != identity.git_mode
-                    or any(captured[key] != expected_review[key] for key in captured)):
-                raise ReviewRefusal("review_changed", "the selected import source or destination changed; preview again")
-        _acceptance_overrides(source, override_lint=override_lint, reason=reason)
-        git = repository_status(layout.root, mode=identity.git_mode)
-        _require_safe_git_mutation(git, allow_target_staged=False)
-        if identity.git_mode == "system" and any(
-            path_changes(git, layout.root, layout.provenance_path).values()
-        ):
-            raise ValueError("library provenance has uncommitted changes; commit or restore it before importing")
-
-        source_root = Path(source["root"]).resolve()
-        previous_provenance = load_library_provenance(layout)
-        if previous_provenance is None:
-            raise ValueError(f"library provenance metadata is missing: {layout.provenance_path}")
-        imported_at = datetime.now(timezone.utc).isoformat()
-        copied_files: list[str]
-        candidate_entry: dict[str, Any]
-        with tempfile.TemporaryDirectory(prefix="skillager-import-", dir=layout.root.parent) as tmp:
-            candidate = Path(tmp) / name
-            copied_files, candidate_entry = prepare_library_candidate(
-                source_root, candidate, layout, registration.library_id, name, expected_hash,
-            )
-            lint_override, risk_override = _acceptance_overrides(
-                candidate_entry,
-                override_lint=override_lint,
-                reason=reason,
-            )
-            _require_import_destination(layout.skills, target, source)
-            os.replace(candidate, target)
-            try:
-                provenance = set_import_provenance(
-                    layout,
-                    name,
-                    source_skill=source_skill_id,
-                    source_hash=expected_hash,
-                    source_type=str((source.get("source") or {}).get("type") or "unknown"),
-                    imported_at=imported_at,
-                    expected=previous_provenance,
-                )
-            except Exception:
-                if target.exists() and not candidate.exists():
-                    os.replace(target, candidate)
-                raise
-
-        commit = None
-        if identity.git_mode == "system":
-            try:
-                commit = commit_paths(
-                    layout.root,
-                    [target, layout.provenance_path],
-                    f"Import library skill {name}",
-                )
-            except LibraryGitError as exc:
-                raise ValueError(
-                    f"{exc}; imported content remains pending. Fix Git, then preview "
-                    f"`skillager library accept lib/{name} --json`"
-                ) from exc
-
-        approval_key = approval_key_for(
-            f"{LIBRARY_NAMESPACE}/{name}",
-            target,
-            candidate_entry["source"],
-            entrypoint=target / "SKILL.md",
+        return import_library_skill_locked(
+            project_state, catalog_root, source_skill_id, destination_name=name,
+            expected_hash=expected_hash, expected_source_key=expected_source_key,
+            override_lint=override_lint, reason=reason, project_dir=project_dir,
+            source_file=source_file, expected_review=expected_review,
         )
-        if not approval_key:
-            raise ValueError("imported library skill is missing a stable approval key")
+
+
+def import_library_skill_locked(
+    project_state: Path, catalog_root: Path, source_skill_id: str, *,
+    destination_name: str, expected_hash: str, expected_source_key: str,
+    override_lint: bool = False, reason: str | None = None,
+    project_dir: Path | None = None, source_file: Path | None = None,
+    expected_review: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Import while the caller holds library-mutation and this skill's resource lock."""
+    name = normalize_skill_name(destination_name)
+    registration, identity = _require_library_identity(catalog_root)
+    layout = registration.layout
+    source = _resolve_external_skill(project_state, catalog_root, source_skill_id, source_file=source_file)
+    source_hash = str(source["content_hash"])
+    source_key = _source_key(source)
+    if source_hash != expected_hash or source_key != expected_source_key:
+        raise ValueError("import source changed since preview; review the new preview and rerun `skillager import`")
+    if source.get("trust") == "blocked":
+        raise ValueError(f"source skill is blocked and cannot be imported: {source_skill_id}")
+    target = layout.skill_root(name)
+    _require_import_destination(layout.skills, target, source)
+    if expected_review is not None:
+        captured = _capture_import_review(source)
+        if (str(Path(source["root"]).resolve()) != expected_review["source_root"]
+                or str(Path(source["entrypoint"]).resolve()) != expected_review["source_file"]
+                or _review_source_provenance(source) != expected_review["source_provenance"]
+                or str(target) != expected_review["destination_path"]
+                or str(layout.root) != expected_review["library"]["root"]
+                or expected_review["library"]["library_id"] != identity.library_id
+                or expected_review["library"]["git_mode"] != identity.git_mode
+                or any(captured[key] != expected_review[key] for key in captured)):
+            raise ReviewRefusal("review_changed", "the selected import source or destination changed; preview again")
+    _acceptance_overrides(source, override_lint=override_lint, reason=reason)
+    git = repository_status(layout.root, mode=identity.git_mode)
+    _require_safe_git_mutation(git, allow_target_staged=False)
+    if identity.git_mode == "system" and any(
+        path_changes(git, layout.root, layout.provenance_path).values()
+    ):
+        raise ValueError("library provenance has uncommitted changes; commit or restore it before importing")
+
+    source_root = Path(source["root"]).resolve()
+    previous_provenance = load_library_provenance(layout)
+    if previous_provenance is None:
+        raise ValueError(f"library provenance metadata is missing: {layout.provenance_path}")
+    imported_at = datetime.now(timezone.utc).isoformat()
+    copied_files: list[str]
+    candidate_entry: dict[str, Any]
+    with tempfile.TemporaryDirectory(prefix="skillager-import-", dir=layout.root.parent) as tmp:
+        candidate = Path(tmp) / name
+        copied_files, candidate_entry = prepare_library_candidate(
+            source_root, candidate, layout, registration.library_id, name, expected_hash,
+        )
+        lint_override, risk_override = _acceptance_overrides(
+            candidate_entry,
+            override_lint=override_lint,
+            reason=reason,
+        )
+        _require_import_destination(layout.skills, target, source)
+        os.replace(candidate, target)
         try:
-            version = verified_version_reference(layout.root, target, source_key=approval_key, expected_hash=expected_hash, mode=identity.git_mode)
-            preservation = import_preservation(source, project_dir, target, identity.library_id,
-                                               layout.root, f"{LIBRARY_NAMESPACE}/{name}", expected_hash)
-            record = set_trust(
-                catalog_root,
-                f"{LIBRARY_NAMESPACE}/{name}",
-                "reviewed",
-                expected_hash,
-                candidate_entry["source"],
-                lint=candidate_entry.get("lint"),
-                lint_override=lint_override,
-                risk_override=risk_override,
-                reason=(reason or "").strip() or None,
-                approval_key=approval_key,
-                approval_root=catalog_root,
-                global_scope=True,
-                version=version,
-                import_preservation=preservation,
+            provenance = set_import_provenance(
+                layout,
+                name,
+                source_skill=source_skill_id,
+                source_hash=expected_hash,
+                source_type=str((source.get("source") or {}).get("type") or "unknown"),
+                imported_at=imported_at,
+                expected=previous_provenance,
             )
-        except Exception as exc:
-            pending_state = "committed but pending" if identity.git_mode == "system" else "copied but pending"
+        except Exception:
+            if target.exists() and not candidate.exists():
+                os.replace(target, candidate)
+            raise
+
+    commit = None
+    if identity.git_mode == "system":
+        try:
+            commit = commit_paths(
+                layout.root,
+                [target, layout.provenance_path],
+                f"Import library skill {name}",
+            )
+        except LibraryGitError as exc:
             raise ValueError(
-                f"imported content is {pending_state} acceptance: {exc}; repair by previewing "
+                f"{exc}; imported content remains pending. Fix Git, then preview "
                 f"`skillager library accept lib/{name} --json`"
             ) from exc
-        refresh_collection(catalog_root, LIBRARY_NAMESPACE)
-        where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
-        destination = {
-            **where,
-            "slug": name,
-            "name": name,
-            "display_name": where.get("name") or name,
-        }
-        return {
-            "schema": IMPORT_SCHEMA,
-            "status": "imported",
-            "source": _compact_source(source),
-            "destination": destination,
-            "provenance": provenance,
-            "approval": {
-                "state": record["state"],
-                "scope": record["scope"],
-                "content_hash": record["content_hash"],
-                "lint_override": record.get("lint_override"),
-                "risk_override": record.get("risk_override"),
-            },
-            "copied_file_count": len(copied_files),
-            "commit": commit,
-        }
+
+    approval_key = approval_key_for(
+        f"{LIBRARY_NAMESPACE}/{name}",
+        target,
+        candidate_entry["source"],
+        entrypoint=target / "SKILL.md",
+    )
+    if not approval_key:
+        raise ValueError("imported library skill is missing a stable approval key")
+    try:
+        version = verified_version_reference(layout.root, target, source_key=approval_key, expected_hash=expected_hash, mode=identity.git_mode)
+        preservation = import_preservation(source, project_dir, target, identity.library_id,
+                                           layout.root, f"{LIBRARY_NAMESPACE}/{name}", expected_hash)
+        record = set_trust(
+            catalog_root,
+            f"{LIBRARY_NAMESPACE}/{name}",
+            "reviewed",
+            expected_hash,
+            candidate_entry["source"],
+            lint=candidate_entry.get("lint"),
+            lint_override=lint_override,
+            risk_override=risk_override,
+            reason=(reason or "").strip() or None,
+            approval_key=approval_key,
+            approval_root=catalog_root,
+            global_scope=True,
+            version=version,
+            import_preservation=preservation,
+        )
+    except Exception as exc:
+        pending_state = "committed but pending" if identity.git_mode == "system" else "copied but pending"
+        raise ValueError(
+            f"imported content is {pending_state} acceptance: {exc}; repair by previewing "
+            f"`skillager library accept lib/{name} --json`"
+        ) from exc
+    refresh_collection(catalog_root, LIBRARY_NAMESPACE)
+    where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
+    destination = {
+        **where,
+        "slug": name,
+        "name": name,
+        "display_name": where.get("name") or name,
+    }
+    return {
+        "schema": IMPORT_SCHEMA,
+        "status": "imported",
+        "source": _compact_source(source),
+        "destination": destination,
+        "provenance": provenance,
+        "approval": {
+            "state": record["state"],
+            "scope": record["scope"],
+            "content_hash": record["content_hash"],
+            "lint_override": record.get("lint_override"),
+            "risk_override": record.get("risk_override"),
+        },
+        "copied_file_count": len(copied_files),
+        "commit": commit,
+    }
 
 
 def import_inventory(project_state: Path, catalog_root: Path, *, extra_paths: list[Path] | None = None) -> dict[str, Any]:

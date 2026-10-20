@@ -123,6 +123,13 @@ merely to be removed. Use the host's ordinary file manager or a client's explici
 Files deletion/Trash flow, with that tool's own confirmation and recovery policy.
 These commands do not introduce an archive or alternate approval mechanism.
 
+For an unsaved original, an explicitly chosen
+[`import --project-mode native|stub`](LIBRARY_REVIEW.md#save-and-use-a-native-original)
+combines canonical acceptance and this in-place replacement in one complete
+decision. Its CLI owner reuses the same actual adoption proof and publication
+path after saving. Ordinary import and ordinary `adopt-native` remain independent;
+an agent or UI must not chain them under a token that covered only the first step.
+
 A group name is normalized by the existing project-tag rules and becomes a visible
 project tag. Preview never writes the tag. Existing tag/router names refuse
 without a suffix or implicit adoption. Set-members refuses when independent tag

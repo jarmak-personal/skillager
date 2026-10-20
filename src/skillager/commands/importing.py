@@ -21,7 +21,8 @@ def add_import_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Preview and import one discovered external skill into the canonical personal library. "
-            "The origin is never modified, and no candidate content enters the library before review. "
+            "The origin is unchanged unless --project-mode explicitly requests managed replacement. "
+            "No candidate content enters the library before review. "
             "A confirmed first import initializes the default library."
         ),
         epilog=textwrap.dedent(
@@ -37,6 +38,8 @@ def add_import_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
     parser.add_argument("--as", dest="destination_name", help="Collision-free library skill name.")
     parser.add_argument("--source-file", type=Path, help="Select one discovered occurrence by its exact canonical absolute instruction-file path.")
     parser.add_argument("--review-manifest", action="store_true", help="Include the complete bounded external import tree, bound to this confirmation (requires --json).")
+    parser.add_argument("--project-mode", choices=("native", "stub"), help="Explicitly save, accept and replace this native project original in one complete review.")
+    parser.add_argument("--agent", choices=("codex", "claude"), help="Native project agent for --project-mode.")
     parser.add_argument(
         "--yes",
         action="store_true",
@@ -57,6 +60,11 @@ def add_import_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) 
 
 
 def cmd_import(args: argparse.Namespace) -> int:
+    if args.project_mode is not None:
+        from .import_placement import cmd_import_placement
+        return cmd_import_placement(args)
+    if args.agent is not None:
+        raise ValueError("--agent requires --project-mode")
     if args.review_manifest and not args.json:
         raise ValueError("--review-manifest requires --json")
     try:

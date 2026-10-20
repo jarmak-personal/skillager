@@ -16,7 +16,7 @@ from .management import _exposure_records
 from .identity import recorded_source_keys, source_key
 from .plan_request import MAX_EFFECTS, MAX_MEMBERS, MAX_OUTPUT_BYTES, MAX_REASON_BYTES, MAX_STAGED_BYTES, MAX_TARGETS, PLAN_SCHEMA, PlanRefusal, canonical_json, encode_plan_output, library_skill
 from .plan_sources import PlanSources
-from .plan_targets import PlanTarget, bounded_metadata, directory_state, file_state, managed_data, require_managed_metadata, result_identity, tree_state
+from .plan_targets import PlanTarget, bounded_metadata, directory_state, file_state, managed_data, require_managed_metadata, result_identity, tree_state, parent_targets, staging_budget
 from .target_state import MATERIALIZED_SIDECAR
 
 
@@ -58,17 +58,7 @@ class ExposurePlan:
             raise PlanRefusal("output-limit", "Exposure plan exceeds the complete 4 MiB output limit")
 
     def require_staging_clear(self) -> None:
-        # Existing retained stages are an explicit stop, not an unbounded extra
-        # allocation or an implicit cleanup/recovery service on the next action.
-        parents = {self.project / ".skillager"}
-        for agent in ("codex", "claude"):
-            parents.update(_project_agent_bases(self.project, agent))
-        for parent in sorted(parents):
-            if parent.is_symlink() or not parent.is_dir():
-                continue
-            retained = next(parent.glob(".skillager-exposure-plan-*"), None)
-            if retained is not None:
-                raise PlanRefusal("staging-present", f"Inspect the existing exposure staging/recovery location before another action: {retained}")
+        require_staging_clear(self.project)
 
     def preview(self) -> dict[str, Any]:
         return {**self.payload, "status": "would_apply", "confirmation_token": self.token,
@@ -286,37 +276,11 @@ class ExposurePlan:
             raise PlanRefusal("target-limit", "Exposure plan exceeds 128 targets")
 
     def _staging_budget(self) -> dict[str, int]:
-        originals, transfer_reserve = 0, 0
-        for target in self.targets:
-            if target.keep or target.kind == "parent":
-                continue
-            if target.before is not None:
-                originals += target.before["size"] if target.kind == "tags" else sum(item.get("size", 0) for item in target.before["entries"].values())
-            if target.candidate is not None:
-                ancestor = target.path.parent
-                while not ancestor.exists():
-                    ancestor = ancestor.parent
-                if ancestor.stat().st_dev != target.candidate.stat().st_dev:
-                    state = target.prepared_state
-                    assert state is not None
-                    size = state["size"] if target.kind == "tags" else sum(item.get("size", 0) for item in state["entries"].values())
-                    transfer_reserve = max(transfer_reserve, size)
-        peak = self.staged_bytes + originals + transfer_reserve
-        if peak > MAX_STAGED_BYTES:
-            raise PlanRefusal("payload-limit", "Exposure exceeds 128 MiB peak staging, including retained originals and cross-filesystem transfer")
-        return {"candidate_bytes": self.staged_bytes, "retained_original_bytes": originals,
-                "transfer_reserve_bytes": transfer_reserve, "peak_bytes": peak, "limit_bytes": MAX_STAGED_BYTES}
+        return staging_budget(self.targets, limit=MAX_STAGED_BYTES)
 
     def _parents(self) -> None:
-        parents = set()
-        for target in self.targets:
-            current = target.path.parent
-            while current != self.project:
-                parents.add(current)
-                current = current.parent
-        for parent in sorted(parents, key=lambda path: (len(path.parts), str(path))):
-            before = directory_state(parent)
-            self._add(PlanTarget(parent, "parent", before, keep=before is not None, parent_mode=0o700 if parent.name == ".skillager" else 0o755))
+        for target in parent_targets(self.project, self.targets):
+            self._add(target)
         self.targets.sort(key=lambda target: (target.kind != "parent", len(target.path.parts), str(target.path)))
 
     def revalidate_targets(self) -> None:
@@ -327,3 +291,17 @@ class ExposurePlan:
         if self.shared_tag:
             selected = next(target.path for target in self.targets if target.kind == "router")
             self._require_unshared(selected)
+
+
+def require_staging_clear(project: Path) -> None:
+    # Existing retained stages are an explicit stop, not an unbounded extra
+    # allocation or an implicit cleanup/recovery service on the next action.
+    parents = {project / ".skillager"}
+    for agent in ("codex", "claude"):
+        parents.update(_project_agent_bases(project, agent))
+    for parent in sorted(parents):
+        if parent.is_symlink() or not parent.is_dir():
+            continue
+        retained = next(parent.glob(".skillager-exposure-plan-*"), None)
+        if retained is not None:
+            raise PlanRefusal("staging-present", f"Inspect the existing exposure staging/recovery location before another action: {retained}")

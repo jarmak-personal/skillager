@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add explicit `import --project-mode native|stub --agent codex|claude` with one
+  complete review for saving, accepting and replacing a native project original.
+  Support first-library initialization within the same decision; retain separate
+  stage results, original preservation protections and saved canonical content
+  when replacement fails. Ordinary import remains unchanged.
+
 - Add opt-in `import --review-manifest --json` with the complete bounded external
   tree tied to the same import confirmation. Select exact discovered occurrences
   with `--source-file`; preserve one confirmed copy-and-accept action and unchanged
