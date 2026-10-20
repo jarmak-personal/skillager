@@ -39,6 +39,8 @@ class MutationPromptTests(unittest.TestCase):
                     destination_name=None,
                     source_file=None,
                     review_manifest=False,
+                    project_mode=None,
+                    agent=None,
                     yes=False,
                     override_lint=False,
                     reason=None,

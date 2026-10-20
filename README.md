@@ -129,15 +129,18 @@ native removal use complete `expose --request-json` plans. Exact-copy Full/Stub
 changes use optional `--exposure-id`. For a selected native original,
 `expose --observe-native <absolute-SKILL.md> --agent codex|claude --json` reports
 exact accepted-import or approved-sync preservation and ready Full/Stub plan
-requests. Saving and accepting an import does not approve the original; replacing
-it remains a separate explicit exposure confirmation. See [local exposure plans](docs/EXPOSURE_PLANS.md)
+requests. Saving and accepting an import does not approve the original. Choose
+`import --project-mode native|stub --agent codex|claude` with the exact source and
+review manifest to save and replace an unsaved original in one explicit decision.
+Ordinary import leaves the original unchanged; existing preserved originals use
+the separate adoption plan. See [local exposure plans](docs/EXPOSURE_PLANS.md)
 for the closed request schema, preservation rules, complete effects and recovery.
 
 Removal previews use `skillager expose --remove <exposure-id> --agent codex --json`
 and disclose the complete removed tree and target-folder permissions before confirmation.
 
-Importing copies one external skill into your library and leaves the original where
-it is.
+Ordinary importing copies one external skill into your library and leaves the
+original where it is.
 
 Edit personal skills at the library path Skillager shows you. If you edit a project
 copy instead, Skillager stops before replacing it; it does not merge that edit back

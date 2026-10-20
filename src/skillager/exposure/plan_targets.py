@@ -140,3 +140,44 @@ class PlanTarget:
     def revalidate(self) -> None:
         if self.observe() != self.before:
             raise PlanRefusal("target-changed", "A selected target or its permissions changed; request a fresh preview")
+
+
+def parent_targets(project: Path, targets: list[PlanTarget]) -> list[PlanTarget]:
+    parents: set[Path] = set()
+    for target in targets:
+        current = target.path.parent
+        while current != project:
+            if not current.is_relative_to(project):
+                raise PlanRefusal("unsafe-target", "Exposure target escapes the project")
+            parents.add(current)
+            current = current.parent
+    result = []
+    for parent in sorted(parents, key=lambda path: (len(path.parts), str(path))):
+        before = directory_state(parent)
+        result.append(PlanTarget(parent, "parent", before, keep=before is not None,
+                                 parent_mode=0o700 if parent.name == ".skillager" else 0o755))
+    return result
+
+
+def staging_budget(targets: list[PlanTarget], *, limit: int = MAX_STAGED_BYTES) -> dict[str, int]:
+    candidates, originals, transfer_reserve = 0, 0, 0
+    for target in targets:
+        if target.keep or target.kind == "parent":
+            continue
+        if target.before is not None:
+            originals += target.before["size"] if target.kind == "tags" else sum(item.get("size", 0) for item in target.before["entries"].values())
+        if target.candidate is not None:
+            state = target.prepared_state
+            assert state is not None
+            size = state["size"] if target.kind == "tags" else sum(item.get("size", 0) for item in state["entries"].values())
+            candidates += size
+            ancestor = target.path.parent
+            while not ancestor.exists():
+                ancestor = ancestor.parent
+            if ancestor.stat().st_dev != target.candidate.stat().st_dev:
+                transfer_reserve = max(transfer_reserve, size)
+    peak = candidates + originals + transfer_reserve
+    if peak > limit:
+        raise PlanRefusal("payload-limit", "Exposure exceeds 128 MiB peak staging, including retained originals and cross-filesystem transfer")
+    return {"candidate_bytes": candidates, "retained_original_bytes": originals,
+            "transfer_reserve_bytes": transfer_reserve, "peak_bytes": peak, "limit_bytes": limit}

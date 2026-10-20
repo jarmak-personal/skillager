@@ -60,88 +60,98 @@ LIBRARY_RELOCATE_SCHEMA = "skillager.library-relocate.v1"
 
 def initialize_library(catalog_root: Path, *, path: Path | None = None, no_git: bool = False,
                        expected_first_use: dict[str, Any] | None = None) -> dict[str, Any]:
+    with resource_lock(catalog_root / "library-mutation"):
+        return initialize_library_locked(catalog_root, path=path, no_git=no_git,
+                                         expected_first_use=expected_first_use)
+
+
+def initialize_library_locked(catalog_root: Path, *, path: Path | None = None,
+                              no_git: bool = False, expected_first_use: dict[str, Any] | None = None,
+                              planned_library_id: str | None = None) -> dict[str, Any]:
+    """Initialize under the caller's library-mutation lock; compound plans may bind a new UUID."""
+    if planned_library_id is not None and (expected_first_use is None or expected_first_use["library_id"] is not None):
+        raise ValueError("a planned library identity requires reviewed absence")
     created = False
     git_repository_created = False
     commit: dict[str, Any] | None = None
-    with resource_lock(catalog_root / "library-mutation"):
-        if expected_first_use is not None:
-            _, public, binding = _library_first_use_plan(catalog_root)
-            if {**public, "library_id": binding["library_id"]} != expected_first_use:
-                raise ReviewRefusal("review_changed", "the library changed before initialization; preview again")
-        registration = _registered_library_or_conflict(catalog_root)
-        if registration is not None:
-            if path is not None and LibraryLayout.from_root(path).root != registration.layout.root:
-                raise ValueError(
-                    f"a personal skill library is already registered at {registration.layout.root}; relocation is not implicit"
+    if expected_first_use is not None:
+        _, public, binding = _library_first_use_plan(catalog_root)
+        if {**public, "library_id": binding["library_id"]} != expected_first_use:
+            raise ReviewRefusal("review_changed", "the library changed before initialization; preview again")
+    registration = _registered_library_or_conflict(catalog_root)
+    if registration is not None:
+        if path is not None and LibraryLayout.from_root(path).root != registration.layout.root:
+            raise ValueError(
+                f"a personal skill library is already registered at {registration.layout.root}; relocation is not implicit"
+            )
+        layout = registration.layout
+    else:
+        layout = LibraryLayout.from_root(path or default_library_root())
+    identity = load_library_identity(layout)
+    if expected_first_use is not None and (
+            (identity.library_id if identity is not None else None) != expected_first_use["library_id"]
+            or (identity is not None and identity.git_mode != expected_first_use["git_mode"])):
+        raise ReviewRefusal("review_changed", "the library identity changed before initialization; preview again")
+    if registration is not None:
+        _validate_registered_library(registration, identity)
+        assert identity is not None
+        if load_library_provenance(layout) is None:
+            raise ValueError(f"library provenance metadata is missing: {layout.provenance_path}")
+    elif identity is not None:
+        _require_library_layout(layout)
+        if load_library_provenance(layout) is None:
+            raise ValueError(f"library provenance metadata is missing: {layout.provenance_path}")
+        _validate_identity_git(identity, layout)
+    else:
+        _preflight_new_library(layout, no_git=no_git)
+        root_created = not layout.root.exists()
+        layout.root.mkdir(parents=True, exist_ok=True)
+        git_mode = "disabled" if no_git else "system"
+        skills_created = not layout.skills.exists()
+        metadata_created = False
+        keep_path = layout.skills / ".gitkeep"
+        keep_created = False
+        commit_targets = [layout.identity_path, layout.provenance_path]
+        try:
+            if git_mode == "system":
+                git_repository_created = initialize_repository(layout.root)
+            keep_exists = keep_path.exists() or keep_path.is_symlink()
+            if keep_exists and (keep_path.is_symlink() or not keep_path.is_file()):
+                raise ValueError(f"library skills placeholder must be a regular file: {keep_path}")
+            needs_placeholder = keep_exists or not layout.skills.exists() or not any(layout.skills.iterdir())
+            if needs_placeholder:
+                commit_targets.append(keep_path)
+            if git_mode == "system":
+                require_paths_trackable(layout.root, commit_targets)
+            layout.skills.mkdir(exist_ok=True)
+            layout.metadata.mkdir()
+            metadata_created = True
+            identity = new_library_identity(git_mode=git_mode, library_id=planned_library_id)
+            write_library_identity(layout, identity)
+            write_empty_provenance(layout)
+            if needs_placeholder and not keep_exists:
+                keep_path.touch(exist_ok=False)
+                keep_created = True
+            if git_mode == "system":
+                commit = commit_paths(
+                    layout.root,
+                    commit_targets,
+                    "Initialize Skillager personal library",
                 )
-            layout = registration.layout
-        else:
-            layout = LibraryLayout.from_root(path or default_library_root())
-        identity = load_library_identity(layout)
-        if expected_first_use is not None and (
-                (identity.library_id if identity is not None else None) != expected_first_use["library_id"]
-                or (identity is not None and identity.git_mode != expected_first_use["git_mode"])):
-            raise ReviewRefusal("review_changed", "the library identity changed before initialization; preview again")
-        if registration is not None:
-            _validate_registered_library(registration, identity)
-            assert identity is not None
-            if load_library_provenance(layout) is None:
-                raise ValueError(f"library provenance metadata is missing: {layout.provenance_path}")
-        elif identity is not None:
-            _require_library_layout(layout)
-            if load_library_provenance(layout) is None:
-                raise ValueError(f"library provenance metadata is missing: {layout.provenance_path}")
-            _validate_identity_git(identity, layout)
-        else:
-            _preflight_new_library(layout, no_git=no_git)
-            root_created = not layout.root.exists()
-            layout.root.mkdir(parents=True, exist_ok=True)
-            git_mode = "disabled" if no_git else "system"
-            skills_created = not layout.skills.exists()
-            metadata_created = False
-            keep_path = layout.skills / ".gitkeep"
-            keep_created = False
-            commit_targets = [layout.identity_path, layout.provenance_path]
-            try:
-                if git_mode == "system":
-                    git_repository_created = initialize_repository(layout.root)
-                keep_exists = keep_path.exists() or keep_path.is_symlink()
-                if keep_exists and (keep_path.is_symlink() or not keep_path.is_file()):
-                    raise ValueError(f"library skills placeholder must be a regular file: {keep_path}")
-                needs_placeholder = keep_exists or not layout.skills.exists() or not any(layout.skills.iterdir())
-                if needs_placeholder:
-                    commit_targets.append(keep_path)
-                if git_mode == "system":
-                    require_paths_trackable(layout.root, commit_targets)
-                layout.skills.mkdir(exist_ok=True)
-                layout.metadata.mkdir()
-                metadata_created = True
-                identity = new_library_identity(git_mode=git_mode)
-                write_library_identity(layout, identity)
-                write_empty_provenance(layout)
-                if needs_placeholder and not keep_exists:
-                    keep_path.touch(exist_ok=False)
-                    keep_created = True
-                if git_mode == "system":
-                    commit = commit_paths(
-                        layout.root,
-                        commit_targets,
-                        "Initialize Skillager personal library",
-                    )
-            except Exception:
-                _rollback_library_initialization(
-                    layout,
-                    commit_targets=commit_targets,
-                    root_created=root_created,
-                    skills_created=skills_created,
-                    metadata_created=metadata_created,
-                    keep_created=keep_created,
-                    git_repository_created=git_repository_created,
-                )
-                raise
-            created = True
-        register_library_collection(catalog_root, layout.root, identity.library_id)
-        index = refresh_collection(catalog_root, LIBRARY_NAMESPACE)
+        except Exception:
+            _rollback_library_initialization(
+                layout,
+                commit_targets=commit_targets,
+                root_created=root_created,
+                skills_created=skills_created,
+                metadata_created=metadata_created,
+                keep_created=keep_created,
+                git_repository_created=git_repository_created,
+            )
+            raise
+        created = True
+    register_library_collection(catalog_root, layout.root, identity.library_id)
+    index = refresh_collection(catalog_root, LIBRARY_NAMESPACE)
     status = library_status(catalog_root)
     observed_library = status.get("library") or {}
     if expected_first_use is not None and (observed_library.get("registration") != "valid"

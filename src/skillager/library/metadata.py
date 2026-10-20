@@ -5,15 +5,15 @@ from typing import Any
 from uuid import uuid4
 
 from ..statefiles import read_user_json, write_user_json
-from .model import LIBRARY_SCHEMA, LibraryIdentity, LibraryLayout
+from .model import LIBRARY_SCHEMA, LibraryIdentity, LibraryLayout, normalize_library_id
 
 
 LIBRARY_PROVENANCE_SCHEMA = "skillager.library-provenance.v1"
 
 
-def new_library_identity(*, git_mode: str) -> LibraryIdentity:
+def new_library_identity(*, git_mode: str, library_id: str | None = None) -> LibraryIdentity:
     return LibraryIdentity(
-        library_id=str(uuid4()),
+        library_id=normalize_library_id(library_id) if library_id is not None else str(uuid4()),
         git_mode=git_mode,
         created_at=datetime.now(timezone.utc).isoformat(),
     )

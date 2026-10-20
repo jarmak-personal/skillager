@@ -119,6 +119,74 @@ Ordinary import previews and confirmations keep their existing shape and behavio
 when neither new option is supplied. `--source-file` can also select an occurrence
 without requesting a manifest; it still binds that occurrence to confirmation.
 
+## Save And Use A Native Original
+
+When the user explicitly chooses to save an unsaved native project original and
+use its managed Full or Stub copy, obtain one combined review:
+
+```bash
+skillager import <external-id> --source-file <canonical-absolute-SKILL.md> --review-manifest --project-mode stub --agent codex --json
+```
+
+Use `native` for Full and `claude` for a Claude project original. This option
+requires the exact inventory occurrence, JSON, and the complete review manifest.
+It permits no override flags, arbitrary paths or global placement.
+Ordinary import still leaves the original unchanged.
+
+The `skillager.import-placement.v1` preview contains:
+
+| Field | Meaning |
+| --- | --- |
+| `import` | The ordinary import preview, including its complete `review_manifest`, destination, eligibility and initialization effects. |
+| `project`, `agent`, `mode`, `original` | Exact native occurrence and chosen project placement. |
+| `library_identity` | `existing` UUID or a `will-create` UUID explicitly planned for this first-use decision. The latter is not a registered identity yet. |
+| `replacement` | The prospective adoption request, every affected target/file with before/after bytes and modes, and bounded staging requirements. |
+| `source_decision_state` | Opaque binding to the original's current decisions. |
+| `confirmation_token`, `next_command_argv` | One complete decision and its exact confirmation command. The nested import manifest has no independent confirmation token in this compound operation. |
+
+The preview writes no library or approval state. It prepares temporary candidates
+through the ordinary copy and exposure renderers, then discards their bytes before
+later stages; these are prospective effects, not accepted sources.
+Every original entry and mode must be preserved by the
+library candidate. Excluded material, empty directories or unsupported entries
+refuse before saving. An existing preservation relation directs the client to
+ordinary native adoption instead of creating another canonical copy.
+
+After the user's explicit decision, execute the returned argv unchanged. The
+same library mutation/skill locks span fresh whole-plan validation, optional
+initialization, accepted import and project replacement. First-use UUID generation
+is deterministic for the reviewed import plan, then created by the locked
+initializer only if that exact absence remains. No generated-field exception
+weakens ordinary exposure identity. Actual replacement requires the newly stored
+acceptance and preservation proof and must reproduce all reviewed project effects.
+If the default library already exists without a catalog registration, the review
+binds its existing UUID and the same confirmation reconnects it without replacing
+its identity or existing content.
+
+The result retains `import`, `replacement` and `plan_hash`, plus separate `save`,
+`placement` and `initialization` stages:
+
+- `saved-and-replaced` / exit 0: canonical acceptance and project replacement
+  completed.
+- `saved-not-replaced` / exit 2: the canonical is accepted, but a fresh protection
+  or changed replacement prevented project publication. Keep the saved copy and
+  inspect the original before choosing a fresh adoption plan.
+- `partial` / exit 2: inspect each placement result and any `recovery_path` or
+  incomplete `cleanup` path. Completed canonical acceptance is retained.
+- `uncertain` / exit 2: a submitted stage lacks a complete result. Its stage status
+  remains uncertain; no mutation is retried.
+- `refused` / exit 2: the complete decision could not be admitted; stages report
+  `not-started`.
+
+Save can report `accepted`, `not-started` or `uncertain`; placement can additionally
+report `not-applied`, `applied`, `refused` or `partial`. A failed acceptance can
+leave copied or committed pending canonical content. A failed replacement never
+deletes a saved canonical. Original and future-version approvals remain unchanged.
+
+After a lost reply, use `library status lib/<name> --json`, project inventory,
+and `expose --observe-native` to inspect current facts. Current facts do not prove
+the lost operation's completion. Never replay import into its occupied name.
+
 ## Eligibility And Limits
 
 The existing canonical tree owner selects regular files, excluding symlinks,
