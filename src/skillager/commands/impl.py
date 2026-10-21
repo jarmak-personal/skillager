@@ -94,6 +94,7 @@ from .library_inventory import cmd_list_library
 from .project_inventory import cmd_list_project
 from .pagination import CursorError
 from .importing import add_import_parser
+from .project_import import add_project_import_parser
 
 
 HANDOFF_REASON_AGENT_REQUIRED = "agent_required"
@@ -210,6 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
     from .exporting import add_export_parser
     add_export_parser(sub)
     add_import_parser(sub)
+    add_project_import_parser(sub)
     add_collection_parser(sub)
     add_tag_parser(sub)
 

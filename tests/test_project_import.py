@@ -1,0 +1,1 @@
+from tests.behavior.test_project_import import ProjectImportBehaviorTests as ProjectImportBehaviorTests

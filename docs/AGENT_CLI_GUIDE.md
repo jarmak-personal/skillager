@@ -299,6 +299,12 @@ new content available automatically.
 
 ### Import
 
+For an explicit request to save project originals together, use
+`import-project --json` and the [batch project import contract](PROJECT_IMPORT.md).
+Its project-wide summary is independent of pages; one complete selected review
+supplies one Save N confirmation. Originals stay unchanged and unapproved.
+
+
 When the user asks to adopt an external skill, preview it:
 
 ```bash

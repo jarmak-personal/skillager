@@ -428,7 +428,9 @@ skill, records where it came from, and leaves the original unchanged. A confirme
 first import creates the default personal library.
 
 For a complete list of the files that Save and accept will cover, use
-`skillager import <external-id> --review-manifest --json`. Each file remains
+`skillager import <external-id> --review-manifest --json`. For one Save N decision
+across project originals, start with `skillager import-project --json` and select
+the eligible versions for a [complete batch review](PROJECT_IMPORT.md). Each file remains
 available for inspection; one confirmation copies and accepts the version.
 When names collide, add `--source-file <canonical-absolute-SKILL.md>` from the
 selected project inventory occurrence. The selector never imports an arbitrary
