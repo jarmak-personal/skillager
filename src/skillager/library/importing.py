@@ -12,7 +12,7 @@ from ..state.locking import resource_locks
 from ..state.statefiles import read_user_json
 from ..trust import APPROVED_TRUST_STATES, approval_key_for, set_trust
 from .candidate import prepare_library_candidate
-from .source_identity import source_key as _source_key
+from .source_identity import import_source_relation, source_key as _source_key
 from .import_preservation import import_preservation
 from .review import REVIEW_LIMITS, ReviewRefusal, capture_review_tree
 from .git import LibraryGitError, commit_paths, path_changes, repository_status, verified_version_reference
@@ -43,9 +43,10 @@ def import_preview(
     project_dir: Path | None = None,
     source_file: Path | None = None,
     review_manifest: bool = False,
+    project_native_root: Path | None = None,
 ) -> dict[str, Any]:
     layout, library, library_binding = _library_first_use_plan(catalog_root)
-    source = _resolve_external_skill(project_state, catalog_root, source_skill_id, source_file=source_file)
+    source = _resolve_external_skill(project_state, catalog_root, source_skill_id, source_file=source_file, project_native_root=project_native_root)
     name = normalize_skill_name(destination_name or source_skill_id.rsplit("/", 1)[-1])
     target = layout.skill_root(name)
     _require_import_destination(layout.skills, target, source)
@@ -132,12 +133,14 @@ def import_library_skill_locked(
     override_lint: bool = False, reason: str | None = None,
     project_dir: Path | None = None, source_file: Path | None = None,
     expected_review: dict[str, Any] | None = None,
+    project_native_root: Path | None = None,
+    refresh_catalog: bool = True,
 ) -> dict[str, Any]:
     """Import while the caller holds library-mutation and this skill's resource lock."""
     name = normalize_skill_name(destination_name)
     registration, identity = _require_library_identity(catalog_root)
     layout = registration.layout
-    source = _resolve_external_skill(project_state, catalog_root, source_skill_id, source_file=source_file)
+    source = _resolve_external_skill(project_state, catalog_root, source_skill_id, source_file=source_file, project_native_root=project_native_root)
     source_hash = str(source["content_hash"])
     source_key = _source_key(source)
     if source_hash != expected_hash or source_key != expected_source_key:
@@ -240,6 +243,8 @@ def import_library_skill_locked(
             global_scope=True,
             version=version,
             import_preservation=preservation,
+            import_source=import_source_relation(source, project_dir, target, identity.library_id,
+                                                 layout.root, f"{LIBRARY_NAMESPACE}/{name}", expected_hash),
         )
     except Exception as exc:
         pending_state = "committed but pending" if identity.git_mode == "system" else "copied but pending"
@@ -247,8 +252,15 @@ def import_library_skill_locked(
             f"imported content is {pending_state} acceptance: {exc}; repair by previewing "
             f"`skillager library accept lib/{name} --json`"
         ) from exc
-    refresh_collection(catalog_root, LIBRARY_NAMESPACE)
-    where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
+    if refresh_catalog:
+        refresh_collection(catalog_root, LIBRARY_NAMESPACE)
+        where = library_where(catalog_root, name, project_dir=project_dir)["skill"]
+    else:
+        # Batch imports already have an exact accepted candidate. Catalog indexes
+        # remain derived state; do not rehash every unrelated owned skill per item.
+        where = {"id": f"{LIBRARY_NAMESPACE}/{name}", "path": str(target),
+                 "working_hash": expected_hash, "accepted_hash": expected_hash,
+                 "status": "clean", "acceptance": "accepted", "name": candidate_entry.get("name")}
     destination = {
         **where,
         "slug": name,
@@ -311,11 +323,21 @@ def _external_skill_candidates(project_state: Path, catalog_root: Path, skill_id
 
 
 def _resolve_external_skill(project_state: Path, catalog_root: Path, skill_id: str,
-                            *, source_file: Path | None = None) -> dict[str, Any]:
+                            *, source_file: Path | None = None,
+                            project_native_root: Path | None = None) -> dict[str, Any]:
     if source_file is not None and (len(os.fsencode(source_file)) > 4096 or not source_file.is_absolute() or source_file != source_file.resolve()
                                     or not source_file.is_file()):
         raise ValueError("--source-file requires an existing canonical absolute instruction-file path")
-    candidates = _external_skill_candidates(project_state, catalog_root, skill_id)
+    if project_native_root is None:
+        candidates = _external_skill_candidates(project_state, catalog_root, skill_id)
+    else:
+        if source_file is None:
+            raise ValueError("project import requires an exact instruction occurrence")
+        observed = build_index(project_state, approval_root=catalog_root, include_packages=False, persist=False,
+                               project_native_root=project_native_root, project_inventory=True,
+                               selected_native_file=source_file)
+        candidates = [skill for skill in observed["skills"]
+                      if skill.get("id") == skill_id or skill.get("_claimed_id") == skill_id]
     if source_file is not None:
         candidates = [skill for skill in candidates if skill.get("entrypoint")
                       and Path(skill["entrypoint"]).resolve() == source_file]

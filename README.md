@@ -132,6 +132,10 @@ exact accepted-import or approved-sync preservation and ready Full/Stub plan
 requests. Saving and accepting an import does not approve the original. Choose
 `import --project-mode native|stub --agent codex|claude` with the exact source and
 review manifest to save and replace an unsaved original in one explicit decision.
+For one project-wide Save N decision, `import-project --json` inventories all
+project originals, then an explicit selected review saves and accepts the exact
+versions together. See [batch project import](docs/PROJECT_IMPORT.md) for bounds,
+duplicate/conflict handling and current-state recovery.
 Ordinary import leaves the original unchanged; existing preserved originals use
 the separate adoption plan. See [local exposure plans](docs/EXPOSURE_PLANS.md)
 for the closed request schema, preservation rules, complete effects and recovery.

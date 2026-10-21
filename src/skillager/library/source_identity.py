@@ -45,3 +45,21 @@ def origin(skill: dict[str, Any], project: Path | None, *, source_id: str) -> di
         "provenance": {name: (source[name] in {True, "true", "True"} if name == "editable" else source[name])
                        for name in ("collection", "package", "version", "editable") if name in source},
     }
+
+
+def import_source_relation(source: dict[str, Any], project: Path | None, target: Path,
+                           library_id: str, library_root: Path, skill_id: str,
+                           accepted_hash: str) -> dict[str, Any]:
+    """Exact eligible-version import provenance, without replacement authority.
+
+    Stored with canonical acceptance. Unlike import_preservation this does not
+    claim that excluded original files were copied or may later be removed.
+    """
+    source_id = source_identity(source)
+    occurrence = origin(source, project, source_id=source_id)
+    occurrence.pop("skill_id")  # Collision display IDs are not occurrence identity.
+    return {"schema": "skillager.import-source.v1", "source_identity": source_id,
+            "origin": occurrence, "source_hash": accepted_hash,
+            "project_root": str(project.resolve()) if project else None,
+            "canonical": {"library_id": library_id, "library_root": str(library_root.resolve()),
+                          "skill_id": skill_id, "path": str(target.resolve()), "accepted_hash": accepted_hash}}

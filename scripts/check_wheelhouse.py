@@ -64,7 +64,8 @@ def main(argv: list[str] | None = None) -> int:
 
         env = os.environ.copy()
         state = work / "state"
-        env.update({"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1"})
+        env.update({"SKILLAGER_STATE_DIR": str(state), "SKILLAGER_CATALOG_STATE_DIR": str(state), "NO_COLOR": "1",
+                    "HOME": str(work / "home"), "SKILLAGER_CACHE_DIR": str(work / "cache"), "SKILLAGER_NO_UPDATE_CHECK": "1"})
         core = _json(
             [str(python), "-m", "skillager", "setup", "--source", "project", "--no-packages", "--non-interactive", "--json"],
             cwd=project,
@@ -96,6 +97,7 @@ def _assert_core_wheel_docs(wheel: Path) -> None:
         "skillager/docs/USER_GUIDE.md",
         "skillager/docs/EXPOSURE_PLANS.md",
         "skillager/docs/LIBRARY_REVIEW.md",
+        "skillager/docs/PROJECT_IMPORT.md",
     }
     missing = sorted(required - names)
     if missing:

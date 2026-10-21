@@ -223,6 +223,7 @@ def set_trust(
     global_scope: bool = False,
     version: dict[str, str] | None = None,
     import_preservation: dict[str, Any] | None = None,
+    import_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if state not in TRUST_STATES - {"discovered", "lint_blocked"}:
         raise ValueError(f"invalid trust state: {state}")
@@ -248,6 +249,10 @@ def set_trust(
         if not use_global or source.get("ownership") != "library" or state != "reviewed":
             raise ValueError("import preservation requires canonical library acceptance")
         record["import_preservation"] = import_preservation
+    if import_source is not None:
+        if not use_global or source.get("ownership") != "library" or state != "reviewed":
+            raise ValueError("import source requires canonical library acceptance")
+        record["import_source"] = import_source
     def mutation(previous_record: dict[str, Any] | None) -> dict[str, Any]:
         stored = dict(record)
         if state == "blocked" and not use_global:
