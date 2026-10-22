@@ -63,6 +63,7 @@ def set_import_provenance(
     source_hash: str,
     source_type: str,
     imported_at: str,
+    source_group: dict[str, Any],
     expected: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     data = load_library_provenance(layout)
@@ -80,6 +81,7 @@ def set_import_provenance(
             "source_type": source_type,
         },
         "imported_at": imported_at,
+        "source_group": source_group,
     }
     skills[name] = entry
     write_library_provenance(layout, data)

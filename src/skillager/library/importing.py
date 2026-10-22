@@ -13,6 +13,7 @@ from ..state.statefiles import read_user_json
 from ..trust import APPROVED_TRUST_STATES, approval_key_for, set_trust
 from .candidate import prepare_library_candidate
 from .source_identity import import_source_relation, source_key as _source_key
+from .source_groups import source_group
 from .import_preservation import import_preservation
 from .review import REVIEW_LIMITS, ReviewRefusal, capture_review_tree
 from .git import LibraryGitError, commit_paths, path_changes, repository_status, verified_version_reference
@@ -195,6 +196,7 @@ def import_library_skill_locked(
                 source_hash=expected_hash,
                 source_type=str((source.get("source") or {}).get("type") or "unknown"),
                 imported_at=imported_at,
+                source_group=source_group(source, project_dir),
                 expected=previous_provenance,
             )
         except Exception:
