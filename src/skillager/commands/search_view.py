@@ -12,6 +12,7 @@ from typing import Any
 from ..exposure.management import _exposure_records
 from ..library.metadata import load_library_identity, load_library_provenance
 from ..library.paths import load_library_registration
+from ..library.source_groups import filter_source_group
 from ..skills.index import build_index
 from ..skills.search_view import (
     INSTALLED_INPUT_BYTES, SEARCH_INVENTORY_LIMIT, SEARCH_RESULT_BYTES, SEARCH_RESULT_LIMIT,
@@ -118,6 +119,7 @@ def run_search_view(args: argparse.Namespace) -> int:
         if not paginated and not view.installed_complete and not args.include_installed:
             raise SearchRefusal("installed-state-unknown")
         candidates = cli._available_skills(view.candidates(args.include_installed))
+        candidates = filter_source_group(candidates, args.source_group)
         if args.tag:
             assert project is not None
             tag_key = cli.project_tags.normalize_tag(args.tag)

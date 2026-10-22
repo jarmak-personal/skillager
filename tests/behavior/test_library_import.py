@@ -403,6 +403,15 @@ class PersonalLibraryImportBehaviorTests(unittest.TestCase):
             status = cli.run("library", "status", "--json")
             self.assert_code(status, 0)
             self.assertEqual(status.json()["counts"]["skills"], len(cases))
+            inventory = cli.run("list", "--scope", "library", "--json")
+            self.assert_code(inventory, 0)
+            sources = {row["id"]: row["source_group"] for row in inventory.json()["skills"]}
+            self.assertEqual(sources["lib/owned-shared"]["label"], "shared")
+            self.assertEqual(sources["lib/owned-shared"]["kind"], "collection")
+            for destination, label in (("owned-python", "py-demo"), ("owned-editable", "edit-demo"),
+                                       ("owned-npm", "npm-demo"), ("owned-cargo", "cargo-demo")):
+                self.assertEqual(sources[f"lib/{destination}"]["label"], label)
+                self.assertEqual(sources[f"lib/{destination}"]["kind"], "package")
 
     @unittest.skipUnless(shutil.which("git"), "system Git is required")
     def test_failed_git_commit_leaves_pending_import_repairable_by_library_accept(self) -> None:

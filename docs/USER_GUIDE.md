@@ -195,11 +195,11 @@ skillager list --scope library --json --limit 100
 ```
 
 The response is a `skillager.list.v1` object with `scope: "library"`, `skills`,
-`next_cursor`, and `discovery_error_count`. The count is a bounded summary of
+`next_cursor`, `total_skills`, and `discovery_error_count`. The count is a bounded summary of
 indexing diagnostics for represented library rows; detailed exceptions and body
 text are omitted. Each row contains `id`, `name`, `description`, `status` (`accepted`,
 `pending`, or `blocked`), `accepted_hash`, and the canonical `SKILL.md` path in
-`skill_file`. `accepted_hash` is null before acceptance; after an edit it retains
+`skill_file`, plus presentation provenance in `source_group`. `accepted_hash` is null before acceptance; after an edit it retains
 the previously accepted hash while the status becomes pending. Lint quarantine is
 reported as blocked. Names and descriptions use declared frontmatter metadata;
 the name falls back to the library directory name and a missing description is
@@ -212,6 +212,41 @@ project catalog bindings, discover project/package/native skills, or report
 workspace exposure. An uninitialized library returns an empty page. Library scope
 requires `--json`; workspace filters, `--summary-json`, and `--full-json` do not
 apply to this inventory.
+
+For a compact browser, request source groups before opening a group's skills:
+
+```bash
+skillager list --scope library --group-by source --json --limit 100
+skillager list --scope library --source-group SOURCE_ID --json --limit 50
+```
+
+The first response is `skillager.library-groups.v1`, with `scope: "library"`,
+`groups`, `total_groups`, `total_skills`, `next_cursor`, and
+`discovery_error_count`. Every group has an opaque `id`, a short `label`, a
+`kind`, optional display `detail`, and the complete group's `count`, including
+pending and blocked skills. Group pages are ordered by label, detail, then ID.
+Opening a group returns the usual skill page; `total_skills` is its filtered
+count. Both modes accept page sizes 1–100. A missing group returns an empty page.
+Pass cursors unchanged with the same mode, group, and limit; any change to the
+whole library invalidates an earlier traversal, including changes outside the
+selected group.
+
+Each library row's `source_group` contains the same `id`, `label`, `kind`, and
+`detail`. Kinds are `project`, `collection`, `package`, `directory`, `personal`,
+`unknown`, or `multiple`. IDs have the opaque form `source:` followed by 64 hex
+characters; labels are at most 256 characters, and detail is null or at most
+4096 characters of display text, usually an original directory path. Different
+roots with the same basename remain separate groups; use detail to distinguish
+them. These fields describe where a skill came from, never canonical identity,
+trust, installed state, or permission to read that path.
+
+New imports preserve source presentation in library provenance. Existing exact
+import and sync records supply historical sources without revisiting the original
+filesystem. A sync with different recorded sources shows their combined labels.
+Created skills appear under **Personal**. Older imports whose original location
+was never recorded appear under **Unknown source** rather than guessing from the
+skill name. Grouping never imports skills, changes acceptance, or rewrites old
+provenance. Reaccepting an edited imported skill preserves its recorded source.
 
 If the registered skills root cannot be completely traversed, or a skill fails
 indexing without a represented row, the command exits with **2** and emits the

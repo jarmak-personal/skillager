@@ -45,6 +45,7 @@ def _search_request(args: argparse.Namespace) -> dict[str, Any]:
     personal = args.scope == "library"
     return {
         "command": "search", "scope": args.scope, "query": args.query,
+        "source_group": args.source_group,
         "catalog": str(catalog_root(args)),
         "project": None if personal else str(current_project_dir()),
         "state": None if personal else str(root(args)),

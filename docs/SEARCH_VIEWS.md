@@ -72,6 +72,16 @@ or workspace candidate scope.
 
 ## Result contract
 
+Personal-library results include the same presentation-only `source_group` as
+`list --scope library`. An optional `--source-group SOURCE_ID` filters library
+candidates before ranking and pagination; obtain IDs from
+`list --scope library --group-by source --json`. It works with ordinary search
+and either view, and is rejected in workspace scope. The filter is part of the
+cursor request. It changes neither current approval checks nor installed
+exclusion. Search still returns accepted matches; source-group inventory also
+counts pending and blocked skills. Searching across sources can remain one flat
+ranked list with source labels, without opening every browse group first.
+
 The JSON envelope has `schema`, `status`, `reason_code`, `policy`, `context`,
 `limit` and `results`. `policy` echoes `view`, `include_installed`, `scope`,
 `preferred_agent` and `compatible_only`. `context.project_root` is an absolute local

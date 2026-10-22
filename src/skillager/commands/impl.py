@@ -227,6 +227,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, help="Project/library page size (default: 100; project maximum: 100).")
     p.add_argument("--cursor", help="Opaque cursor from the preceding project/library JSON page.")
     p.add_argument("--query", help="Project scope only: case-insensitive literal match in displayed ID, name, or description before pagination (maximum 1000 UTF-8 bytes).")
+    p.add_argument("--group-by", choices=["source"], help="Library scope only: page source groups and whole-library counts instead of skills.")
+    p.add_argument("--source-group", help="Library scope only: page skills from an opaque source group ID.")
     p.add_argument("--activation")
     p.add_argument("--audience")
     p.add_argument("--package")
@@ -254,6 +256,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("query")
     p.add_argument("--scope", choices=["workspace", "library"], default="workspace", help="Search all available workspace sources (default), or only the personal library without project discovery or exposure status.")
+    p.add_argument("--source-group", help="Library scope only: search within an opaque source group ID from list --group-by source.")
     p.add_argument("--tag", help="Search skills in a curated tag.")
     p.add_argument("--include-global", action="store_true", help="Include global native skills. Defaults to project/environment/package and attached collection skills.")
     p.add_argument("--agent", choices=["codex", "claude"], help="Include compatibility warnings for this agent.")
@@ -3917,6 +3920,8 @@ def cmd_index(args: argparse.Namespace) -> int:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
+    if (args.group_by or args.source_group) and args.scope != "library":
+        raise ValueError("list source grouping requires --scope library")
     if getattr(args, "query", None) is not None and getattr(args, "scope", "workspace") != "project":
         raise ValueError("list --query requires --scope project")
     if getattr(args, "scope", "workspace") == "library":
@@ -3967,6 +3972,8 @@ def cmd_list(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
+    if args.source_group and args.scope != "library":
+        raise ValueError("search --source-group requires --scope library")
     if args.view:
         from .search_view import run_search_view
         return run_search_view(args)
@@ -3994,6 +4001,8 @@ def cmd_search(args: argparse.Namespace) -> int:
     if paginated:
         from .search_pagination import search_page, search_snapshot, search_window_limit
         snapshot = search_snapshot(args, skills, library_state=library_observation[1] if library_observation else None)
+    from ..library.source_groups import filter_source_group
+    skills = filter_source_group(skills, args.source_group)
     result_limit = search_window_limit(args, snapshot=snapshot) if paginated else args.limit
     trust_root = catalog_root(args) if library_only else root(args)
     families = Counter(_agent_variant_family_key(skill) for skill in skills) if args.agent else Counter()
@@ -4149,6 +4158,8 @@ def _compact_search_result(skill: dict[str, Any], *, agent: str | None = None) -
         "compatibility": _compact_compatibility(skill, agent=agent),
     }
     exposed_via = _compact_exposed_via(skill)
+    if "source_group" in skill:
+        payload["source_group"] = skill["source_group"]
     if exposed_via:
         payload["exposed_via"] = exposed_via
     return payload

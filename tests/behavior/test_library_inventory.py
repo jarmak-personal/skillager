@@ -73,7 +73,7 @@ class LibraryInventoryBehaviorTests(unittest.TestCase):
             self.assertEqual(rows[0]["accepted_hash"], accepted["skill"]["working_hash"])
             self.assertIsNone(rows[2]["accepted_hash"])
             for row in rows:
-                self.assertEqual(set(row), {"id", "name", "description", "status", "accepted_hash", "skill_file"})
+                self.assertEqual(set(row), {"id", "name", "description", "status", "accepted_hash", "skill_file", "source_group"})
                 self.assertEqual(Path(row["skill_file"]), (library / "skills" / row["id"].split("/")[1] / "SKILL.md").resolve())
                 self.assertNotIn("exposure", row)
 

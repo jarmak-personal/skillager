@@ -10,6 +10,7 @@ from .browse import library_metadata_index
 from .model import LIBRARY_NAMESPACE
 from .paths import load_library_registration
 from .service import _acceptance_state, _library_approval_key, _safe_metadata_summary
+from .source_groups import library_source_group
 
 
 class LibraryInventoryUnavailable(ValueError):
@@ -31,6 +32,7 @@ def library_metadata_observation(catalog: Path, *, require_complete: bool = True
     identity = load_library_identity(registration.layout)
     if identity is None or identity.library_id != registration.library_id:
         raise ValueError("registered library identity is missing or does not match the catalog registration")
+    provenance = load_library_provenance(registration.layout)
     state = []
     errors: list[dict[str, str]] = []
     with trust_snapshot([catalog]):
@@ -46,6 +48,9 @@ def library_metadata_observation(catalog: Path, *, require_complete: bool = True
             raise LibraryInventoryUnavailable()
         for skill in sorted(skills, key=lambda item: item["id"]):
             approval = trust_record(catalog, "global_approvals", _library_approval_key(skill)) or {}
+            skill["source_group"] = library_source_group(
+                (provenance or {}).get("skills", {}).get(skill["id"].partition("/")[2], {}), approval,
+            )
             accepted_hash = approval.get("content_hash")
             acceptance = _acceptance_state(skill, working_hash=skill["content_hash"], accepted_hash=accepted_hash)
             skill_file = Path(skill["root"]) / "SKILL.md"
@@ -57,9 +62,10 @@ def library_metadata_observation(catalog: Path, *, require_complete: bool = True
                 "status": "blocked" if acceptance in {"blocked", "lint_blocked"} else acceptance,
                 "accepted_hash": accepted_hash,
                 "skill_file": str(skill_file),
+                "source_group": skill["source_group"],
             }
             state.append({**row, "working_hash": skill["content_hash"]})
     return skills, {
         "catalog": str(catalog), "library": registration.to_mapping(), "skills": state, "errors": errors,
-        "provenance": load_library_provenance(registration.layout),
+        "provenance": provenance,
     }
